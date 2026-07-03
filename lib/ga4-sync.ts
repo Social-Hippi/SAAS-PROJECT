@@ -124,9 +124,9 @@ async function getValidAccessToken(conn: Conn): Promise<string> {
 // metric breakdowns (R2/R3/R4/R6/R7/R8) can carry several metrics per row.
 type Tally = {
   sessions: number; users: number; newUsers: number; keyEvents: number;
-  engaged: number; count: number; views: number; entrances: number;
+  engaged: number; count: number; views: number; entrances: number; engSeconds: number;
 };
-const emptyTally = (): Tally => ({ sessions: 0, users: 0, newUsers: 0, keyEvents: 0, engaged: 0, count: 0, views: 0, entrances: 0 });
+const emptyTally = (): Tally => ({ sessions: 0, users: 0, newUsers: 0, keyEvents: 0, engaged: 0, count: 0, views: 0, entrances: 0, engSeconds: 0 });
 function addTally(m: Map<string, Tally>, key: string, patch: Partial<Tally>) {
   let t = m.get(key);
   if (!t) { t = emptyTally(); m.set(key, t); }
@@ -301,14 +301,17 @@ export async function syncGa4Connection(conn: Conn, days = 30): Promise<Ga4Accou
         metrics: [{ name: "eventCount" }, { name: "keyEvents" }, { name: "totalUsers" }],
         orderBys: [{ metric: { metricName: "eventCount" }, desc: true }], limit: 20000 }),
       safeRun("R6-pages", { dateRanges, dimensions: [{ name: "date" }, { name: "pagePath" }, { name: "pageTitle" }],
-        metrics: [{ name: "screenPageViews" }, { name: "entrances" }],
+        // userEngagementDuration is event-scoped → compatible with pagePath (unlike
+        // session-scoped engagementRate/averageSessionDuration, which GA4 rejects
+        // here; those live in the day-level Engagement report R1).
+        metrics: [{ name: "screenPageViews" }, { name: "entrances" }, { name: "userEngagementDuration" }],
         orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }], limit: 50000 }),
       safeRun("R7-landingBySource", { dateRanges, dimensions: [
         { name: "date" }, { name: "landingPagePlusQueryString" }, { name: "sessionSource" }, { name: "sessionMedium" },
       ], metrics: [{ name: "sessions" }, { name: "keyEvents" }, { name: "engagedSessions" }, { name: "totalUsers" }],
         orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 50000 }),
       safeRun("R8-newVsReturning", { dateRanges, dimensions: [{ name: "date" }, { name: "newVsReturning" }],
-        metrics: [{ name: "totalUsers" }, { name: "newUsers" }, { name: "sessions" }] }),
+        metrics: [{ name: "totalUsers" }, { name: "newUsers" }, { name: "sessions" }, { name: "keyEvents" }] }),
       safeRun("R9a-region", { dateRanges, dimensions: [{ name: "date" }, { name: "region" }], metrics: [{ name: "sessions" }] }),
       safeRun("R9b-browser", { dateRanges, dimensions: [{ name: "date" }, { name: "browser" }], metrics: [{ name: "sessions" }] }),
       safeRun("R9c-os", { dateRanges, dimensions: [{ name: "date" }, { name: "operatingSystem" }], metrics: [{ name: "sessions" }] }),
@@ -394,7 +397,10 @@ export async function syncGa4Connection(conn: Conn, days = 30): Promise<Ga4Accou
       const b = bucketOf(byDate, r.dimensionValues[0].value);
       const path = r.dimensionValues[1]?.value || "/";
       const title = r.dimensionValues[2]?.value ?? "";
-      addTally(b.pages, keyOf(path, title), { views: num(r.metricValues[0]?.value), entrances: num(r.metricValues[1]?.value) });
+      addTally(b.pages, keyOf(path, title), {
+        views: num(r.metricValues[0]?.value), entrances: num(r.metricValues[1]?.value),
+        engSeconds: num(r.metricValues[2]?.value),
+      });
     }
 
     // R7 landing × source (also folds the plain landing-page top-N)
@@ -415,7 +421,10 @@ export async function syncGa4Connection(conn: Conn, days = 30): Promise<Ga4Accou
       const b = bucketOf(byDate, r.dimensionValues[0].value);
       const seg = r.dimensionValues[1]?.value ?? "";
       const users = num(r.metricValues[0]?.value);
-      addTally(b.newReturning, keyOf(seg), { users, newUsers: num(r.metricValues[1]?.value), sessions: num(r.metricValues[2]?.value) });
+      addTally(b.newReturning, keyOf(seg), {
+        users, newUsers: num(r.metricValues[1]?.value), sessions: num(r.metricValues[2]?.value),
+        keyEvents: num(r.metricValues[3]?.value),
+      });
       if (seg.toLowerCase() === "returning") b.returningUsers += users;
     }
 
@@ -500,9 +509,9 @@ export async function syncGa4Connection(conn: Conn, days = 30): Promise<Ga4Accou
         topCampaigns: topTally(b.campaigns, 20, (p, t) => ({ campaign: disp(p[0]), sessions: t.sessions, users: t.users, keyEvents: t.keyEvents })),
         firstUserChannels: topTally(b.firstUser, 20, (p, t) => ({ source: disp(p[0]), medium: disp(p[1]), channel: disp(p[2]), users: t.users, newUsers: t.newUsers, sessions: t.sessions, keyEvents: t.keyEvents })),
         topEvents: topTally(b.events, 30, (p, t) => ({ event: disp(p[0]), count: t.count, keyEvents: t.keyEvents, users: t.users }), "count"),
-        topPages: topTally(b.pages, 25, (p, t) => ({ path: disp(p[0], "/"), title: p[1] ?? "", views: t.views, entrances: t.entrances }), "views"),
+        topPages: topTally(b.pages, 25, (p, t) => ({ path: disp(p[0], "/"), title: p[1] ?? "", views: t.views, entrances: t.entrances, engagementSeconds: Math.round(t.engSeconds) }), "views"),
         landingBySource: topTally(b.landingSrc, 25, (p, t) => ({ landing: disp(p[0], "/"), source: disp(p[1]), medium: disp(p[2]), sessions: t.sessions, keyEvents: t.keyEvents, engagedSessions: t.engaged, users: t.users })),
-        newVsReturning: topTally(b.newReturning, 4, (p, t) => ({ segment: disp(p[0]), users: t.users, newUsers: t.newUsers, sessions: t.sessions }), "users"),
+        newVsReturning: topTally(b.newReturning, 4, (p, t) => ({ segment: disp(p[0]), users: t.users, newUsers: t.newUsers, sessions: t.sessions, keyEvents: t.keyEvents }), "users"),
       };
       await prisma.ga4Snapshot.upsert({
         where: { hotelClientId_date: { hotelClientId: conn.hotelClientId, date } },

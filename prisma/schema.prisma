@@ -1420,9 +1420,9 @@ model Ga4Snapshot {
   //   topCampaigns      [{ campaign, sessions, users, keyEvents }]              (R2)
   //   firstUserChannels [{ source, medium, channel, users, newUsers, sessions, keyEvents }] (R3)
   //   topEvents         [{ event, count, keyEvents, users }]                    (R4)
-  //   topPages          [{ path, title, views, entrances }]                     (R6)
+  //   topPages          [{ path, title, views, entrances, engagementSeconds }]  (R6)
   //   landingBySource   [{ landing, source, medium, sessions, keyEvents, engagedSessions, users }] (R7 ⭐)
-  //   newVsReturning    [{ segment, users, newUsers, sessions }]                (R8)
+  //   newVsReturning    [{ segment, users, newUsers, sessions, keyEvents }]     (R8)
   //   topRegions        [{ name, sessions }]  topBrowsers [{ name, sessions }]  topOperatingSystems [{ name, sessions }] (R9)
   topSources          Json?
   topCampaigns        Json?
