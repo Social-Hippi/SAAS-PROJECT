@@ -53,23 +53,31 @@ beforeAll(async () => {
   });
   hotelId = hotel.id;
 
-  // A visit + two conversions (Instagram + Google) so KPIs / revenue-by-source /
-  // narrative / channels populate.
+  // Reproduce the reported broken case: HIGH ad spend (₹57,300) with almost NO
+  // tracked revenue (one ₹4 booking) → the narrative must read POOR, not "strong",
+  // and ₹ figures must render. Plus a dozen visits so the conversion rate is tiny.
+  const visits = Array.from({ length: 12 }, (_, i) => ({
+    agencyId, hotelClientId: hotelId, eventType: "visit" as const, pageUrl: "https://seaside.test/rooms",
+    sessionId: `v${i}`, deviceType: "mobile", utmSource: "instagram", utmMedium: "social", createdAt: day(6),
+  }));
   await prisma.trackingEvent.createMany({
     data: [
-      { agencyId, hotelClientId: hotelId, eventType: "visit", pageUrl: "https://seaside.test/", sessionId: "s1", deviceType: "mobile", utmSource: "instagram", utmMedium: "social", createdAt: day(6) },
-      { agencyId, hotelClientId: hotelId, eventType: "conversion", pageUrl: "https://seaside.test/thank-you", sessionId: "s1", deviceType: "mobile", utmSource: "instagram", utmMedium: "social", conversionValue: 15000, createdAt: day(5) },
-      { agencyId, hotelClientId: hotelId, eventType: "conversion", pageUrl: "https://seaside.test/thank-you", sessionId: "s2", deviceType: "desktop", utmSource: "google", utmMedium: "cpc", conversionValue: 8000, createdAt: day(4) },
+      ...visits,
+      { agencyId, hotelClientId: hotelId, eventType: "conversion", pageUrl: "https://seaside.test/thank-you", sessionId: "v0", deviceType: "mobile", utmSource: "instagram", utmMedium: "social", conversionValue: 4, createdAt: day(5) },
     ],
   });
-  await prisma.session.create({
-    data: { id: `sess_${PREFIX}1`, visitorId: "v1", hotelClientId: hotelId, agencyId, startedAt: day(5), landingPath: "/", highestStageReached: "booking" },
+  await prisma.session.createMany({
+    data: [
+      { id: `sess_${PREFIX}1`, visitorId: "v1", hotelClientId: hotelId, agencyId, startedAt: day(5), landingPath: "/", highestStageReached: "awareness" },
+      { id: `sess_${PREFIX}2`, visitorId: "v2", hotelClientId: hotelId, agencyId, startedAt: day(5), landingPath: "/rooms", highestStageReached: "consideration" },
+      { id: `sess_${PREFIX}3`, visitorId: "v3", hotelClientId: hotelId, agencyId, startedAt: day(4), landingPath: "/book", highestStageReached: "booking" },
+    ],
   });
   await prisma.adSnapshot.create({
     data: {
       agencyId, hotelClientId: hotelId, metaAccountId: "act_test", date: dateOnly(5),
-      spend: 5000, impressions: 12000, reach: 9000, clicks: 320, ctr: 0.0267, cpc: 15.6, cpm: 416,
-      conversions: 2, roas: 2.4, pixelPurchases: 2, pixelLeads: 0, pixelPageViews: 90,
+      spend: 57300, impressions: 120000, reach: 90000, clicks: 3200, ctr: 0.0267, cpc: 17.9, cpm: 477,
+      conversions: 0, roas: 0, pixelPurchases: 0, pixelLeads: 0, pixelPageViews: 900,
     },
   });
 });

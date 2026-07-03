@@ -10,16 +10,16 @@ import { loadChannelView, type ChannelView } from "@/lib/channel-view";
 import { loadGa4Dashboard } from "@/lib/ga4-dashboard";
 import { aggregateRevenueBySource, type ConversionRow } from "@/lib/revenue-by-source";
 import { computeFunnel, stageRank } from "@/lib/funnel";
-import { formatCurrency, formatNumber, formatPercent, formatMultiple } from "@/lib/format";
-import { buildReportNarrative } from "@/lib/report-narrative";
+import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
+import { buildReportNarrative, type Verdict } from "@/lib/report-narrative";
+import { GEIST_REGULAR_B64 } from "@/lib/report-font";
 
-// Server-side PDF generation for a hotel's performance report. NO DOM screenshot:
-// the document is drawn programmatically with jsPDF from the SAME data layer the
-// hotel-owner dashboard uses (loadHotelReport / loadChannelView / loadGa4Dashboard
-// / aggregateRevenueBySource / computeFunnel), so the agency's report and the
-// hotel's own view contain identical numbers. Read-only; multi-tenant scoping is
-// enforced by the caller (route) before this runs, and every query below is
-// agency-scoped too.
+// Server-side, client-ready PDF for a hotel's performance report. Drawn
+// programmatically with jsPDF (NO DOM screenshot) from the SAME data layer the
+// hotel-owner dashboard uses, so the agency report and the hotel's own view show
+// identical numbers. A Unicode TTF (Geist) is embedded so the ₹ (U+20B9) glyph
+// renders correctly — jsPDF's built-in fonts render ₹ as a wrong fallback char.
+// Multi-tenant scoping is enforced by the caller (route) and by every query here.
 
 export type ReportMeta = {
   agencyId: string;
@@ -28,11 +28,7 @@ export type ReportMeta = {
   websiteUrl: string;
   funnelStageRules: unknown;
   agencyName: string;
-  agencyContact: {
-    contactEmail: string | null;
-    mobile: string | null;
-    websiteUrl: string | null;
-  };
+  agencyContact: { contactEmail: string | null; mobile: string | null; websiteUrl: string | null };
   rangeLabel: string;
   from: string;
   to: string;
@@ -41,16 +37,26 @@ export type ReportMeta = {
   generatedAt: string;
 };
 
-const fmtC = (n: number) => formatCurrency(n, { compact: true });
+const money = (n: number) => formatCurrency(n, { compact: true });
 const pctDelta = (cur: number | null, prev: number | null): number | null =>
   prev == null || prev === 0 || cur == null ? null : ((cur - prev) / prev) * 100;
 
+// Friendly, capitalised source name (keys are lowercase, "/"-joined at finer
+// granularities; the report uses "source" granularity so it's a single token).
 function sourceDisplay(key: string): string {
   return key
     .split("/")
-    .map((p) => (p === "(none)" || p === "" ? "Direct" : p.charAt(0).toUpperCase() + p.slice(1)))
+    .map((p) => (!p || p === "(none)" ? "Direct" : p.charAt(0).toUpperCase() + p.slice(1)))
     .join(" / ");
 }
+
+// Plain-language funnel stage labels (no "funnel" jargon in the doc).
+const STAGE_PLAIN: Record<string, string> = {
+  Awareness: "Browsing the site",
+  Consideration: "Looking at rooms",
+  Intent: "Starting to book",
+  Booking: "Completed a booking",
+};
 
 const CHANNELS = ["meta_ads", "google_ads", "instagram_organic", "direct", "influencer"] as const;
 
@@ -78,14 +84,12 @@ export async function generateHotelReportPdf(meta: ReportMeta): Promise<Uint8Arr
     }),
   ]);
 
-  // Revenue by Source (R1) — same aggregation as the dashboard card.
   const convRows: ConversionRow[] = convEvents.map((e) => ({
     utmSource: e.utmSource, utmMedium: e.utmMedium, utmCampaign: e.utmCampaign, utmContent: e.utmContent,
     value: e.conversionValue == null ? 0 : Number(e.conversionValue), occurredAt: e.createdAt, couponCode: e.couponCodeUsed,
   }));
   const rbs = aggregateRevenueBySource(convRows, "source", { start: since, end: until });
 
-  // Funnel — same reachedByRank groupBy + computeFunnel as the dashboard.
   const reachedByRank: Record<number, number> = {};
   for (const g of funnelGroups) {
     const r = stageRank(g.highestStageReached);
@@ -97,7 +101,7 @@ export async function generateHotelReportPdf(meta: ReportMeta): Promise<Uint8Arr
   funnel.stages.forEach((s, i) => {
     const next = funnel.stages[i + 1];
     if (s.dropOffPct != null && next && (!biggestFunnelDrop || s.dropOffPct > biggestFunnelDrop.pct)) {
-      biggestFunnelDrop = { fromLabel: s.label, toLabel: next.label, pct: s.dropOffPct };
+      biggestFunnelDrop = { fromLabel: STAGE_PLAIN[s.label] ?? s.label, toLabel: STAGE_PLAIN[next.label] ?? next.label, pct: s.dropOffPct };
     }
   });
 
@@ -113,11 +117,10 @@ export async function generateHotelReportPdf(meta: ReportMeta): Promise<Uint8Arr
     revenue: cur.kpis.revenue, bookings: cur.kpis.bookings,
     prevRevenue: prev.kpis.revenue, prevBookings: prev.kpis.bookings, hasPrevious: prev.kpis.bookings > 0,
     adSpend: cur.ads.spend, roas: cur.kpis.roas, savings: cur.otaSavings.amount,
-    visitsChangePct: pctDelta(curVisits, prevVisits),
-    topSource, topInfluencer, biggestFunnelDrop,
+    visitsChangePct: pctDelta(curVisits, prevVisits), topSource, topInfluencer, biggestFunnelDrop,
   });
 
-  return render(meta, { cur, prev, curVisits, prevVisits, rbs, channelViews, ga4, funnel, funnelHasData, narrative });
+  return render(meta, { cur, prev, rbs, channelViews, ga4, funnel, funnelHasData, narrative });
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
@@ -125,8 +128,6 @@ export async function generateHotelReportPdf(meta: ReportMeta): Promise<Uint8Arr
 type RenderData = {
   cur: Awaited<ReturnType<typeof loadHotelReport>>;
   prev: Awaited<ReturnType<typeof loadHotelReport>>;
-  curVisits: number;
-  prevVisits: number;
   rbs: ReturnType<typeof aggregateRevenueBySource>;
   channelViews: (ChannelView | null)[];
   ga4: Awaited<ReturnType<typeof loadGa4Dashboard>>;
@@ -135,104 +136,141 @@ type RenderData = {
   narrative: ReturnType<typeof buildReportNarrative>;
 };
 
-const BRAND: [number, number, number] = [124, 58, 237];
-const INK: [number, number, number] = [24, 24, 27];
-const MUTE: [number, number, number] = [82, 82, 91];
-const LINE: [number, number, number] = [228, 228, 231];
-const SOFT: [number, number, number] = [245, 243, 255];
-const GOOD: [number, number, number] = [22, 163, 74];
-const BAD: [number, number, number] = [220, 38, 38];
+type RGB = [number, number, number];
+const BRAND: RGB = [79, 70, 229];
+const INK: RGB = [24, 24, 27];
+const MUTE: RGB = [90, 90, 99];
+const LINE: RGB = [225, 225, 230];
+const SOFT: RGB = [244, 244, 253];
+const GOOD: RGB = [21, 128, 61];
+const WARN: RGB = [180, 83, 9];
+const BAD: RGB = [190, 30, 40];
+
+const VERDICT: Record<Verdict, { label: string; color: RGB; tint: RGB }> = {
+  good: { label: "Strong period", color: GOOD, tint: [236, 253, 243] },
+  watch: { label: "Mixed — worth watching", color: WARN, tint: [255, 247, 237] },
+  poor: { label: "Needs attention", color: BAD, tint: [254, 242, 242] },
+  none: { label: "No bookings tracked yet", color: MUTE, tint: [245, 245, 247] },
+};
 
 function render(meta: ReportMeta, d: RenderData): Uint8Array {
   const doc = new jsPDF({ unit: "pt", format: "a4" });
+  doc.addFileToVFS("Geist-Regular.ttf", GEIST_REGULAR_B64);
+  doc.addFont("Geist-Regular.ttf", "Geist", "normal");
+  doc.addFont("Geist-Regular.ttf", "Geist", "bold"); // same file; emphasis via faux-bold below
+  doc.setFont("Geist", "normal");
+
   const PW = doc.internal.pageSize.getWidth();
   const PH = doc.internal.pageSize.getHeight();
-  const M = 40;
+  const M = 48;
   const CW = PW - 2 * M;
+  const BOTTOM = PH - 56;
   let y = M;
 
-  const ink = (c: [number, number, number]) => doc.setTextColor(c[0], c[1], c[2]);
-  const ensure = (h: number) => { if (y + h > PH - 56) { doc.addPage(); y = M; } };
+  // Core text primitive — one place that owns colour, size, faux-bold, alignment.
+  const put = (
+    str: string, x: number, yy: number,
+    o: { size?: number; color?: RGB; strong?: boolean; align?: "left" | "right" | "center" } = {},
+  ) => {
+    const size = o.size ?? 10;
+    const c = o.color ?? INK;
+    doc.setFontSize(size); doc.setTextColor(c[0], c[1], c[2]);
+    if (o.strong) {
+      doc.setDrawColor(c[0], c[1], c[2]); doc.setLineWidth(size * 0.021);
+      doc.text(str, x, yy, { align: o.align, renderingMode: "fillThenStroke" });
+    } else {
+      doc.text(str, x, yy, { align: o.align });
+    }
+  };
+  const ensure = (h: number) => { if (y + h > BOTTOM) { doc.addPage(); y = M; } };
+  const para = (str: string, o: { size?: number; color?: RGB; gap?: number } = {}) => {
+    const size = o.size ?? 10.5;
+    doc.setFontSize(size);
+    const lines = doc.splitTextToSize(str, CW) as string[];
+    for (const ln of lines) { ensure(size + 4); put(ln, M, y, { size, color: o.color ?? INK }); y += size + 4; }
+    y += o.gap ?? 0;
+  };
   const heading = (t: string) => {
-    ensure(44);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(14); ink(BRAND);
-    doc.text(t, M, y); y += 6;
-    doc.setDrawColor(BRAND[0], BRAND[1], BRAND[2]); doc.setLineWidth(1.5); doc.line(M, y, M + CW, y);
-    y += 18; ink(INK);
+    ensure(40);
+    put(t, M, y, { size: 13.5, color: BRAND, strong: true }); y += 7;
+    doc.setDrawColor(BRAND[0], BRAND[1], BRAND[2]); doc.setLineWidth(1.4); doc.line(M, y, M + CW, y);
+    y += 18;
   };
-  const para = (t: string, size = 10.5) => {
-    doc.setFont("helvetica", "normal"); doc.setFontSize(size); ink(INK);
-    for (const ln of doc.splitTextToSize(t, CW)) { ensure(size + 4); doc.text(ln, M, y); y += size + 4; }
-  };
-  const muted = (t: string, size = 9.5) => {
-    doc.setFont("helvetica", "normal"); doc.setFontSize(size); ink(MUTE);
-    for (const ln of doc.splitTextToSize(t, CW)) { ensure(size + 3); doc.text(ln, M, y); y += size + 3; }
-    ink(INK);
-  };
-  const subhead = (t: string) => {
-    ensure(20); doc.setFont("helvetica", "bold"); doc.setFontSize(11); ink(INK); doc.text(t, M, y); y += 15;
-  };
+  const subhead = (t: string) => { ensure(22); put(t, M, y, { size: 11, color: INK, strong: true }); y += 15; };
   const kvLine = (pairs: [string, string][]) => {
-    const text = pairs.map(([k, v]) => `${k}: ${v}`).join("      ");
-    doc.setFont("helvetica", "normal"); doc.setFontSize(10); ink(MUTE);
-    for (const ln of doc.splitTextToSize(text, CW)) { ensure(14); doc.text(ln, M, y); y += 14; }
-    ink(INK);
+    // Draw as "Label value" chips wrapped across the width, right-clean.
+    doc.setFontSize(9.5);
+    let cx = M; const rowH = 15; const chipGap = 18;
+    ensure(rowH);
+    for (const [k, v] of pairs) {
+      const text = `${k}: ${v}`;
+      const w = doc.getTextWidth(text);
+      if (cx + w > M + CW) { y += rowH; cx = M; ensure(rowH); }
+      put(`${k}: `, cx, y, { size: 9.5, color: MUTE });
+      const kw = doc.getTextWidth(`${k}: `);
+      put(v, cx + kw, y, { size: 9.5, color: INK });
+      cx += w + chipGap;
+    }
+    y += rowH;
   };
   const finalY = () => (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY;
   const table = (head: string[], body: (string | number)[][], rightCols: number[] = []) => {
-    ensure(60);
+    ensure(56);
     autoTable(doc, {
-      startY: y,
-      margin: { left: M, right: M },
-      head: [head],
-      body,
-      styles: { fontSize: 9, cellPadding: 5, textColor: INK, lineColor: LINE, lineWidth: 0.5 },
-      headStyles: { fillColor: SOFT, textColor: BRAND, fontStyle: "bold", fontSize: 8 },
+      startY: y, margin: { left: M, right: M },
+      head: [head], body,
+      styles: { font: "Geist", fontStyle: "normal", fontSize: 9, cellPadding: 6, textColor: INK, lineColor: LINE, lineWidth: 0.5, overflow: "linebreak" },
+      headStyles: { font: "Geist", fontStyle: "normal", fillColor: SOFT, textColor: BRAND, fontSize: 8.5, cellPadding: 6 },
+      alternateRowStyles: { fillColor: [250, 250, 252] },
       columnStyles: Object.fromEntries(rightCols.map((c) => [c, { halign: "right" as const }])),
       theme: "grid",
     });
-    y = finalY() + 16;
+    y = finalY() + 18;
   };
 
-  // ── Cover ──
-  doc.setFillColor(BRAND[0], BRAND[1], BRAND[2]); doc.rect(0, 0, PW, 150, "F");
-  doc.setTextColor(255, 255, 255);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(20); doc.text("HotelTrack", M, 62);
-  doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.text("Content → visits → bookings → revenue", M, 82);
-  y = 210;
-  doc.setFont("helvetica", "bold"); doc.setFontSize(11); ink(MUTE); doc.text("PERFORMANCE REPORT", M, y); y += 30;
-  ink(INK); doc.setFontSize(28); doc.text(doc.splitTextToSize(meta.hotelName, CW), M, y); y += 30;
-  ink(MUTE); doc.setFont("helvetica", "normal"); doc.setFontSize(12); doc.text(meta.websiteUrl || "", M, y); y += 34;
-  ink(INK); doc.setFontSize(13); doc.setFont("helvetica", "bold"); doc.text(meta.rangeLabel, M, y); y += 18;
-  ink(MUTE); doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.text(`${meta.from} — ${meta.to}`, M, y);
-  ink(MUTE); doc.setFontSize(10);
-  doc.text(`Prepared by ${meta.agencyName}`, M, PH - 60);
-  doc.text(`Generated ${meta.generatedAt}`, M + CW, PH - 60, { align: "right" });
+  // ── Page 1: header ──
+  doc.setFillColor(BRAND[0], BRAND[1], BRAND[2]); doc.rect(0, 0, PW, 8, "F"); // top accent bar
+  put("HotelTrack", M, 44, { size: 15, color: BRAND, strong: true });
+  put("Performance report", PW - M, 44, { size: 10, color: MUTE, align: "right" });
+  y = 74;
+  put(meta.hotelName, M, y, { size: 24, color: INK, strong: true }); y += 20;
+  if (meta.websiteUrl) { put(meta.websiteUrl, M, y, { size: 10.5, color: MUTE }); y += 16; }
+  put(`${meta.rangeLabel}  ·  ${meta.from} to ${meta.to}`, M, y, { size: 11, color: INK }); y += 15;
+  put(`Prepared by ${meta.agencyName}   ·   Generated ${meta.generatedAt}`, M, y, { size: 9.5, color: MUTE });
+  y += 22;
 
-  doc.addPage(); y = M;
+  // Verdict banner
+  {
+    const v = VERDICT[d.narrative.verdict];
+    const h = 30;
+    ensure(h + 6);
+    doc.setFillColor(v.tint[0], v.tint[1], v.tint[2]); doc.setDrawColor(v.color[0], v.color[1], v.color[2]); doc.setLineWidth(1);
+    doc.roundedRect(M, y, CW, h, 5, 5, "FD");
+    put("VERDICT", M + 12, y + 12, { size: 7.5, color: v.color, strong: true });
+    put(v.label, M + 12, y + 24, { size: 12, color: v.color, strong: true });
+    y += h + 18;
+  }
 
-  // ── 2. Performance summary (top) ──
+  // ── Performance summary ──
   heading("Performance summary");
   {
     const pad = 12;
     doc.setFontSize(10);
-    const wrapped = d.narrative.keyPoints.map((k) => doc.splitTextToSize(`•  ${k}`, CW - 2 * pad));
+    const wrapped = d.narrative.keyPoints.map((k) => doc.splitTextToSize(`•  ${k}`, CW - 2 * pad) as string[]);
     const totalLines = wrapped.reduce((s, w) => s + w.length, 0);
-    const boxH = pad * 2 + 18 + totalLines * 14;
+    const boxH = pad * 2 + 16 + totalLines * 13.5;
     ensure(boxH + 6);
     doc.setFillColor(SOFT[0], SOFT[1], SOFT[2]); doc.setDrawColor(BRAND[0], BRAND[1], BRAND[2]); doc.setLineWidth(1);
     doc.roundedRect(M, y, CW, boxH, 6, 6, "FD");
-    let by = y + pad + 12;
-    doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); ink(BRAND); doc.text("KEY POINTS", M + pad, by); by += 16;
-    doc.setFont("helvetica", "normal"); doc.setFontSize(10); ink(INK);
-    for (const w of wrapped) for (const ln of w) { doc.text(ln, M + pad, by); by += 14; }
+    let by = y + pad + 11;
+    put("KEY POINTS", M + pad, by, { size: 8, color: BRAND, strong: true }); by += 15;
+    for (const w of wrapped) for (const ln of w) { put(ln, M + pad, by, { size: 10, color: INK }); by += 13.5; }
     y += boxH + 16;
-    para(d.narrative.prose);
-    y += 10;
+    para(d.narrative.prose, { size: 10.5, gap: 10 });
   }
 
-  // ── 3. Key metrics ──
-  heading("Key metrics");
+  // ── Key performance indicators ──
+  heading("Key performance indicators");
   {
     const revenue = d.cur.kpis.revenue, prevRevenue = d.prev.kpis.revenue;
     const bookings = d.cur.kpis.bookings, prevBookings = d.prev.kpis.bookings;
@@ -240,179 +278,157 @@ function render(meta: ReportMeta, d: RenderData): Uint8Array {
     const roas = d.cur.kpis.roas, prevRoas = d.prev.kpis.roas;
     const convRate = d.cur.kpis.visits > 0 ? bookings / d.cur.kpis.visits : null;
     const prevConvRate = d.prev.kpis.visits > 0 ? prevBookings / d.prev.kpis.visits : null;
-    const tiles: { label: string; value: string; delta: number | null; inverse?: boolean }[] = [
-      { label: "Revenue", value: fmtC(revenue), delta: pctDelta(revenue, prevRevenue) },
+    const tiles: { label: string; value: string; sub?: string; delta: number | null; inverse?: boolean }[] = [
+      { label: "Revenue", value: money(revenue), delta: pctDelta(revenue, prevRevenue) },
       { label: "Bookings", value: formatNumber(bookings), delta: pctDelta(bookings, prevBookings) },
-      { label: "Ad spend", value: fmtC(spend), delta: pctDelta(spend, prevSpend), inverse: true },
-      { label: "ROAS", value: formatMultiple(roas), delta: pctDelta(roas, prevRoas) },
-      { label: "Conversion rate", value: convRate == null ? "—" : formatPercent(convRate), delta: pctDelta(convRate, prevConvRate) },
-      { label: "Commission saved", value: fmtC(d.cur.otaSavings.amount), delta: null },
+      { label: "Ad spend", value: money(spend), delta: pctDelta(spend, prevSpend), inverse: true },
+      { label: "Return on ad spend", value: `₹${(roas ?? 0).toFixed(2)}`, sub: "back per ₹1 spent", delta: pctDelta(roas, prevRoas) },
+      { label: "Website conversion rate", value: convRate == null ? "—" : formatPercent(convRate), sub: "visitors who booked", delta: pctDelta(convRate, prevConvRate) },
+      { label: "Commission saved vs OTAs", value: money(d.cur.otaSavings.amount), delta: null },
     ];
-    const cols = 3, gap = 10, tileW = (CW - gap * (cols - 1)) / cols, tileH = 54;
+    const cols = 3, gap = 12, tileW = (CW - gap * (cols - 1)) / cols, tileH = 62;
     const rows = Math.ceil(tiles.length / cols);
     ensure(rows * (tileH + gap));
     const y0 = y;
     tiles.forEach((t, i) => {
       const tx = M + (i % cols) * (tileW + gap);
       const ty = y0 + Math.floor(i / cols) * (tileH + gap);
-      doc.setDrawColor(LINE[0], LINE[1], LINE[2]); doc.setLineWidth(1); doc.roundedRect(tx, ty, tileW, tileH, 4, 4, "S");
-      doc.setFont("helvetica", "normal"); doc.setFontSize(8); ink(MUTE); doc.text(t.label.toUpperCase(), tx + 10, ty + 16);
-      doc.setFont("helvetica", "bold"); doc.setFontSize(14); ink(INK); doc.text(t.value, tx + 10, ty + 37);
+      doc.setDrawColor(LINE[0], LINE[1], LINE[2]); doc.setLineWidth(1); doc.roundedRect(tx, ty, tileW, tileH, 5, 5, "S");
+      put(t.label.toUpperCase(), tx + 11, ty + 16, { size: 7.5, color: MUTE });
+      put(t.value, tx + 11, ty + 37, { size: 17, color: INK, strong: true });
+      if (t.sub) put(t.sub, tx + 11, ty + 51, { size: 7.5, color: MUTE });
       if (t.delta != null) {
         const up = t.delta >= 0; const good = t.inverse ? !up : up;
-        ink(good ? GOOD : BAD); doc.setFontSize(8); doc.setFont("helvetica", "bold");
-        doc.text(`${up ? "▲" : "▼"} ${Math.abs(Math.round(t.delta))}%`, tx + tileW - 10, ty + 37, { align: "right" });
+        put(`${up ? "▲" : "▼"} ${Math.abs(Math.round(t.delta))}%`, tx + tileW - 11, ty + 16, { size: 8, color: good ? GOOD : BAD, strong: true, align: "right" });
       }
     });
-    y = y0 + rows * (tileH + gap) + 6; ink(INK);
-    muted("Change badges compare against the immediately-preceding period of the same length.");
+    y = y0 + rows * (tileH + gap) + 4;
+    put("Change shown against the previous period of the same length.", M, y, { size: 8, color: MUTE }); y += 16;
   }
 
-  // ── 4. Revenue by source ──
-  heading("Revenue by source");
+  // ── Page 2+: detail ──
+  doc.addPage(); y = M;
+
+  heading("Where your bookings came from");
   if (d.rbs.groups.length === 0) {
-    muted("No booking revenue was attributed to a source in this period.");
+    para("No bookings were tracked to a source in this period.", { size: 10, color: MUTE });
   } else {
     table(
-      ["Source", "Bookings", "Revenue", "Avg value", "% of total"],
-      d.rbs.groups.slice(0, 10).map((g) => [sourceDisplay(g.key), formatNumber(g.bookings), fmtC(g.revenue), fmtC(g.averageBookingValue), `${g.percentOfTotal.toFixed(0)}%`]),
+      ["Source", "Bookings", "Revenue", "Avg. booking", "Share"],
+      d.rbs.groups.slice(0, 10).map((g) => [sourceDisplay(g.key), formatNumber(g.bookings), money(g.revenue), money(g.averageBookingValue), `${g.percentOfTotal.toFixed(0)}%`]),
       [1, 2, 3, 4],
     );
   }
 
-  // ── 5. Channel performance ──
-  heading("Channel performance");
-  renderChannels(d.channelViews, d.ga4, { subhead, kvLine, muted, table });
+  heading("How each marketing channel performed");
+  renderChannels(d.channelViews, d.ga4, { subhead, kvLine, para, table });
 
-  // ── 6. Visitor journey & funnel ──
-  heading("Visitor journey & funnel");
+  heading("Where visitors go on your website");
   if (!d.funnelHasData) {
-    muted("No funnel activity was recorded for this period. Configure funnel stages on the Integrations page to unlock drop-off analysis.");
+    para("No visitor-journey activity was recorded this period. Once the tracking code is capturing page visits, this shows how far visitors get toward booking.", { size: 10, color: MUTE });
   } else {
     table(
-      ["Stage", "Visitors", "Conv. from previous", "Drop-off to next"],
-      d.funnel.stages.map((s) => [s.label, formatNumber(s.visitors), s.conversionFromPrev == null ? "—" : formatPercent(s.conversionFromPrev), s.dropOffPct == null ? "—" : formatPercent(s.dropOffPct)]),
+      ["Step", "Visitors", "Reached from previous step", "Left before next step"],
+      d.funnel.stages.map((s) => [STAGE_PLAIN[s.label] ?? s.label, formatNumber(s.visitors), s.conversionFromPrev == null ? "—" : formatPercent(s.conversionFromPrev), s.dropOffPct == null ? "—" : formatPercent(s.dropOffPct)]),
       [1, 2, 3],
     );
-    if (d.funnel.overallConversion != null) {
-      muted(`Overall awareness-to-booking conversion: ${formatPercent(d.funnel.overallConversion)}.`);
-    }
   }
 
-  // ── 7. OTA commission savings ──
-  heading("OTA commission savings");
+  heading("Commission saved by booking direct");
   {
     const s = d.cur.otaSavings;
     if (s.bookingRevenue === 0) {
-      muted("No direct booking revenue was tracked this period, so there are no OTA commission savings to report.");
+      para("No direct bookings were tracked this period, so there are no commission savings to report yet.", { size: 10, color: MUTE });
     } else {
-      para(`Every booking made directly on ${meta.hotelName}'s own website avoids the commission an OTA would charge. At a ${s.rate}% commission rate, the ${fmtC(s.bookingRevenue)} in direct booking revenue this period saved approximately ${fmtC(s.amount)} that would otherwise have gone to online travel agencies.`);
+      para(`Every booking made directly on your own website avoids the commission a travel-booking site (OTA) would charge. At a commission rate of ${s.rate}%, the ${money(s.bookingRevenue)} in direct bookings this period saved roughly ${money(s.amount)} that would otherwise have gone to those sites.`, { size: 10.5 });
     }
   }
 
-  // ── 8. Footer on every body page ──
+  // ── Footer on every page ──
   const total = doc.getNumberOfPages();
   const contact = [meta.agencyContact.contactEmail, meta.agencyContact.mobile, meta.agencyContact.websiteUrl].filter(Boolean).join("   ·   ");
-  for (let i = 2; i <= total; i++) {
+  for (let i = 1; i <= total; i++) {
     doc.setPage(i);
     doc.setDrawColor(LINE[0], LINE[1], LINE[2]); doc.setLineWidth(0.5); doc.line(M, PH - 40, M + CW, PH - 40);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(8); ink(MUTE);
-    doc.text(`${meta.agencyName}  ·  Powered by HotelTrack`, M, PH - 26);
-    if (contact) doc.text(contact, M, PH - 15);
-    doc.text(`Page ${i - 1} of ${total - 1}`, M + CW, PH - 26, { align: "right" });
+    put(`${meta.agencyName}  ·  Powered by HotelTrack`, M, PH - 26, { size: 8, color: MUTE });
+    if (contact) put(contact, M, PH - 15, { size: 8, color: MUTE });
+    put(`Page ${i} of ${total}`, M + CW, PH - 26, { size: 8, color: MUTE, align: "right" });
   }
 
   return new Uint8Array(doc.output("arraybuffer"));
 }
 
-// Compact per-channel blocks, each with an honest empty/not-connected state.
 function renderChannels(
   views: (ChannelView | null)[],
   ga4: RenderData["ga4"],
   h: {
     subhead: (t: string) => void;
     kvLine: (pairs: [string, string][]) => void;
-    muted: (t: string, size?: number) => void;
+    para: (t: string, o?: { size?: number; color?: RGB; gap?: number }) => void;
     table: (head: string[], body: (string | number)[][], rightCols?: number[]) => void;
   },
 ) {
   const byName = (name: string) => views.find((v) => v?.channelName === name) ?? null;
+  const none = (t: string) => h.para(t, { size: 9.5, color: MUTE, gap: 6 });
 
-  // Meta Ads / Google Ads (paid)
-  for (const name of ["Meta Ads", "Google Ads"]) {
+  for (const [name, label] of [["Meta Ads", "Meta Ads (Facebook & Instagram)"], ["Google Ads", "Google Ads"]] as const) {
     const v = byName(name);
-    h.subhead(name);
-    if (!v || v.channelType !== "paid_ads") { h.muted("No data for this period."); continue; }
-    if (v.integrationStatus === "not_connected" || !v.kpis) { h.muted("Not connected for this hotel."); continue; }
+    h.subhead(label);
+    if (!v || v.channelType !== "paid_ads") { none("No data for this period."); continue; }
+    if (v.integrationStatus === "not_connected" || !v.kpis) { none("Not connected for this hotel."); continue; }
     const k = v.kpis;
     h.kvLine([
-      ["Spend", fmtC(k.totalSpend)], ["Impressions", formatNumber(k.impressions)], ["Clicks", formatNumber(k.linkClicks)],
-      ["CTR", `${k.ctr.toFixed(2)}%`], ["Conversions", formatNumber(k.conversions)], ["ROAS", formatMultiple(k.roas)],
+      ["Spend", money(k.totalSpend)], ["Times shown", formatNumber(k.impressions)], ["Clicks to site", formatNumber(k.linkClicks)],
+      ["Bookings", formatNumber(k.conversions)], ["Back per ₹1", `₹${(k.roas ?? 0).toFixed(2)}`],
     ]);
     if (v.topCampaigns && v.topCampaigns.length > 0) {
-      h.table(["Campaign", "Spend", "Revenue", "Bookings", "ROAS"],
-        v.topCampaigns.slice(0, 5).map((c) => [c.campaignName, fmtC(c.spend), fmtC(c.revenue), formatNumber(c.bookings), formatMultiple(c.roas)]),
+      h.table(["Campaign", "Spend", "Revenue", "Bookings", "Back per ₹1"],
+        v.topCampaigns.slice(0, 5).map((c) => [c.campaignName, money(c.spend), money(c.revenue), formatNumber(c.bookings), `₹${(c.roas ?? 0).toFixed(2)}`]),
         [1, 2, 3, 4]);
     }
   }
 
-  // Instagram Organic
   {
     const v = byName("Instagram Organic");
-    h.subhead("Instagram (organic)");
-    if (!v || v.channelType !== "organic_social" || v.channelName !== "Instagram Organic") { h.muted("No data for this period."); }
-    else if (!v.hasData) { h.muted("No organic Instagram data for this period."); }
+    h.subhead("Instagram (organic posts)");
+    if (!v || v.channelType !== "organic_social" || v.channelName !== "Instagram Organic") none("No data for this period.");
+    else if (!v.hasData) none("No organic Instagram data for this period.");
     else {
       const k = v.kpis;
       h.kvLine([
-        ["Reach", formatNumber(k.postReach)], ["Profile visits", formatNumber(k.profileVisits)],
-        ["Engagement", formatPercent(k.engagementRate / 100)], ["IG sessions", formatNumber(k.sessionsFromInstagram)],
-        ["Bookings", formatNumber(k.bookings)], ["Revenue", fmtC(k.revenue)],
+        ["People reached", formatNumber(k.postReach)], ["Profile visits", formatNumber(k.profileVisits)],
+        ["Visits to site", formatNumber(k.sessionsFromInstagram)], ["Bookings", formatNumber(k.bookings)], ["Revenue", money(k.revenue)],
       ]);
     }
   }
 
-  // Website (GA4)
   {
-    h.subhead("Website traffic (GA4)");
-    if (!ga4.connected || ga4.days === 0) { h.muted("Google Analytics 4 is not connected, or has no data for this period."); }
+    h.subhead("Website analytics");
+    if (!ga4.connected || ga4.days === 0) none("Website analytics is not connected, or has no data for this period.");
     else {
       h.kvLine([
-        ["Sessions", formatNumber(ga4.sessions)], ["Users", formatNumber(ga4.users)],
-        ["Bounce", formatPercent(ga4.bounceRate)], ["Engaged", formatNumber(ga4.engagement.engagedSessions)],
-        ["Conversions", formatNumber(ga4.keyEvents)],
+        ["Visits", formatNumber(ga4.sessions)], ["Visitors", formatNumber(ga4.users)],
+        ["Left quickly", formatPercent(ga4.bounceRate)], ["Bookings/goals", formatNumber(ga4.keyEvents)],
       ]);
-      if (ga4.sources.length > 0) {
-        h.table(["Source / Medium", "Sessions", "Users", "Conversions"],
-          ga4.sources.slice(0, 5).map((s) => [`${s.source} / ${s.medium}`, formatNumber(s.sessions), formatNumber(s.users), formatNumber(s.keyEvents)]),
-          [1, 2, 3]);
-      }
     }
   }
 
-  // Direct
   {
     const v = byName("Direct");
-    h.subhead("Direct");
-    if (!v || v.channelType !== "direct" || !v.hasData) { h.muted("No direct traffic for this period."); }
-    else {
-      h.kvLine([["Sessions", formatNumber(v.kpis.sessions)], ["Bookings", formatNumber(v.kpis.bookings)], ["Revenue", fmtC(v.kpis.revenue)]]);
-    }
+    h.subhead("Direct visits");
+    if (!v || v.channelType !== "direct" || !v.hasData) none("No direct visits for this period.");
+    else h.kvLine([["Visits", formatNumber(v.kpis.sessions)], ["Bookings", formatNumber(v.kpis.bookings)], ["Revenue", money(v.kpis.revenue)]]);
   }
 
-  // Influencer
   {
     const v = byName("Influencer");
-    h.subhead("Influencer");
-    if (!v || v.channelType !== "influencer" || !v.hasData) { h.muted("No influencer activity for this period."); }
+    h.subhead("Influencers");
+    if (!v || v.channelType !== "influencer" || !v.hasData) none("No influencer activity for this period.");
     else {
-      h.kvLine([
-        ["Active influencers", formatNumber(v.kpis.activeInfluencers)], ["Redemptions", formatNumber(v.kpis.totalRedemptions)],
-        ["Revenue", fmtC(v.kpis.totalRevenue)],
-      ]);
+      h.kvLine([["Active influencers", formatNumber(v.kpis.activeInfluencers)], ["Coupon uses", formatNumber(v.kpis.totalRedemptions)], ["Revenue", money(v.kpis.totalRevenue)]]);
       if (v.topInfluencers.length > 0) {
-        h.table(["Influencer", "Redemptions", "Revenue"],
-          v.topInfluencers.slice(0, 5).map((t) => [t.influencerName, formatNumber(t.redemptionsCount), fmtC(t.revenue)]),
+        h.table(["Influencer", "Coupon uses", "Revenue"],
+          v.topInfluencers.slice(0, 5).map((t) => [t.influencerName, formatNumber(t.redemptionsCount), money(t.revenue)]),
           [1, 2]);
       }
     }
