@@ -54,7 +54,6 @@ import {
 } from "@/lib/campaign-attribution";
 import { SpendChart } from "@/components/report/SpendChart";
 import { FollowerChart } from "@/components/report/FollowerChart";
-import { type SourceSlice } from "@/components/report/SourcePieChart";
 import { ReportMenu } from "./ReportMenu";
 import { HotelShareManager } from "./HotelShareManager";
 import { DeleteHotelDangerZone } from "./DeleteHotelDangerZone";
@@ -89,7 +88,6 @@ const POST_TYPES = ["image", "video", "carousel", "reels"] as const;
 type PostType = (typeof POST_TYPES)[number];
 const DAY_MS = 86_400_000;
 import { isPixelMode } from "@/lib/tracking-mode";
-import type { ReportData } from "./ReportDocument";
 
 function KpiCard({
   label,
@@ -686,80 +684,6 @@ export default async function HotelDashboardPage({
       ? (storyImpressionsRange - storyExitsRange) / storyImpressionsRange
       : null;
 
-  // ── Google Analytics — total website performance + source breakdown ──
-  const [gaConnection, gaSnaps, gaSources, hotelTrackVisitsAgg] = await Promise.all([
-    agencyScoped(prisma.googleAnalyticsConnection).findFirst({
-      where: { hotelClientId: hotel.id },
-      select: { status: true, propertyId: true, lastSyncedAt: true },
-    }),
-    agencyScoped(prisma.gaSnapshot).findMany({
-      where: {
-        hotelClientId: hotel.id,
-        date: { gte: range.since, lte: range.until },
-      },
-      orderBy: { date: "asc" },
-    }),
-    agencyScoped(prisma.gaSourceBreakdown).groupBy({
-      by: ["source"],
-      where: {
-        hotelClientId: hotel.id,
-        date: { gte: range.since, lte: range.until },
-      },
-      _sum: { sessions: true, conversions: true },
-    }),
-    // HotelTrack snippet "visit" events with a UTM tag in the same range —
-    // this is the agency-attributable share for the comparison block.
-    pixelMode
-      ? Promise.resolve(0)
-      : agencyScoped(prisma.trackingEvent).findMany({
-          where: {
-            hotelClientId: hotel.id,
-            eventType: "visit",
-            createdAt: { gte: range.since, lte: range.until },
-            OR: [
-              { utmContent: { not: null } },
-              { utmCampaign: { not: null } },
-            ],
-          },
-          select: { sessionId: true },
-          distinct: ["sessionId"],
-        }).then((rows) => rows.length),
-  ]);
-
-  const gaConnected = gaConnection?.status === "connected";
-  type GaTotals = {
-    totalUsers: number;
-    newUsers: number;
-    sessions: number;
-    pageviews: number;
-    conversions: number;
-    bounceSum: number;
-    durationSum: number;
-  };
-  const gaTotals = gaSnaps.reduce<GaTotals>(
-    (acc, s) => ({
-      totalUsers: acc.totalUsers + s.totalUsers,
-      newUsers: acc.newUsers + s.newUsers,
-      sessions: acc.sessions + s.sessions,
-      pageviews: acc.pageviews + s.pageviews,
-      conversions: acc.conversions + s.conversions,
-      bounceSum: acc.bounceSum + s.bounceRate * s.sessions,
-      durationSum: acc.durationSum + s.avgSessionDuration * s.sessions,
-    }),
-    { totalUsers: 0, newUsers: 0, sessions: 0, pageviews: 0, conversions: 0, bounceSum: 0, durationSum: 0 },
-  );
-  const gaBounceRate = gaTotals.sessions > 0 ? gaTotals.bounceSum / gaTotals.sessions : 0;
-  const gaAvgSessionDuration =
-    gaTotals.sessions > 0 ? gaTotals.durationSum / gaTotals.sessions : 0;
-  const gaSourceSlices: SourceSlice[] = gaSources.map((r: { source: string; _sum: { sessions: number | null } }) => ({
-    source: r.source,
-    sessions: r._sum.sessions ?? 0,
-  }));
-  const hotelTrackTaggedVisits =
-    typeof hotelTrackVisitsAgg === "number" ? hotelTrackVisitsAgg : 0;
-  const contentSharePct =
-    gaTotals.sessions > 0 ? hotelTrackTaggedVisits / gaTotals.sessions : null;
-
   // ── Website Traffic (GA4 OAuth) section + cross-validation ──
   // Total distinct snippet visit-sessions over the range (null in pixel mode),
   // for the GA4-vs-HotelTrack validation card.
@@ -1220,115 +1144,6 @@ export default async function HotelDashboardPage({
     })
     .sort((a, b) => (b.realRoas ?? -1) - (a.realRoas ?? -1));
 
-  // Serializable snapshot passed to the client report generator.
-  const reportData: ReportData = {
-    hotelName: hotel.name,
-    websiteUrl: hotel.websiteUrl,
-    agencyName: member.agency.name,
-    rangeLabel: range.label,
-    from: range.fromInput,
-    to: range.toInput,
-    generatedAt: new Date().toLocaleDateString(),
-    kpis: {
-      visits: kpis.visits,
-      bookings: kpis.bookings,
-      revenue: kpis.revenue,
-      spend: kpis.spend,
-      costPerBooking: kpis.costPerBooking,
-      roas: kpis.roas,
-    },
-    topContent: [...contentPerf]
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 10)
-      .map((c) => ({
-        title: c.title,
-        contentType: c.contentType,
-        clicks: c.clicks,
-        sessions: c.sessions,
-        bookings: c.bookings,
-        revenue: c.revenue,
-        conversionRate: c.conversionRate,
-      })),
-    ads: {
-      spend: ads.spend,
-      bookingsFromAds: ads.bookingsFromAds,
-      metaRoas: ads.metaRoas,
-      trueRoi: realRoi,
-      campaigns: paidCampaigns.map((c) => ({
-        title: c.title,
-        sessions: c.sessions,
-        bookings: c.bookings,
-        revenue: c.revenue,
-      })),
-    },
-    campaignPerformance: [...campaignRows]
-      .sort((a, b) => {
-        if (a.unattributed !== b.unattributed) return a.unattributed ? 1 : -1;
-        return (b.realRoas ?? -1) - (a.realRoas ?? -1);
-      })
-      .map((r) => ({
-        campaignName: r.campaignName,
-        unattributed: r.unattributed,
-        spend: r.spend,
-        realBookings: r.realBookings,
-        realRevenue: r.realRevenue,
-        realRoas: r.realRoas,
-        metaConversions: r.metaConversions,
-      })),
-    influencers: influencerRows.map((r) => ({
-      influencerName: r.influencerName,
-      couponCode: r.couponCode,
-      redemptions: r.redemptions,
-      revenue: r.revenue,
-    })),
-    social: {
-      handle: socialAccount?.username ?? null,
-      followers: currentFollowers,
-      followerGrowth,
-      engagementRate,
-      storyCompletionRate,
-      topPosts: topPosts.map((p) => ({
-        caption: p.caption,
-        mediaType: p.mediaType,
-        postedAt: p.postedAt ? p.postedAt.toLocaleDateString() : null,
-        reach: p.reach,
-        likes: p.likes,
-        comments: p.comments,
-        engagement: p.engagement,
-        saves: p.saves,
-      })),
-      stories: recentStories.map((s) => ({
-        postedAt: s.postedAt ? s.postedAt.toLocaleString() : null,
-        mediaType: s.mediaType,
-        reach: s.reach,
-        impressions: s.impressions,
-        tapsForward: s.tapsForward,
-        exits: s.exits,
-        replies: s.replies,
-      })),
-    },
-    ga: {
-      connected: gaConnected,
-      propertyId: gaConnection?.propertyId ?? null,
-      totalUsers: gaTotals.totalUsers,
-      newUsers: gaTotals.newUsers,
-      sessions: gaTotals.sessions,
-      bounceRate: gaBounceRate,
-      avgSessionDuration: gaAvgSessionDuration,
-      conversions: gaTotals.conversions,
-      contentSessions: hotelTrackTaggedVisits,
-      contentSharePct,
-      sources: gaSourceSlices
-        .filter((s) => s.sessions > 0)
-        .sort((a, b) => b.sessions - a.sessions)
-        .map((s) => ({
-          source: s.source,
-          sessions: s.sessions,
-          pct: gaTotals.sessions > 0 ? s.sessions / gaTotals.sessions : 0,
-        })),
-    },
-  };
-
   // ── Recent visitor journeys (snippet v2) — compact preview; full page-by-page
   //    view lives at /agency/hotel/[id]/journeys. Journey/funnel data comes from
   //    the v2 snippet and exists independently of the Pixel-vs-attribution
@@ -1433,7 +1248,6 @@ export default async function HotelDashboardPage({
               hotelId={hotel.id}
               from={range.fromInput}
               to={range.toInput}
-              data={reportData}
             />
           </div>
         </div>
