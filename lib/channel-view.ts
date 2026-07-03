@@ -233,6 +233,102 @@ async function loadMetaAds(hotelClientId: string, start: Date, end: Date): Promi
   };
 }
 
+async function loadGoogleAds(hotelClientId: string, start: Date, end: Date): Promise<PaidChannelView> {
+  const [conn, campSnaps] = await Promise.all([
+    agencyScoped(prisma.googleAdsConnection).findFirst({
+      where: { hotelClientId },
+      select: { customerId: true },
+    }),
+    agencyScoped(prisma.googleAdsCampaignSnapshot).findMany({
+      where: { hotelClientId, date: { gte: start, lte: end } },
+      select: {
+        customerId: true, campaignId: true, campaignName: true, date: true,
+        spend: true, impressions: true, clicks: true, conversions: true, conversionsValue: true,
+      },
+    }),
+  ]);
+
+  // No connection at all → "not connected". A connection with no rows in-range is
+  // CONNECTED but empty (the UI shows "no active campaigns", not a connect CTA).
+  if (!conn || conn.customerId === "") {
+    return { channelType: "paid_ads", channelName: "Google Ads", hasData: false, integrationStatus: "not_connected" };
+  }
+  if (campSnaps.length === 0) {
+    return { channelType: "paid_ads", channelName: "Google Ads", hasData: false };
+  }
+
+  // Sum raw numerators/denominators; CTR/CPC/CPM/ROAS recomputed from totals
+  // (never averaged across rows), exactly like the Meta loader. Money, conversions,
+  // and value are all Ads-REPORTED (from the account's own conversion tracking).
+  let totalSpend = 0, impressions = 0, clicks = 0, conversions = 0, revenue = 0;
+  const acctAgg = new Map<string, { accountId: string; spend: number; impressions: number; clicks: number }>();
+  const campAgg = new Map<string, { campaignName: string; spend: number; impressions: number; clicks: number; conversions: number; revenue: number }>();
+  const byDay = new Map<string, { spend: number; revenue: number; bookings: number }>();
+
+  for (const s of campSnaps) {
+    const spend = num(s.spend);
+    const value = num(s.conversionsValue);
+    totalSpend += spend; impressions += s.impressions; clicks += s.clicks;
+    conversions += s.conversions; revenue += value;
+
+    const a = acctAgg.get(s.customerId) ?? { accountId: s.customerId, spend: 0, impressions: 0, clicks: 0 };
+    a.spend += spend; a.impressions += s.impressions; a.clicks += s.clicks;
+    acctAgg.set(s.customerId, a);
+
+    const key = s.campaignName.trim().toLowerCase() || s.campaignId;
+    const c = campAgg.get(key) ?? { campaignName: s.campaignName.trim() || s.campaignId, spend: 0, impressions: 0, clicks: 0, conversions: 0, revenue: 0 };
+    c.spend += spend; c.impressions += s.impressions; c.clicks += s.clicks; c.conversions += s.conversions; c.revenue += value;
+    campAgg.set(key, c);
+
+    const dk = dayKey(s.date);
+    const d = byDay.get(dk) ?? { spend: 0, revenue: 0, bookings: 0 };
+    d.spend += spend; d.revenue += value; d.bookings += s.conversions;
+    byDay.set(dk, d);
+  }
+
+  const kpis: PaidKpis = {
+    totalSpend, impressions,
+    reach: 0, frequency: 0, // Google Ads reports no de-duplicated reach
+    cpc: clicks > 0 ? totalSpend / clicks : 0,
+    cpm: impressions > 0 ? (totalSpend / impressions) * 1000 : 0,
+    ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
+    linkClicks: clicks,
+    conversions: Math.round(conversions),
+    costPerConversion: conversions > 0 ? totalSpend / conversions : null,
+    bookings: Math.round(conversions),
+    revenue,
+    roas: totalSpend > 0 ? revenue / totalSpend : null,
+    costPerBooking: conversions > 0 ? totalSpend / conversions : null,
+    conversionRate: clicks > 0 ? (conversions / clicks) * 100 : null,
+  };
+
+  const accounts = [...acctAgg.values()].sort((a, b) => b.spend - a.spend);
+  const topCampaigns = [...campAgg.values()]
+    .map((c) => ({
+      campaignName: c.campaignName,
+      spend: c.spend,
+      revenue: c.revenue,
+      bookings: Math.round(c.conversions),
+      roas: c.spend > 0 ? c.revenue / c.spend : null,
+      ctr: c.impressions > 0 ? (c.clicks / c.impressions) * 100 : 0,
+    }))
+    .sort((x, y) => y.revenue - x.revenue || y.spend - x.spend)
+    .slice(0, 5);
+
+  const trend = dayKeys(start, end).map((date) => ({
+    date,
+    spend: byDay.get(date)?.spend ?? 0,
+    revenue: byDay.get(date)?.revenue ?? 0,
+    bookings: Math.round(byDay.get(date)?.bookings ?? 0),
+  }));
+
+  return {
+    channelType: "paid_ads", channelName: "Google Ads",
+    hasData: true,
+    kpis, accounts, topCampaigns, topCreatives: null, trend,
+  };
+}
+
 async function loadInstagram(hotelClientId: string, start: Date, end: Date): Promise<InstagramChannelView> {
   const [social, posts, allPosts, conversions, sessions, connection, reachSplit] = await Promise.all([
     agencyScoped(prisma.socialSnapshot).findMany({
@@ -591,8 +687,7 @@ export async function loadChannelView(
     case "meta_ads":
       return loadMetaAds(hotelClientId, start, end);
     case "google_ads":
-      // Google Ads isn't integrated yet (PART 3) — uniform "not connected" shape.
-      return { channelType: "paid_ads", channelName: "Google Ads", hasData: false, integrationStatus: "not_connected" };
+      return loadGoogleAds(hotelClientId, start, end);
     case "instagram_organic":
       return loadInstagram(hotelClientId, start, end);
     case "facebook_organic":

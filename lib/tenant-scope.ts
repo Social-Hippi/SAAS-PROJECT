@@ -176,6 +176,7 @@ export const MULTI_TENANT_MODELS = [
   "ga4Connection",
   "ga4Snapshot",
   "googleAdsConnection",
+  "googleAdsCampaignSnapshot",
   "clickEvent",
   "formFieldEvent",
   "visitorIdentity",

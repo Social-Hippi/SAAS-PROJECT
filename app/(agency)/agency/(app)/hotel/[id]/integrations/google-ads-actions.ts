@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { getTokenForApiCall } from "@/lib/token-access";
 import { describeCustomer, loginCustomerId } from "@/lib/google-ads";
+import { runGoogleAdsSync } from "@/lib/google-ads-sync";
 
 // Server actions for the Google Ads (OAuth) integration card. Connecting happens
 // via the /api/auth/google-ads/start redirect; these cover disconnect and choosing
@@ -26,6 +27,29 @@ async function ownHotelId(hotelId: string): Promise<string | null> {
 function revalidate(hotelId: string) {
   revalidatePath(`/agency/hotel/${hotelId}/integrations`);
   revalidatePath(`/agency/hotel/${hotelId}`);
+}
+
+/** Manually triggers a Google Ads sync for one hotel (the "Sync now" button). */
+export async function syncGoogleAdsNow(
+  _prev: GoogleAdsActionState,
+  formData: FormData,
+): Promise<GoogleAdsActionState> {
+  const member = await getCurrentMember();
+  if (!member) return { error: "Your session has expired — please sign in again.", ok: false };
+
+  const hotelId = ((formData.get("hotelId") as string | null) ?? "").trim();
+  const id = await ownHotelId(hotelId);
+  if (!id) return { error: "That hotel wasn't found for your agency.", ok: false };
+
+  const res = await runGoogleAdsSync({ agencyId: member.agencyId, hotelClientId: id });
+  revalidate(id);
+  if (res.synced === 0 && res.errors.length > 0) {
+    return { error: res.errors[0].error, ok: false };
+  }
+  if (res.processed === 0) {
+    return { error: "No active Google Ads account to sync. Pick an account first.", ok: false };
+  }
+  return { error: null, ok: true };
 }
 
 /** Disconnects Google Ads for a hotel — deletes the connection (encrypted tokens go with it). */
@@ -95,6 +119,8 @@ export async function selectGoogleAdsCustomer(
     },
   });
 
+  // Kick off a first sync so the Google Ads channel fills immediately.
+  await runGoogleAdsSync({ agencyId: member.agencyId, hotelClientId: id });
   revalidate(id);
   return { error: null, ok: true };
 }

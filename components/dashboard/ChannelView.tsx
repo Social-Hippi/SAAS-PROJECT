@@ -250,8 +250,16 @@ function Body({ data, hotelId, ownerView, onLinked }: { data: ChannelViewData; h
 function PaidBody({ data, hotelId, ownerView }: { data: PaidChannelView; hotelId: string; ownerView: boolean }) {
   if (!data.hasData || !data.kpis) {
     if (data.channelName === "Google Ads") {
-      return <EmptyState title="Google Ads not connected — coming soon"
-        body="Google Ads isn't integrated yet. Once it's available you'll see spend, clicks, CPC, and ROAS here alongside Meta." />;
+      // Connected but no campaign activity this period (vs never connected).
+      if (data.integrationStatus !== "not_connected") {
+        return <EmptyState title="No Google Ads activity this period"
+          body="This hotel's Google Ads account is connected, but has no campaign spend or conversions in the selected period. Data appears here once campaigns run." />;
+      }
+      return <EmptyState title="Google Ads not connected"
+        body={ownerView
+          ? "Your agency hasn't connected this hotel's Google Ads account yet. Once they do, you'll see spend, clicks, CPC, conversions, and ROAS here alongside Meta."
+          : "Connect this hotel's Google Ads account to see spend, clicks, CPC, conversions, and ROAS here alongside Meta."}
+        action={ownerView ? undefined : <Link href={`/agency/hotel/${hotelId}/integrations`} className="inline-block rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-hover">Connect Google Ads</Link>} />;
     }
     // Hotel owners can't connect integrations (agency-managed), so show the
     // explanation without the agency-only "Connect" CTA.
@@ -264,6 +272,10 @@ function PaidBody({ data, hotelId, ownerView }: { data: PaidChannelView; hotelId
   const k = data.kpis;
   const accounts = data.accounts ?? [];
   const archived = data.archivedAccountIds ?? [];
+  // Google Ads revenue/conversions are Ads-reported (from the account's own
+  // conversion tracking); Meta's revenue is from tracked bookings. Same layout,
+  // accurate sub-labels per channel.
+  const isGoogle = data.channelName === "Google Ads";
   return (
     <div className="space-y-4">
       <StatGrid>
@@ -271,9 +283,9 @@ function PaidBody({ data, hotelId, ownerView }: { data: PaidChannelView; hotelId
             full ₹0.00 precision so small values aren't rounded to ₹0. CTR/CPC/CPM
             are recomputed from totals server-side (never averaged across rows). */}
         <Stat label="Total spend" value={formatCurrency(k.totalSpend, { compact: true })} sub={accounts.length > 1 ? `${accounts.length} accounts` : undefined} />
-        <Stat label="Revenue" value={formatCurrency(k.revenue, { compact: true })} sub={`${formatNumber(k.bookings)} tracked bookings`} />
+        <Stat label="Revenue" value={formatCurrency(k.revenue, { compact: true })} sub={isGoogle ? `${formatNumber(k.bookings)} conversions` : `${formatNumber(k.bookings)} tracked bookings`} />
         <Stat label="ROAS" value={formatMultiple(k.roas)} sub="Revenue ÷ spend" />
-        <Stat label="Conversions" value={formatNumber(k.conversions)} sub="Meta-reported" />
+        <Stat label="Conversions" value={formatNumber(k.conversions)} sub={isGoogle ? "Google-reported" : "Meta-reported"} />
         <Stat label="Cost / conversion" value={k.costPerConversion == null ? "—" : formatCurrencyCents(k.costPerConversion)} />
         <Stat label="Impressions" value={formatNumber(k.impressions)} />
         <Stat label="Reach" value={formatNumber(k.reach)} sub={`${k.frequency.toFixed(1)}× frequency`} />

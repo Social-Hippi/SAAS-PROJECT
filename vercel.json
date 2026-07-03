@@ -38,6 +38,10 @@
       "schedule": "30 4 * * *"
     },
     {
+      "path": "/api/google-ads/sync",
+      "schedule": "15 5 * * *"
+    },
+    {
       "path": "/api/cron/cleanup-journey",
       "schedule": "0 1 * * *"
     }

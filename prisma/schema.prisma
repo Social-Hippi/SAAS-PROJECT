@@ -165,6 +165,7 @@ model Agency {
   ga4Connections       Ga4Connection[]
   ga4Snapshots         Ga4Snapshot[]
   googleAdsConnections GoogleAdsConnection[]
+  googleAdsCampaignSnapshots GoogleAdsCampaignSnapshot[]
   hotelInvites         HotelInvite[]
   influencerInstagramPosts InfluencerInstagramPost[]
   unattributedMentions     UnattributedMention[]
@@ -297,6 +298,7 @@ model HotelClient {
   ga4Connection        Ga4Connection?
   ga4Snapshots         Ga4Snapshot[]
   googleAdsConnection  GoogleAdsConnection?
+  googleAdsCampaignSnapshots GoogleAdsCampaignSnapshot[]
   visitorIdentities    VisitorIdentity[]
   hotelInvites         HotelInvite[]
   influencerInstagramPosts InfluencerInstagramPost[]
@@ -1483,6 +1485,35 @@ model GoogleAdsConnection {
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
 
   @@index([agencyId])
+}
+
+// Daily per-campaign Google Ads metrics (STEP 2). Mirrors AdCampaignSnapshot
+// (Meta). Account-level KPIs + trend are derived by summing these rows, so no
+// separate account-level table is needed (Google reports no de-duplicated reach).
+// All money is Ads-REPORTED (cost_micros / 1e6 → currencyCode on the connection);
+// conversions/conversionsValue come from the account's own Google conversion
+// tracking. The dashboard maps these into the same PaidChannelView shape as Meta.
+model GoogleAdsCampaignSnapshot {
+  id            String   @id @default(cuid())
+  agencyId      String
+  hotelClientId String
+  customerId    String // the Ads account these rows came from
+  campaignId    String
+  campaignName  String
+  status        String // ENABLED | PAUSED | REMOVED (campaign.status)
+  date          DateTime @db.Date
+  spend         Decimal  @db.Decimal(12, 2) // cost_micros / 1_000_000
+  impressions   Int
+  clicks        Int
+  conversions   Float // Google conversions can be fractional
+  conversionsValue Decimal @db.Decimal(12, 2)
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  @@unique([hotelClientId, campaignId, date]) // idempotent re-sync per campaign-day
+  @@index([agencyId])
+  @@index([hotelClientId, date])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

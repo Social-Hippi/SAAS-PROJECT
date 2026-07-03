@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import {
   selectGoogleAdsCustomer,
+  syncGoogleAdsNow,
   disconnectGoogleAds,
   type GoogleAdsActionState,
 } from "./google-ads-actions";
@@ -92,6 +93,24 @@ function AccountPicker({
       >
         {pending ? "Saving…" : "Use this account"}
       </button>
+    </form>
+  );
+}
+
+function SyncButton({ hotelId }: { hotelId: string }) {
+  const [state, action, pending] = useActionState(syncGoogleAdsNow, initial);
+  return (
+    <form action={action} className="inline-flex items-center gap-2">
+      <input type="hidden" name="hotelId" value={hotelId} />
+      <button
+        type="submit"
+        disabled={pending}
+        className="rounded-lg border border-line-strong bg-elevated px-3 py-2 text-sm font-medium text-ink-secondary hover:bg-line-strong disabled:opacity-60"
+      >
+        {pending ? "Syncing…" : "Sync now"}
+      </button>
+      {state.error && <span className="text-xs text-danger">{state.error}</span>}
+      {state.ok && <span className="text-xs text-success">Synced ✓</span>}
     </form>
   );
 }
@@ -190,9 +209,11 @@ export function GoogleAdsCard({
       </div>
       <div className="rounded-lg border-l-4 border-info bg-info/10 p-3 text-xs text-ink-secondary">
         Campaign data syncs automatically every day and appears in the Google Ads
-        channel on this hotel&apos;s dashboard.
+        channel on this hotel&apos;s dashboard. Use <strong>Sync now</strong> to pull
+        the latest immediately.
       </div>
       <div className="flex flex-wrap items-center gap-3">
+        <SyncButton hotelId={hotelId} />
         <DisconnectButton hotelId={hotelId} />
       </div>
     </div>

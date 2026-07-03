@@ -54,9 +54,11 @@ export function loginCustomerId(): string | null {
   const v = (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || "").replace(/\D/g, "");
   return v || null;
 }
-/** Pinned Ads API version; overridable so a version bump is a config change. */
+/** Pinned Ads API version; overridable so a version bump is a config change.
+ *  Google sunsets versions ~yearly — set GOOGLE_ADS_API_VERSION to the current
+ *  supported version if this default has been retired (calls 404 when sunset). */
 function apiVersion(): string {
-  return process.env.GOOGLE_ADS_API_VERSION || "v18";
+  return process.env.GOOGLE_ADS_API_VERSION || "v19";
 }
 export function googleAdsRedirectUri(): string {
   return (
