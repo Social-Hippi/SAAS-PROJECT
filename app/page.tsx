@@ -352,7 +352,7 @@ export default async function Home({
           </p>
           <div className="mt-10 flex flex-col items-center justify-center gap-3.5 sm:flex-row">
             <a
-              href="mailto:hello@hoteltrack.example?subject=HotelTrack%20demo%20request"
+              href="mailto:yashwanth@socialhippi.com?subject=HotelTrack%20demo%20request"
               className={`${btnSolid} w-full justify-center sm:w-auto`}
             >
               <Mail aria-hidden="true" className="h-4 w-4" strokeWidth={2} />
@@ -368,12 +368,11 @@ export default async function Home({
           <p className="mt-8 text-sm text-[var(--lp-ink-muted)]">
             Prefer email? Reach us at{" "}
             <a
-              href="mailto:hello@hoteltrack.example"
+              href="mailto:yashwanth@socialhippi.com"
               className="font-medium text-[var(--lp-emerald)] underline-offset-4 hover:underline"
             >
-              hello@hoteltrack.example
-            </a>{" "}
-            <span className="text-[var(--lp-ink-faint)]">(placeholder — your contact email)</span>
+              yashwanth@socialhippi.com
+            </a>
           </p>
         </div>
       </section>
@@ -418,12 +417,22 @@ export default async function Home({
                   Contact
                 </h4>
                 <ul className="mt-4 space-y-2.5 text-sm">
+                  <li className="font-medium text-[var(--lp-ink)]">Social Hippi</li>
+                  <li className="text-[var(--lp-ink-muted)]">Yashwanth</li>
                   <li>
                     <a
-                      href="mailto:hello@hoteltrack.example"
+                      href="mailto:yashwanth@socialhippi.com"
                       className="text-[var(--lp-ink-muted)] transition-colors hover:text-[var(--lp-ink)]"
                     >
-                      hello@hoteltrack.example
+                      yashwanth@socialhippi.com
+                    </a>
+                  </li>
+                  <li>
+                    <a
+                      href="tel:+919390114551"
+                      className="text-[var(--lp-ink-muted)] transition-colors hover:text-[var(--lp-ink)]"
+                    >
+                      +91 9390114551
                     </a>
                   </li>
                   <li>
