@@ -48,6 +48,12 @@ function createPrismaClient() {
           return scrub(scrub(await query(args), "accessToken"), "refreshToken");
         },
       },
+      googleAdsConnection: {
+        async $allOperations({ args, query }) {
+          // Two ciphertext columns on this model — strip both (like Ga4Connection).
+          return scrub(scrub(await query(args), "accessToken"), "refreshToken");
+        },
+      },
     },
   });
 }

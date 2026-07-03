@@ -175,6 +175,7 @@ export const MULTI_TENANT_MODELS = [
   "budgetAlert",
   "ga4Connection",
   "ga4Snapshot",
+  "googleAdsConnection",
   "clickEvent",
   "formFieldEvent",
   "visitorIdentity",

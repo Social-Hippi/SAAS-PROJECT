@@ -34,6 +34,11 @@ const SECRET_SOURCES = {
   // columns to the app_read_encrypted_secret() function too.
   ga4_access: { table: "Ga4Connection", column: "accessToken" },
   ga4_refresh: { table: "Ga4Connection", column: "refreshToken" },
+  // Google Ads OAuth: access + refresh ciphertext on one row (like GA4 above).
+  // NOTE: if TOKEN_SECRET_ACCESS=definer is ever enabled, add GoogleAdsConnection's
+  // columns to the app_read_encrypted_secret() function too.
+  google_ads_access: { table: "GoogleAdsConnection", column: "accessToken" },
+  google_ads_refresh: { table: "GoogleAdsConnection", column: "refreshToken" },
 } as const;
 
 export type SecretKind = keyof typeof SECRET_SOURCES;

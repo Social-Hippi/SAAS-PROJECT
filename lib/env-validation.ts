@@ -38,6 +38,14 @@ const PROVIDERS: ProviderGroup[] = [
     name: "Google / GA4",
     vars: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GA4_REDIRECT_URI"],
   },
+  {
+    // Google Ads reuses the GOOGLE_OAUTH_* client (validated by the GA4 group
+    // above), so only its OWN vars are grouped here — otherwise a GA4-only
+    // deployment would trip the partial-config guard. Ads-specific: a platform
+    // developer token + its dedicated OAuth redirect URI.
+    name: "Google Ads",
+    vars: ["GOOGLE_ADS_DEVELOPER_TOKEN", "GOOGLE_ADS_REDIRECT_URI"],
+  },
 ];
 
 const PLATFORM_WARNING =

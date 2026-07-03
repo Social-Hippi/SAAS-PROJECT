@@ -40,6 +40,8 @@ import { getBudgetStatus, rupeesFromPaise } from "@/lib/budget";
 import { InstagramActions } from "./InstagramActions";
 import { SendGuideModal } from "./SendGuideModal";
 import { Ga4Card, type Ga4CardStatus } from "./Ga4Card";
+import { GoogleAdsCard, type GoogleAdsCardStatus, type GoogleAdsAccount } from "./GoogleAdsCard";
+import { listCustomersWithDetails } from "@/lib/google-ads";
 import { getActiveBackfill } from "@/app/(agency)/agency/(app)/settings/backfill-actions";
 import { BackfillProgress } from "@/app/(agency)/agency/(app)/settings/BackfillProgress";
 
@@ -86,6 +88,17 @@ const GA4_ERROR_MESSAGES: Record<string, string> = {
     "Google sign-in didn't complete — the token exchange failed. Please try again in a moment.",
   no_property:
     "That Google account has no GA4 property. Sign in with an account that can access your GA4 property.",
+  no_refresh:
+    "Google didn't return a refresh token. Remove HotelTrack from your Google account's third-party access, then reconnect.",
+};
+
+// User-facing messages for the ?gads_error= codes set by the Google Ads callback.
+const GADS_ERROR_MESSAGES: Record<string, string> = {
+  access_denied: "Google access was declined. Click “Connect Google Ads” to try again.",
+  exchange_failed:
+    "Google sign-in didn't complete — the token exchange failed. Please try again in a moment.",
+  no_account:
+    "That Google account can't access any Google Ads accounts. Sign in with an account that has access to the hotel's Ads account.",
   no_refresh:
     "Google didn't return a refresh token. Remove HotelTrack from your Google account's third-party access, then reconnect.",
 };
@@ -166,6 +179,14 @@ export default async function HotelIntegrationsPage({
   const ga4ErrorCode = typeof sp.ga4_error === "string" ? sp.ga4_error : null;
   const ga4ErrorBanner = ga4ErrorCode
     ? GA4_ERROR_MESSAGES[ga4ErrorCode] ?? "GA4 connection failed. Please try again."
+    : null;
+
+  // Google Ads OAuth round-trip feedback (?gads_connected / ?gads_error / ?gads_select).
+  const gadsConnectedBanner = sp.gads_connected === "success";
+  const gadsSelectBanner = sp.gads_select === "1";
+  const gadsErrorCode = typeof sp.gads_error === "string" ? sp.gads_error : null;
+  const gadsErrorBanner = gadsErrorCode
+    ? GADS_ERROR_MESSAGES[gadsErrorCode] ?? "Google Ads connection failed. Please try again."
     : null;
 
   // Meta OAuth round-trip feedback (?meta_connected=success / ?meta_error=…).
@@ -320,6 +341,46 @@ export default async function HotelIntegrationsPage({
   const gaSummaryState: GaState =
     ga4Status === "active" ? "connected" : ga4Status === "none" ? "not_connected" : "broken";
 
+  // ── Google Ads (per-hotel, OAuth — SEPARATE API from GA4) ──────────────────
+  const gads = await agencyScoped(prisma.googleAdsConnection).findFirst({
+    where: { hotelClientId: hotel.id },
+    select: {
+      id: true,
+      status: true,
+      customerId: true,
+      customerName: true,
+      currencyCode: true,
+      lastSyncedAt: true,
+      lastSyncError: true,
+      requiresReconnect: true,
+      lastErrorReason: true,
+    },
+  });
+  const gadsStatus: GoogleAdsCardStatus = !gads
+    ? "none"
+    : gads.status === "TOKEN_EXPIRED" || gads.status === "REVOKED"
+      ? "token_expired"
+      : gads.status === "ERROR"
+        ? "error"
+        : gads.customerId === ""
+          ? "needs_account"
+          : "active";
+  // When the account needs picking, list the user's accessible Ads customers
+  // (uses the stored access token, read + decrypted out of band).
+  let gadsAccounts: GoogleAdsAccount[] = [];
+  if (gadsStatus === "needs_account" && gads) {
+    try {
+      const tok = await getTokenForApiCall("google_ads_access", gads.id, {
+        agencyId: member.agencyId,
+        hotelClientId: hotel.id,
+        source: "page:integrations-gads-picker",
+      });
+      gadsAccounts = await listCustomersWithDetails(tok.reveal());
+    } catch (err) {
+      console.error("[GADS-OAUTH] account list for picker failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
   // ── Summary ────────────────────────────────────────────────────────────────
   const summary = summarize({
     snippet: snippetState(hotel.snippetStatus, hotel.lastEventAt),
@@ -414,6 +475,23 @@ export default async function HotelIntegrationsPage({
       {ga4ErrorBanner && (
         <div className="rounded-lg border-l-4 border-danger bg-danger/10 p-4 text-sm text-ink-secondary">
           {ga4ErrorBanner}
+        </div>
+      )}
+      {gadsConnectedBanner && (
+        <div className="rounded-lg border-l-4 border-success bg-success/10 p-4 text-sm text-ink-secondary">
+          Google Ads connected. Campaign data will appear in the Google Ads channel
+          after the next daily sync.
+        </div>
+      )}
+      {gadsSelectBanner && (
+        <div className="rounded-lg border-l-4 border-info bg-info/10 p-4 text-sm text-ink-secondary">
+          Almost there — choose which Google Ads account to track on the Google Ads
+          card below.
+        </div>
+      )}
+      {gadsErrorBanner && (
+        <div className="rounded-lg border-l-4 border-danger bg-danger/10 p-4 text-sm text-ink-secondary">
+          {gadsErrorBanner}
         </div>
       )}
       {metaConnectedBanner && (
@@ -796,6 +874,46 @@ export default async function HotelIntegrationsPage({
           lastSyncedAt={ga4?.lastSyncedAt?.toISOString() ?? null}
           lastSyncError={ga4?.lastSyncError ?? null}
           properties={ga4Properties}
+        />
+      </IntegrationCard>
+
+      {/* ── Card 5 — Google Ads (OAuth, separate API from GA4) ─────────────── */}
+      <IntegrationCard
+        icon={<span className="text-xs font-bold text-brand">Ads</span>}
+        title="Google Ads"
+        subtitle="Campaign spend, clicks, conversions, ROAS"
+        badge={
+          <IntegrationStatusBadge
+            tone={gadsStatus === "active" ? "green" : gadsStatus === "none" ? "gray" : "red"}
+            label={
+              gadsStatus === "active"
+                ? "Connected"
+                : gadsStatus === "none"
+                  ? "Not connected"
+                  : gadsStatus === "needs_account"
+                    ? "Pick account"
+                    : gadsStatus === "token_expired"
+                      ? "Reconnect needed"
+                      : "Error"
+            }
+          />
+        }
+      >
+        {gads?.requiresReconnect && (
+          <ReconnectBanner
+            href={`/api/auth/google-ads/start?hotelClientId=${hotel.id}`}
+            reason={gads.lastErrorReason}
+          />
+        )}
+        <GoogleAdsCard
+          hotelId={hotel.id}
+          status={gadsStatus}
+          customerName={gads?.customerName ?? null}
+          customerId={gads?.customerId ?? null}
+          currencyCode={gads?.currencyCode ?? null}
+          lastSyncedAt={gads?.lastSyncedAt?.toISOString() ?? null}
+          lastSyncError={gads?.lastSyncError ?? null}
+          accounts={gadsAccounts}
         />
       </IntegrationCard>
     </div>
