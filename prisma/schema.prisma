@@ -1379,6 +1379,17 @@ model Ga4Snapshot {
   pageViews          Int      @default(0)
   bounceRate         Float    @default(0) // 0..1
   avgSessionDuration Int      @default(0) // seconds
+  // Engagement (R1 — day-level). Added by ga4_expand_reports.
+  engagedSessions           Int   @default(0)
+  engagementRate            Float @default(0) // 0..1
+  userEngagementDuration    Int   @default(0) // seconds (total)
+  screenPageViewsPerSession Float @default(0)
+  keyEvents                 Int   @default(0) // GA4 key events (formerly "conversions"), day total
+  returningUsers            Int   @default(0) // from newVsReturning
+  // Ecommerce (R5). Nullable: only present on ecommerce-enabled properties.
+  purchaseRevenue Int?   // paise
+  transactions    Int?
+  purchaserRate   Float? // 0..1
   // Acquisition (sessionDefaultChannelGroup)
   organicSessions    Int      @default(0)
   paidSessions       Int      @default(0)
@@ -1399,6 +1410,26 @@ model Ga4Snapshot {
   tabletSessions  Int      @default(0)
   // Landing pages — [{ path, sessions }, …] top 10
   topLandingPages Json
+  // Expanded GA4 reports (ga4_expand_reports). All nullable top-N JSON lists,
+  // merged across the window by the dashboard. Shapes (each an array):
+  //   topSources        [{ source, medium, sessions, users, keyEvents }]        (R2)
+  //   topCampaigns      [{ campaign, sessions, users, keyEvents }]              (R2)
+  //   firstUserChannels [{ source, medium, channel, users, newUsers, sessions, keyEvents }] (R3)
+  //   topEvents         [{ event, count, keyEvents, users }]                    (R4)
+  //   topPages          [{ path, title, views, entrances }]                     (R6)
+  //   landingBySource   [{ landing, source, medium, sessions, keyEvents, engagedSessions, users }] (R7 ⭐)
+  //   newVsReturning    [{ segment, users, newUsers, sessions }]                (R8)
+  //   topRegions        [{ name, sessions }]  topBrowsers [{ name, sessions }]  topOperatingSystems [{ name, sessions }] (R9)
+  topSources          Json?
+  topCampaigns        Json?
+  firstUserChannels   Json?
+  topEvents           Json?
+  topPages            Json?
+  landingBySource     Json?
+  newVsReturning      Json?
+  topRegions          Json?
+  topBrowsers         Json?
+  topOperatingSystems Json?
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
