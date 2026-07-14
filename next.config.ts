@@ -26,9 +26,17 @@ import type { NextConfig } from "next";
 const CLERK = "https://*.clerk.accounts.dev https://*.clerk.com";
 const RAZORPAY_FRAME = "https://api.razorpay.com https://*.razorpay.com";
 
+// 'unsafe-eval' is required in DEVELOPMENT only: Next.js dev (React Refresh / HMR)
+// and Clerk's clerk-js both evaluate code at runtime, and without it clerk-js
+// fails to initialize and the <SignIn/> widget renders blank. Per Clerk's CSP
+// guidance (https://clerk.com/docs/guides/secure/best-practices/csp-headers),
+// it must be REMOVED in production, so this is gated on NODE_ENV.
+const isDev = process.env.NODE_ENV !== "production";
+const SCRIPT_DEV_EVAL = isDev ? " 'unsafe-eval'" : "";
+
 const ContentSecurityPolicy = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline' ${CLERK} https://challenges.cloudflare.com https://checkout.razorpay.com`,
+  `script-src 'self' 'unsafe-inline'${SCRIPT_DEV_EVAL} ${CLERK} https://challenges.cloudflare.com https://checkout.razorpay.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: https: blob:",
   "font-src 'self' data:",
