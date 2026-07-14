@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { Playfair_Display } from "next/font/google";
 import { Show, UserButton } from "@clerk/nextjs";
 import {
@@ -20,9 +19,6 @@ import {
   MousePointerClick,
   Crosshair,
 } from "lucide-react";
-import { auth } from "@clerk/nextjs/server";
-import { prisma } from "@/lib/prisma";
-import { getPlatformRole } from "@/lib/auth";
 
 // Public marketing landing page for HotelTrack — the ONLY app surface that renders
 // for logged-out visitors (it sits in the proxy's isPublicRoute list).
@@ -36,11 +32,9 @@ import { getPlatformRole } from "@/lib/auth";
 // theme is provided too. Both follow the app's existing `.light`/`.dark` toggle
 // (the wrapper defaults to dark; `.light .ht-lp` overrides to the light palette).
 //
-// Hotel owners (hotel_client) who reach here — directly or after being bounced off
-// an agency-only route by the proxy — are forwarded to their own hotel dashboard,
-// carrying any "agency-restricted" notice so the dashboard can explain the bounce.
-// Everyone else (signed-out OR agency/admin) sees the landing page; signed-in users
-// get a "Go to dashboard" link in place of Sign in.
+// ACCESS LOCKDOWN: hotels no longer log in, so there is no hotel_client redirect
+// here anymore. Everyone (signed-out OR agency staff) sees the landing page;
+// signed-in users get a "Go to dashboard" link in place of Sign in.
 
 export const dynamic = "force-dynamic";
 
@@ -55,28 +49,7 @@ const playfair = Playfair_Display({
 
 const serif = { fontFamily: "var(--font-playfair), Georgia, 'Times New Roman', serif" };
 
-export default async function Home({
-  searchParams,
-}: {
-  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
-  const { userId } = await auth();
-  if (userId) {
-    const role = await getPlatformRole();
-    if (role === "hotel_client") {
-      const hotel = await prisma.hotelClient.findFirst({
-        where: { createdByUserId: userId, deletedAt: null },
-        select: { id: true },
-        orderBy: { createdAt: "asc" },
-      });
-      if (hotel) {
-        const sp = await searchParams;
-        const notice = sp.notice === "agency-restricted" ? "?notice=agency-restricted" : "";
-        redirect(`/hotel/${hotel.id}/dashboard${notice}`);
-      }
-    }
-  }
-
+export default async function Home() {
   return (
     <div
       className={`${playfair.variable} ht-lp min-h-screen scroll-smooth bg-[var(--lp-bg)] text-[var(--lp-ink)] antialiased`}

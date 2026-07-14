@@ -4,6 +4,17 @@ import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { SHARE_TOKEN_HEADER, isShareTokenShape } from "@/lib/share-token";
 
+// ACCESS LOCKDOWN: the entire hotel-login + hotel-owner-share surface is disabled.
+// Hotels no longer log in and no longer use the /h/<shareToken> dashboard; they
+// receive outcomes only through the public /share/<uuid> report link. All three
+// gates below deny unconditionally, which closes the logged-in hotel dashboard
+// (/hotel/[id]), the passwordless /h/ dashboard, and every /api/hotel/[id]/* data
+// route in ONE place. Kept as a flag function (not `const true`) so the original
+// logic stays reachable to the compiler and can be restored by flipping it.
+function hotelAccessNeutralized(): boolean {
+  return true;
+}
+
 // Authorization for the hotel-owner dashboard (/hotel/[hotelClientId]). A user may
 // view a hotel only if they are its creator (hotel_client whose Clerk id matches
 // HotelClient.createdByUserId) OR an agency member of the agency that owns it.
@@ -40,6 +51,7 @@ export type HotelViewerHotel = {
 export type HotelViewer = { hotel: HotelViewerHotel; userId: string; isOwner: boolean; canEdit: boolean };
 
 export async function resolveHotelForViewer(hotelClientId: string): Promise<HotelViewer | null> {
+  if (hotelAccessNeutralized()) return null; // hotel logins disabled (access lockdown)
   const { userId } = await auth();
   if (!userId) return null;
 
@@ -91,6 +103,7 @@ export type HotelOwnerAccess = {
  * the same agency) resolves to a row they don't own, so access is denied.
  */
 export async function requireHotelOwnerAccess(hotelClientId: string): Promise<HotelOwnerAccess | null> {
+  if (hotelAccessNeutralized()) return null; // hotel logins disabled (access lockdown)
   const { userId } = await auth();
   if (!userId) return null;
 
@@ -133,6 +146,7 @@ export async function requireShareTokenAccess(
   token: string | null | undefined,
   hotelClientId: string,
 ): Promise<HotelOwnerAccess | null> {
+  if (hotelAccessNeutralized()) return null; // /h share dashboard disabled (access lockdown)
   const t = (token ?? "").trim();
   // Cheap shape guard avoids a DB round-trip on obviously-bogus tokens.
   if (!isShareTokenShape(t)) return null;

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getCurrentMember } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { logTokenAudit } from "@/lib/token-audit";
@@ -14,9 +14,12 @@ import { syncInstagramConnection } from "@/lib/instagram-sync";
 // happens via the OAuth flow (/api/auth/instagram/start → callback), not here —
 // these actions only manage an existing connection: disconnect, test, sync.
 
-// Verifies the hotel belongs to the signed-in agency (multi-tenant guard).
+// Tenant + role guard shared by every action in this file. requireAdmin() is the
+// single source of truth for the ADMIN-only rule: managing an integration is
+// admin-only, enforced server-side here (an analyst resolves to null → each
+// action returns its "not found" error). Also enforces multi-tenant scoping.
 async function ownedHotel(hotelId: string) {
-  const member = await getCurrentMember();
+  const member = await requireAdmin();
   if (!member) return null;
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
     where: { id: hotelId },

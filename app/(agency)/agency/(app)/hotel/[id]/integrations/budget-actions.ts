@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getCurrentMember } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { clampResetDay, paiseFromRupees } from "@/lib/budget";
@@ -18,8 +18,8 @@ export async function saveBudgetSettings(
   _prev: BudgetSettingsState,
   formData: FormData,
 ): Promise<BudgetSettingsState> {
-  const member = await getCurrentMember();
-  if (!member) return { error: "Your session has expired — please sign in again.", ok: false };
+  const member = await requireAdmin();
+  if (!member) return { error: "Only an agency admin can manage integrations.", ok: false };
 
   const hotelId = ((formData.get("hotelId") as string | null) ?? "").trim();
   const enabled = formData.get("budgetTrackingEnabled") === "on";

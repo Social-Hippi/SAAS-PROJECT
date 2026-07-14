@@ -4,6 +4,7 @@ import {
   createRouteMatcher,
 } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { isAllowedStaffEmail } from "@/lib/access";
 
 // Next.js 16 renamed Middleware -> Proxy. Clerk's clerkMiddleware() works here
 // unchanged. This guards every non-public route and enforces the three platform
@@ -118,14 +119,23 @@ export default clerkMiddleware(async (auth, req) => {
   if (isAgencyRoute(req)) {
     // A freshly signed-up user has no role yet; let them reach onboarding to
     // provision their Agency (which then sets role = agency_admin).
-    if (isOnboardingRoute(req)) return NextResponse.next();
-    if (role !== "agency_admin") {
-      // Hotel owners land here when they try to open any agency-only surface
-      // (e.g. /agency/hotel/[id]/integrations). Send them home with a notice;
-      // the root page forwards them on to their own dashboard and shows it.
-      if (role === "hotel_client") {
-        return NextResponse.redirect(new URL("/?notice=agency-restricted", req.url));
+    if (isOnboardingRoute(req)) {
+      // Best-effort staff-domain gate: if the session token carries the email
+      // claim and it isn't a Social Hippi staff address, don't even show
+      // onboarding. This is defense-in-depth only — the AUTHORITATIVE gate is
+      // createAgencyForCurrentUser (which re-checks the email server-side), so
+      // correctness never depends on this claim being configured/present.
+      const email = sessionClaims?.email;
+      if (email && !isAllowedStaffEmail(email)) {
+        return NextResponse.redirect(new URL("/?notice=restricted", req.url));
       }
+      return NextResponse.next();
+    }
+    if (role !== "agency_admin") {
+      // No agency role → send an already-onboarded-but-wrong-role user home, and a
+      // brand-new (role-less) user to onboarding to provision their agency. (Hotel
+      // logins are retired under the access lockdown, so there is no hotel_client
+      // special case anymore.)
       return NextResponse.redirect(
         role ? home : new URL("/agency/onboarding", req.url),
       );
@@ -143,9 +153,10 @@ export default clerkMiddleware(async (auth, req) => {
   }
 
   if (isHotelRoute(req)) {
-    // Hotel owners (hotel_client) and agency members (agency_admin) may both reach
-    // the hotel-owner dashboard; the route itself enforces per-hotel ownership.
-    if (role !== "hotel_client" && role !== "agency_admin") return NextResponse.redirect(home);
+    // ACCESS LOCKDOWN: hotels no longer log in. The /hotel owner dashboard is
+    // retired — the route itself now 404s via lib/hotel-auth. Only agency staff
+    // may resolve here at all; any other role (incl. a legacy hotel_client) → home.
+    if (role !== "agency_admin") return NextResponse.redirect(home);
     return NextResponse.next();
   }
 

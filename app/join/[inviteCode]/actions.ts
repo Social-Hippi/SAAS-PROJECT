@@ -40,7 +40,25 @@ export type HotelSignupResult =
   | { ok: true; hotelClientId: string; needsSignIn: boolean }
   | { ok: false; error: string; fieldErrors?: Record<string, string>; existingEmail?: boolean };
 
+// ACCESS LOCKDOWN: hotel self-signup is permanently disabled. Hotels no longer
+// get logins — they see their outcomes via a read-only share link. Kept as a flag
+// function (not a `const true`) so the original flow below stays reachable to the
+// compiler and can be restored by flipping this to `false` if the decision changes.
+function hotelSelfSignupDisabled(): boolean {
+  return true;
+}
+
 export async function completeHotelSignup(input: HotelSignupInput): Promise<HotelSignupResult> {
+  // Hard-refuse BEFORE any Clerk account or HotelClient is created, so no
+  // non-staff account can ever be provisioned through this action even if it is
+  // invoked directly (the /join page also shows a "closed" message).
+  if (hotelSelfSignupDisabled()) {
+    return {
+      ok: false,
+      error: "Hotel self-signup is no longer available. Please contact your agency for access to your dashboard.",
+    };
+  }
+
   // Throttle signups per IP (invite-code probing + account-creation spam). Fails
   // CLOSED so a store outage can't open the floodgates.
   const rl = await rateLimit("joinSignup", clientIpFromHeaders(await headers()));

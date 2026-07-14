@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getCurrentMember } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { getTokenForApiCall } from "@/lib/token-access";
@@ -34,8 +34,8 @@ export async function syncGoogleAdsNow(
   _prev: GoogleAdsActionState,
   formData: FormData,
 ): Promise<GoogleAdsActionState> {
-  const member = await getCurrentMember();
-  if (!member) return { error: "Your session has expired — please sign in again.", ok: false };
+  const member = await requireAdmin();
+  if (!member) return { error: "Only an agency admin can manage integrations.", ok: false };
 
   const hotelId = ((formData.get("hotelId") as string | null) ?? "").trim();
   const id = await ownHotelId(hotelId);
@@ -54,7 +54,7 @@ export async function syncGoogleAdsNow(
 
 /** Disconnects Google Ads for a hotel — deletes the connection (encrypted tokens go with it). */
 export async function disconnectGoogleAds(formData: FormData): Promise<void> {
-  const member = await getCurrentMember();
+  const member = await requireAdmin();
   if (!member) return;
   const hotelId = ((formData.get("hotelId") as string | null) ?? "").trim();
   const id = await ownHotelId(hotelId);
@@ -69,8 +69,8 @@ export async function selectGoogleAdsCustomer(
   _prev: GoogleAdsActionState,
   formData: FormData,
 ): Promise<GoogleAdsActionState> {
-  const member = await getCurrentMember();
-  if (!member) return { error: "Your session has expired — please sign in again.", ok: false };
+  const member = await requireAdmin();
+  if (!member) return { error: "Only an agency admin can manage integrations.", ok: false };
 
   const hotelId = ((formData.get("hotelId") as string | null) ?? "").trim();
   const customerId = ((formData.get("customerId") as string | null) ?? "").replace(/\D/g, "");

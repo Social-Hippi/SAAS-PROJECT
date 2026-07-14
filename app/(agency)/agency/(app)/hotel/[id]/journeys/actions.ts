@@ -1,6 +1,7 @@
 "use server";
 
 import type { Prisma } from "@prisma/client";
+import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { saltedHash } from "@/lib/pii";
@@ -61,6 +62,12 @@ export async function lookupVisitorJourneys(
   hotelId: string,
   query: LookupQuery,
 ): Promise<LookupResult> {
+  // ADMIN-only: this returns a specific visitor's complete session/page/click/form
+  // history (customer-level PII). Enforced server-side here, not just in the UI —
+  // a non-admin (analyst) gets the empty result and never reaches the data below.
+  const admin = await requireAdmin();
+  if (!admin) return EMPTY;
+
   // Ownership: the hotel must belong to the caller's agency (scoped findFirst).
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
     where: { id: hotelId },

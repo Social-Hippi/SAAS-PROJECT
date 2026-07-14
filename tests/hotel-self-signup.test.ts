@@ -3,11 +3,14 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hotel self-signup. Invite-code generation/uniqueness/regenerate, the public
-// signup action (create hotel under the right agency, disabled/invalid/expired
-// codes, existing email, agency-member guard, validation), and the hotel-owner
-// dashboard authorization (owner vs other hotel vs agency member vs foreign).
-// Clerk's Backend SDK + auth() are mocked.
+// ACCESS LOCKDOWN — hotel self-signup and hotel logins are RETIRED. This suite
+// (formerly "hotel self-signup") now proves:
+//   • the invite-code LIB still generates/regenerates/disables codes (unchanged), but
+//   • completeHotelSignup hard-refuses — a valid, active code creates NO hotel and
+//     NO Clerk account, and
+//   • the hotel-owner dashboard gate (resolveHotelForViewer) + owner edit action
+//     deny everyone, even a legitimately-linked owner.
+// Clerk's Backend SDK + auth() are mocked. A live DB holds the fixtures.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const h = vi.hoisted(() => ({
@@ -79,7 +82,7 @@ afterAll(async () => {
 
 beforeEach(() => { h.userId = null; h.existingEmail = false; });
 
-describe("invite codes", () => {
+describe("invite codes (lib still works)", () => {
   test("ensureInviteCode generates SLUG-XXXXXXXX and is idempotent", async () => {
     const first = await ensureInviteCode(agencyA);
     expect(first.code).toMatch(/^[A-Z0-9-]+-[A-Z0-9]{8}$/);
@@ -93,143 +96,73 @@ describe("invite codes", () => {
     const b = await ensureInviteCode(agencyB);
     expect(a.code).not.toBe(b.code);
   });
-});
 
-describe("signup", () => {
-  test("valid signup creates the hotel under the inviting agency", async () => {
-    const { code } = await ensureInviteCode(agencyA);
-    const input = validInput(code);
-    const res = await completeHotelSignup(input);
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.needsSignIn).toBe(true); // server-created account → sign in next
-
-    const hotel = await prisma.hotelClient.findUnique({ where: { id: res.hotelClientId } });
-    expect(hotel?.agencyId).toBe(agencyA);
-    expect(hotel?.createdByUserId).toBe(h.created.at(-1)!.id);
-    expect(hotel?.channelManager).toBe("djubo");
-    expect(Number(hotel?.otaCommissionRate)).toBe(15);
-    expect(hotel?.contactEmail).toBe(input.ownerEmail.toLowerCase());
-    // The new Clerk user was created with the hotel_client role.
-    expect(h.created.at(-1)!.role).toBe("hotel_client");
-    // Invite recorded as completed.
-    const invite = await prisma.hotelInvite.findFirst({ where: { hotelClientId: res.hotelClientId } });
-    expect(invite?.status).toBe("COMPLETED");
-    expect(invite?.agencyId).toBe(agencyA);
-  });
-
-  test("disabled invite code is rejected (no hotel created)", async () => {
-    const { code } = await ensureInviteCode(agencyA);
-    await setInviteCodeStatus(agencyA, "DISABLED");
-    const before = await prisma.hotelClient.count({ where: { agencyId: agencyA } });
-    const res = await completeHotelSignup(validInput(code));
-    expect(res.ok).toBe(false);
-    const after = await prisma.hotelClient.count({ where: { agencyId: agencyA } });
-    expect(after).toBe(before);
-    await setInviteCodeStatus(agencyA, "ACTIVE");
-  });
-
-  test("unknown invite code is rejected", async () => {
-    const res = await completeHotelSignup(validInput("NOPE-ZZZZZZZZ"));
-    expect(res.ok).toBe(false);
-  });
-
-  test("existing email prompts sign-in instead", async () => {
-    const { code } = await ensureInviteCode(agencyA);
-    h.existingEmail = true;
-    const res = await completeHotelSignup(validInput(code));
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.existingEmail).toBe(true);
-  });
-
-  test("an agency member cannot convert their account into a hotel", async () => {
-    const { code } = await ensureInviteCode(agencyA);
-    h.userId = memberAClerk;
-    const res = await completeHotelSignup(validInput(code));
-    expect(res.ok).toBe(false);
-  });
-
-  test("invalid fields return field errors", async () => {
-    const { code } = await ensureInviteCode(agencyA);
-    const res = await completeHotelSignup(validInput(code, { ownerPhone: "123", websiteUrl: "not a url" }));
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.fieldErrors?.ownerPhone).toBeTruthy();
-      expect(res.fieldErrors?.websiteUrl).toBeTruthy();
-    }
-  });
-
-  test("regenerating the code invalidates the old one", async () => {
+  test("regenerate + enable/disable still work at the lib level", async () => {
     const before = await ensureInviteCode(agencyA);
     const next = await regenerateInviteCode(agencyA);
     expect(next).not.toBe(before.code);
-    // Old code no longer resolves to an agency.
-    const oldRes = await completeHotelSignup(validInput(before.code));
-    expect(oldRes.ok).toBe(false);
-    // New code works.
-    const newRes = await completeHotelSignup(validInput(next));
-    expect(newRes.ok).toBe(true);
+    await setInviteCodeStatus(agencyA, "DISABLED");
+    await setInviteCodeStatus(agencyA, "ACTIVE");
   });
 });
 
-describe("hotel-owner dashboard authorization", () => {
+describe("ACCESS LOCKDOWN — completeHotelSignup is disabled", () => {
+  test("a valid, active invite code creates NO hotel and NO Clerk account", async () => {
+    const { code } = await ensureInviteCode(agencyA);
+    const before = await prisma.hotelClient.count({ where: { agencyId: agencyA } });
+    const createdBefore = h.created.length;
+
+    const res = await completeHotelSignup(validInput(code));
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/no longer available|contact your agency/i);
+    // Nothing was written to the DB and no Clerk user was created.
+    const after = await prisma.hotelClient.count({ where: { agencyId: agencyA } });
+    expect(after).toBe(before);
+    expect(h.created.length).toBe(createdBefore);
+  });
+});
+
+describe("ACCESS LOCKDOWN — hotel-owner dashboard gate denies everyone", () => {
   let hotelId: string;
-  let ownerClerk: string;
+  const ownerClerk = `user_owner_${randomUUID()}`;
 
   beforeAll(async () => {
-    const { code } = await ensureInviteCode(agencyA);
-    h.userId = null; h.existingEmail = false;
-    const res = await completeHotelSignup(validInput(code, { hotelName: "Authz Hotel" }));
-    if (!res.ok) throw new Error("setup signup failed");
-    hotelId = res.hotelClientId;
-    ownerClerk = h.created.at(-1)!.id;
+    // Signup is disabled, so link an owner directly to prove the dashboard gate
+    // denies even a legitimately-linked hotel_client owner.
+    const hotel = await prisma.hotelClient.create({
+      data: {
+        agencyId: agencyA, name: `${PREFIX}Retired`, websiteUrl: "https://h.example",
+        contactName: "C", contactEmail: "c@t.local", siteId: `${PREFIX}s-${randomUUID()}`,
+        conversionMethod: "both", createdByUserId: ownerClerk, otaCommissionRate: "15.00",
+      },
+    });
+    hotelId = hotel.id;
   });
 
-  test("the owner can view + edit their hotel", async () => {
+  test("the linked owner is DENIED (dashboard retired)", async () => {
     h.userId = ownerClerk;
-    const viewer = await resolveHotelForViewer(hotelId);
-    expect(viewer).not.toBeNull();
-    expect(viewer!.isOwner).toBe(true);
-    expect(viewer!.canEdit).toBe(true);
-  });
-
-  test("another hotel owner cannot view this hotel", async () => {
-    h.userId = `user_other_${randomUUID()}`;
     expect(await resolveHotelForViewer(hotelId)).toBeNull();
   });
 
-  test("an agency member of the owning agency can view (read-only)", async () => {
+  test("an agency member of the owning agency is DENIED too", async () => {
     h.userId = memberAClerk;
-    const viewer = await resolveHotelForViewer(hotelId);
-    expect(viewer).not.toBeNull();
-    expect(viewer!.isOwner).toBe(false);
-    expect(viewer!.canEdit).toBe(false);
+    expect(await resolveHotelForViewer(hotelId)).toBeNull();
   });
 
-  test("a member of a DIFFERENT agency cannot view it", async () => {
+  test("a member of a DIFFERENT agency is DENIED", async () => {
     h.userId = memberBClerk;
     expect(await resolveHotelForViewer(hotelId)).toBeNull();
   });
 
-  test("only the owner can edit details", async () => {
-    h.userId = memberAClerk; // agency member — read-only
+  test("the owner edit action is rejected, and nothing is written", async () => {
+    h.userId = ownerClerk;
     const denied = await updateHotelDetails(hotelId, {
-      contactName: "X", contactEmail: "x@x.com", contactPhone: "9876543210",
+      contactName: "Should Not Save", contactEmail: "x@x.com", contactPhone: "9876543210",
       whatsappNumber: "9876543210", address: "123 MG Road, City 560001", otaCommissionRate: "20", channelManager: "eZee",
     });
     expect(denied.ok).toBe(false);
-
-    h.userId = ownerClerk;
-    const ok = await updateHotelDetails(hotelId, {
-      contactName: "Updated Owner", contactEmail: "updated@hotel.test", contactPhone: "9876543210",
-      whatsappNumber: "9000000000", address: "456 New Road, City 560002", otaCommissionRate: "12", channelManager: "eZee",
-    });
-    expect(ok.ok).toBe(true);
-    const hotel = await prisma.hotelClient.findUnique({ where: { id: hotelId } });
-    expect(hotel?.contactName).toBe("Updated Owner");
-    expect(hotel?.channelManager).toBe("eZee");
-    // OTA commission rate is now AGENCY-managed: the owner edit must NOT change it
-    // (it stays at the signup value of 15, never the submitted 12).
-    expect(Number(hotel?.otaCommissionRate)).toBe(15);
+    const hotel = await prisma.hotelClient.findUnique({ where: { id: hotelId }, select: { contactName: true } });
+    expect(hotel?.contactName).not.toBe("Should Not Save");
   });
 });

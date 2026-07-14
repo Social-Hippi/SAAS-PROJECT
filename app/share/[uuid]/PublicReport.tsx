@@ -62,7 +62,7 @@ export function PublicReport({
   rangeLabel: string;
   report: HotelReport;
 }) {
-  const { kpis, contentPerf, ads, influencerRows, realRoi, otaSavings } = report;
+  const { kpis, contentPerf, ads, influencerRows, realRoi, otaSavings, showAdSpend } = report;
   const paidCampaigns = contentPerf.filter((c) => c.contentType === "paid_ad");
 
   return (
@@ -103,17 +103,22 @@ export function PublicReport({
           <span className="hidden text-sm text-ink-tertiary sm:inline">{rangeLabel}</span>
         </div>
 
-        {/* KPIs */}
+        {/* KPIs. Cost/booking and Overall ROAS are spend-derived, so they only
+            appear when spend is shared with the hotel (showAdSpend). */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <KpiCard label="Visits" value={formatNumber(kpis.visits)} />
           <KpiCard label="Bookings" value={formatNumber(kpis.bookings)} />
           <KpiCard label="Revenue attributed" value={formatCurrency(kpis.revenue)} />
-          <KpiCard
-            label="Cost / booking"
-            value={kpis.costPerBooking == null ? "—" : formatCurrencyCents(kpis.costPerBooking)}
-            hint="Ad spend ÷ bookings"
-          />
-          <KpiCard label="Overall ROAS" value={formatMultiple(kpis.roas)} hint="Revenue ÷ ad spend" />
+          {showAdSpend && (
+            <>
+              <KpiCard
+                label="Cost / booking"
+                value={kpis.costPerBooking == null ? "—" : formatCurrencyCents(kpis.costPerBooking)}
+                hint="Ad spend ÷ bookings"
+              />
+              <KpiCard label="Overall ROAS" value={formatMultiple(kpis.roas)} hint="Revenue ÷ ad spend" />
+            </>
+          )}
         </div>
 
         {/* Commission Saved vs OTAs (Part 7) — owner-facing savings highlight. */}
@@ -136,13 +141,22 @@ export function PublicReport({
           <ContentPerformanceTable rows={contentPerf} />
         </SectionCard>
 
-        {/* Paid ads */}
+        {/* Paid ads. Ad spend, Meta ROAS, True ROI and the spend-over-time chart
+            are spend figures, shown only when spend is shared (showAdSpend).
+            "Bookings from ads" and the campaign breakdown are outcomes and always
+            show. */}
         <SectionCard title="Paid ads performance">
-          <div className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-4">
-            <div className="bg-card p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">Ad spend</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums text-ink">{formatCurrency(ads.spend)}</p>
-            </div>
+          <div
+            className={`grid gap-px border-b border-line bg-line ${
+              showAdSpend ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-1"
+            }`}
+          >
+            {showAdSpend && (
+              <div className="bg-card p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">Ad spend</p>
+                <p className="mt-1 text-xl font-semibold tabular-nums text-ink">{formatCurrency(ads.spend)}</p>
+              </div>
+            )}
             <div className="bg-card p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">
                 Bookings from ads
@@ -151,23 +165,29 @@ export function PublicReport({
                 {formatNumber(ads.bookingsFromAds)}
               </p>
             </div>
-            <div className="bg-card p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">Meta ROAS</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums text-ink">{formatMultiple(ads.metaRoas)}</p>
-            </div>
-            <div className="bg-card p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">True ROI</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums text-ink">
-                {realRoi == null ? "—" : formatPercent(realRoi)}
+            {showAdSpend && (
+              <>
+                <div className="bg-card p-4">
+                  <p className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">Meta ROAS</p>
+                  <p className="mt-1 text-xl font-semibold tabular-nums text-ink">{formatMultiple(ads.metaRoas)}</p>
+                </div>
+                <div className="bg-card p-4">
+                  <p className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">True ROI</p>
+                  <p className="mt-1 text-xl font-semibold tabular-nums text-ink">
+                    {realRoi == null ? "—" : formatPercent(realRoi)}
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+          {showAdSpend && (
+            <div className="p-4">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-tertiary">
+                Spend over time
               </p>
+              <SpendChart data={ads.spendOverTime} />
             </div>
-          </div>
-          <div className="p-4">
-            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-tertiary">
-              Spend over time
-            </p>
-            <SpendChart data={ads.spendOverTime} />
-          </div>
+          )}
           {paidCampaigns.length > 0 && (
             <div className="border-t border-line">
               <p className="px-4 pt-4 text-xs font-medium uppercase tracking-wide text-ink-tertiary">

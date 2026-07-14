@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { getCurrentMember } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { resolveRange } from "@/lib/attribution";
@@ -38,8 +38,11 @@ export default async function HotelJourneysPage({
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const { id } = await params;
-  const member = await getCurrentMember();
-  if (!member) redirect("/agency/onboarding");
+  // Viewing customer-level journeys (session/page/click/form history + visitor
+  // identities) is ADMIN-only, enforced server-side — not just hidden in the UI.
+  // A non-admin (analyst) is bounced back to the hotel overview.
+  const member = await requireAdmin();
+  if (!member) redirect(`/agency/hotel/${id}`);
 
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
     where: { id },

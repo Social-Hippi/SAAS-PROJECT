@@ -21,6 +21,20 @@ export const getCurrentMember = cache(async () => {
 });
 
 /**
+ * Returns the current AgencyMember (with its Agency) ONLY when they are an agency
+ * ADMIN, otherwise null. This is the single source of truth for the admin rule —
+ * reused by every ad-account-connect route/action and the journeys view so the
+ * check is enforced SERVER-SIDE, never just hidden in the UI. Callers reject in
+ * their own idiom: route handlers redirect or return 403; server actions return
+ * an error object. `cache`d to share the lookup within one request render.
+ */
+export const requireAdmin = cache(async () => {
+  const member = await getCurrentMember();
+  if (!member || member.role !== "admin") return null;
+  return member;
+});
+
+/**
  * Resolves the signed-in user's platform role from the Clerk session token,
  * falling back to a direct user lookup when the token doesn't carry the metadata
  * claim (mirrors the resilient logic in proxy.ts). Returns undefined when signed

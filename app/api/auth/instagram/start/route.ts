@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getCurrentMember } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { signOauthState } from "@/lib/signed-state";
@@ -15,8 +15,10 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
-  const member = await getCurrentMember();
-  if (!member) redirect("/agency/onboarding");
+  // Connecting an ad account is ADMIN-only, enforced server-side (not just hidden
+  // in the UI). A non-admin (analyst) or non-member is bounced to the dashboard.
+  const member = await requireAdmin();
+  if (!member) redirect("/agency/dashboard");
 
   const url = new URL(request.url);
   const hotelClientId = (url.searchParams.get("hotelClientId") ?? "").trim();

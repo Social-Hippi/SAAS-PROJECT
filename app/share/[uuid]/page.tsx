@@ -129,6 +129,9 @@ export default async function SharePage({
     hotelId: link.hotelClientId,
     since: range.since,
     until: range.until,
+    // Public share link: honour the hotel's showAdSpendToHotel flag. When it's
+    // off, loadHotelReport strips spend + all spend-derived figures server-side.
+    respectAdSpendFlag: true,
   });
 
   return (

@@ -10,6 +10,11 @@ declare global {
     metadata: {
       role?: Role;
     };
+    // Optional primary email on the session token. Present only if the Clerk
+    // dashboard session claims include `{"email": "{{user.primary_email_address}}"}`.
+    // Used ONLY for the best-effort staff-domain check in proxy.ts — never the
+    // authoritative gate (that lives in createAgencyForCurrentUser).
+    email?: string;
   }
 
   // Augments the type accepted by `clerkClient.users.updateUserMetadata`.

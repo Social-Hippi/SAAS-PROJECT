@@ -33,6 +33,14 @@ export type HotelReport = {
   realRoi: number | null;
   /** OTA commission saved by direct bookings this period (Part 7). */
   otaSavings: { rate: number; bookingRevenue: number; amount: number };
+  /**
+   * Whether ad spend (and every spend-derived figure: cost/booking, ROAS, Meta
+   * ROAS, True ROI, the daily spend chart) may be shown. True for the agency and
+   * PDF callers; on the public /share link it follows the hotel's
+   * showAdSpendToHotel flag. When false, those figures are stripped BEFORE the
+   * report leaves the server, so they never reach the browser.
+   */
+  showAdSpend: boolean;
 };
 
 export async function loadHotelReport(args: {
@@ -40,8 +48,14 @@ export async function loadHotelReport(args: {
   hotelId: string;
   since: Date;
   until: Date;
+  /**
+   * When true, honour the hotel's showAdSpendToHotel flag and hide spend if it's
+   * off. The public /share view passes true; the agency dashboard and PDF export
+   * omit it (default false) so they always see spend.
+   */
+  respectAdSpendFlag?: boolean;
 }): Promise<HotelReport> {
-  const { agencyId, hotelId, since, until } = args;
+  const { agencyId, hotelId, since, until, respectAdSpendFlag = false } = args;
 
   // agencyScopedFor injects { agencyId } into every where below. This function
   // is also called from the public /share page (which resolves agencyId from the
@@ -76,7 +90,7 @@ export async function loadHotelReport(args: {
     }),
     agencyScopedFor(agencyId, prisma.hotelClient).findFirst({
       where: { id: hotelId },
-      select: { otaCommissionRate: true },
+      select: { otaCommissionRate: true, showAdSpendToHotel: true },
     }),
   ]);
 
@@ -133,5 +147,28 @@ export async function loadHotelReport(args: {
     amount: otaRate > 0 ? bookingRevenue * (otaRate / 100) : 0,
   };
 
-  return { kpis, contentPerf, ads, influencerRows, realRoi, otaSavings };
+  // Spend visibility. Agency + PDF callers always see spend (respectAdSpendFlag
+  // false). The public /share link passes true, so spend is shown only when the
+  // hotel's showAdSpendToHotel flag is on. When hidden, strip every spend and
+  // spend-derived figure HERE — on the server — so nothing leaks to the browser.
+  const showAdSpend = respectAdSpendFlag ? Boolean(hotelMeta?.showAdSpendToHotel) : true;
+  if (!showAdSpend) {
+    kpis.spend = 0;
+    kpis.costPerBooking = null;
+    kpis.roas = null;
+    ads.spend = 0;
+    ads.metaReportedRevenue = 0;
+    ads.metaRoas = null;
+    ads.spendOverTime = [];
+  }
+
+  return {
+    kpis,
+    contentPerf,
+    ads,
+    influencerRows,
+    realRoi: showAdSpend ? realRoi : null,
+    otaSavings,
+    showAdSpend,
+  };
 }

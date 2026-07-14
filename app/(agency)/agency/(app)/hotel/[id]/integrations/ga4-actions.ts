@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getCurrentMember } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { runGa4Sync } from "@/lib/ga4-sync";
@@ -28,8 +28,8 @@ function revalidate(hotelId: string) {
 
 /** Manually triggers a GA4 sync for one hotel (the "Sync now" button). */
 export async function syncGa4Now(_prev: Ga4ActionState, formData: FormData): Promise<Ga4ActionState> {
-  const member = await getCurrentMember();
-  if (!member) return { error: "Your session has expired — please sign in again.", ok: false };
+  const member = await requireAdmin();
+  if (!member) return { error: "Only an agency admin can manage integrations.", ok: false };
 
   const hotelId = ((formData.get("hotelId") as string | null) ?? "").trim();
   const id = await ownHotelId(hotelId);
@@ -48,7 +48,7 @@ export async function syncGa4Now(_prev: Ga4ActionState, formData: FormData): Pro
 
 /** Disconnects GA4 for a hotel — deletes the connection (encrypted tokens go with it). */
 export async function disconnectGa4(formData: FormData): Promise<void> {
-  const member = await getCurrentMember();
+  const member = await requireAdmin();
   if (!member) return;
   const hotelId = ((formData.get("hotelId") as string | null) ?? "").trim();
   const id = await ownHotelId(hotelId);
@@ -60,8 +60,8 @@ export async function disconnectGa4(formData: FormData): Promise<void> {
 
 /** Selects which GA4 property to use (when the account has more than one). */
 export async function selectGa4Property(_prev: Ga4ActionState, formData: FormData): Promise<Ga4ActionState> {
-  const member = await getCurrentMember();
-  if (!member) return { error: "Your session has expired — please sign in again.", ok: false };
+  const member = await requireAdmin();
+  if (!member) return { error: "Only an agency admin can manage integrations.", ok: false };
 
   const hotelId = ((formData.get("hotelId") as string | null) ?? "").trim();
   const propertyId = ((formData.get("propertyId") as string | null) ?? "").trim();

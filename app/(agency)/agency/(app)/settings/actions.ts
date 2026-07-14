@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getCurrentMember } from "@/lib/auth";
+import { getCurrentMember, requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { validateAgencyContact, type ContactFormState } from "@/lib/agency-validation";
@@ -45,11 +45,8 @@ export async function saveMetaToken(
   _prev: SaveTokenState,
   formData: FormData,
 ): Promise<SaveTokenState> {
-  const member = await getCurrentMember();
+  const member = await requireAdmin();
   if (!member) {
-    return { error: "Your session has expired — please sign in again.", ok: false };
-  }
-  if (member.role !== "admin") {
     return { error: "Only an agency admin can connect integrations.", ok: false };
   }
 
@@ -147,9 +144,8 @@ export async function saveMetaToken(
  * from the form and ownership-checked via the agency-scoped query.
  */
 export async function disconnectMetaToken(formData: FormData): Promise<void> {
-  const member = await getCurrentMember();
-  if (!member) return;
-  if (member.role !== "admin") return; // admin-only: disconnecting an integration
+  const member = await requireAdmin();
+  if (!member) return; // admin-only: disconnecting an integration
 
   const hotelId = ((formData.get("hotelId") as string | null) ?? "").trim();
   if (!hotelId) return;
@@ -209,9 +205,8 @@ export async function saveNotificationSettings(
   _prev: NotificationState,
   formData: FormData,
 ): Promise<NotificationState> {
-  const member = await getCurrentMember();
-  if (!member) return { error: "Your session has expired — please sign in again.", ok: false };
-  if (member.role !== "admin") return { error: "Only an agency admin can change notification settings.", ok: false };
+  const member = await requireAdmin();
+  if (!member) return { error: "Only an agency admin can change notification settings.", ok: false };
 
   const alertEmailAddress = ((formData.get("alertEmailAddress") as string | null) ?? "").trim() || null;
   const emailAlertsEnabled = formData.get("emailAlertsEnabled") === "on";
@@ -240,11 +235,8 @@ export async function saveAgencyContact(
   _prev: ContactFormState,
   formData: FormData,
 ): Promise<ContactFormState> {
-  const member = await getCurrentMember();
+  const member = await requireAdmin();
   if (!member) {
-    return { ok: false, formError: "Your session has expired — please sign in again." };
-  }
-  if (member.role !== "admin") {
     return { ok: false, formError: "Only an agency admin can edit agency contact info." };
   }
 
@@ -268,9 +260,8 @@ export async function saveAgencyContact(
 
 /** Regenerate this agency's hotel-signup invite code (old code stops working). */
 export async function regenerateAgencyInviteCode(): Promise<{ ok: boolean; code?: string; error?: string }> {
-  const member = await getCurrentMember();
-  if (!member) return { ok: false, error: "Your session has expired — please sign in again." };
-  if (member.role !== "admin") return { ok: false, error: "Only an agency admin can manage the invite code." };
+  const member = await requireAdmin();
+  if (!member) return { ok: false, error: "Only an agency admin can manage the invite code." };
   const code = await regenerateInviteCode(member.agencyId);
   revalidatePath("/agency/settings");
   return { ok: true, code };
@@ -280,9 +271,8 @@ export async function regenerateAgencyInviteCode(): Promise<{ ok: boolean; code?
 export async function setAgencyInviteStatus(
   status: "ACTIVE" | "DISABLED",
 ): Promise<{ ok: boolean; status?: string; error?: string }> {
-  const member = await getCurrentMember();
-  if (!member) return { ok: false, error: "Your session has expired — please sign in again." };
-  if (member.role !== "admin") return { ok: false, error: "Only an agency admin can manage the invite code." };
+  const member = await requireAdmin();
+  if (!member) return { ok: false, error: "Only an agency admin can manage the invite code." };
   await setInviteCodeStatus(member.agencyId, status);
   revalidatePath("/agency/settings");
   return { ok: true, status };
@@ -298,11 +288,8 @@ export async function mapAdAccount(
   _prev: MapAccountState,
   formData: FormData,
 ): Promise<MapAccountState> {
-  const member = await getCurrentMember();
+  const member = await requireAdmin();
   if (!member) {
-    return { error: "Your session has expired — please sign in again.", ok: false };
-  }
-  if (member.role !== "admin") {
     return { error: "Only an agency admin can map ad accounts.", ok: false };
   }
 

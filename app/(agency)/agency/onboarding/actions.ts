@@ -3,6 +3,7 @@
 import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { ensureInviteCode } from "@/lib/hotel-invite";
+import { isAllowedStaffEmail } from "@/lib/access";
 
 /**
  * Provisions an Agency for a freshly signed-up user: creates the Agency and an
@@ -30,6 +31,17 @@ export async function createAgencyForCurrentUser(formData: FormData) {
     user?.primaryEmailAddress?.emailAddress ??
     user?.emailAddresses?.[0]?.emailAddress ??
     "";
+
+  // AUTHORITATIVE staff-access gate: only a Social Hippi staff email may ever
+  // provision an agency or be granted the agency_admin role. Enforced here at the
+  // single provisioning choke point — before any Agency/AgencyMember is created
+  // or the Clerk role is stamped — so a non-staff account can never obtain access
+  // even if it reaches this action directly. (The Clerk allowlist + proxy check
+  // are perimeters on top of this; correctness does not depend on them.)
+  if (!isAllowedStaffEmail(email)) {
+    return { error: "Access is restricted to Social Hippi staff accounts." };
+  }
+
   const fullName =
     [user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
     email ||

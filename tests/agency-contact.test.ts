@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
 vi.mock("@/lib/auth", () => ({
   getCurrentMember: async () => h.member,
   getPlatformRole: async () => h.role,
+  // Mirror the real helper: only an admin member resolves; else null.
+  requireAdmin: async () => (h.member && (h.member as { role?: string }).role === "admin" ? h.member : null),
 }));
 // revalidatePath needs a Next request store that doesn't exist under vitest.
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));

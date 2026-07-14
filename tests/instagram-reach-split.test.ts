@@ -183,13 +183,10 @@ describe("hotel-owner access", () => {
       params: Promise.resolve({ hotelClientId }),
     });
 
-  test("owner can read their OWN hotel's split", async () => {
+  test("ACCESS LOCKDOWN: the owner is denied even their OWN hotel's split (surface retired)", async () => {
     loginUser(ownerMain);
     const res = await callHotel(hMain);
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.ownedContent).toBeDefined();
-    expect(body.influencerContent).toBeDefined();
+    expect(res.status).toBe(403);
   });
 
   test("owner CANNOT read another hotel's split (same agency or not)", async () => {
