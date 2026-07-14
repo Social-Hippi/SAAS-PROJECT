@@ -71,7 +71,7 @@ async function makeAgency(tag: string) {
     data: { name: `${PREFIX}${tag}`, email: `${PREFIX.toLowerCase()}${tag}@example.test`, subscriptionStatus: "active" },
   });
   const member = await prisma.agencyMember.create({
-    data: { agencyId: agency.id, clerkId: `${PREFIX}clerk-${tag}-${Date.now()}`, email: `${tag}@m.test`, name: `M ${tag}`, role: "admin" },
+    data: { agencyId: agency.id, clerkId: `${PREFIX}clerk-${tag}-${Date.now()}`, email: `${tag}@socialhippi.com`, name: `M ${tag}`, role: "admin" },
     include: { agency: true },
   });
   return { agency, member };

@@ -226,8 +226,8 @@ describe("DB-backed", () => {
     agencyB = B.id;
     const mA = await prisma.agencyMember.create({ data: { agencyId: A.id, clerkId: `${PREFIX}a-${Date.now()}`, email: "a@m.test", name: "A", role: "admin" } });
     const mB = await prisma.agencyMember.create({ data: { agencyId: B.id, clerkId: `${PREFIX}b-${Date.now()}`, email: "b@m.test", name: "B", role: "admin" } });
-    memberA = { id: mA.id, agencyId: A.id, role: "admin" };
-    memberB = { id: mB.id, agencyId: B.id, role: "admin" };
+    memberA = { id: mA.id, agencyId: A.id, email: "a@socialhippi.com", role: "admin" };
+    memberB = { id: mB.id, agencyId: B.id, email: "b@socialhippi.com", role: "admin" };
     const hA = await prisma.hotelClient.create({ data: { agencyId: A.id, name: `${PREFIX}HotelA`, websiteUrl: "https://h.example", contactName: "C", contactEmail: "c@t.local", siteId: `${PREFIX}s-${Date.now()}`, conversionMethod: "both" } });
     hotelA = hA.id;
   });
@@ -275,7 +275,7 @@ describe("DB-backed", () => {
   test("signup action persists and returns redirectTo", async () => {
     const C = await prisma.agency.create({ data: { name: `${PREFIX}C`, email: `${PREFIX}c@x.test`, subscriptionStatus: "inactive" } });
     const mC = await prisma.agencyMember.create({ data: { agencyId: C.id, clerkId: `${PREFIX}c-${Date.now()}`, email: "c@m.test", name: "C", role: "admin" } });
-    loginAs({ id: mC.id, agencyId: C.id, role: "admin" });
+    loginAs({ id: mC.id, agencyId: C.id, email: "c@socialhippi.com", role: "admin" });
     const res = await saveAgencyContactSignup({ ok: false }, validForm());
     expect(res.ok).toBe(true);
     expect(res.redirectTo).toBe("/agency/dashboard");

@@ -70,7 +70,7 @@ async function makeAgency(tag: string) {
   return agency;
 }
 async function makeMember(agencyId: string, tag: string, role: "admin" | "analyst") {
-  return prisma.agencyMember.create({ data: { agencyId, clerkId: `${PREFIX}clerk-${tag}-${Date.now()}-${Math.round(performance.now())}`, email: `${tag}@m.test`, name: `M ${tag}`, role } });
+  return prisma.agencyMember.create({ data: { agencyId, clerkId: `${PREFIX}clerk-${tag}-${Date.now()}-${Math.round(performance.now())}`, email: `${tag}@socialhippi.com`, name: `M ${tag}`, role } });
 }
 async function makeHotel(agencyId: string, tag: string) {
   return prisma.hotelClient.create({

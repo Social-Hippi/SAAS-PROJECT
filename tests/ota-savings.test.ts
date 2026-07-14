@@ -40,7 +40,7 @@ type Fx = {
 let fx: Fx;
 
 async function mkAgency(t: string) { return prisma.agency.create({ data: { name: `${PREFIX}${t}`, email: `${PREFIX.toLowerCase()}${t}@x.test`, subscriptionStatus: "active" } }); }
-async function mkMember(a: string, t: string) { return prisma.agencyMember.create({ data: { agencyId: a, clerkId: `${PREFIX}c-${t}-${Date.now()}-${Math.round(performance.now())}`, email: `${t}@m.test`, name: t, role: "admin" } }); }
+async function mkMember(a: string, t: string) { return prisma.agencyMember.create({ data: { agencyId: a, clerkId: `${PREFIX}c-${t}-${Date.now()}-${Math.round(performance.now())}`, email: `${t}@socialhippi.com`, name: t, role: "admin" } }); }
 async function mkHotel(a: string, t: string, rate: number | null, deleted = false) {
   return prisma.hotelClient.create({ data: { agencyId: a, name: `${PREFIX}${t}`, websiteUrl: "https://h.example", contactName: "C", contactEmail: "c@t.local", siteId: `${PREFIX}s-${t}-${Date.now()}-${Math.round(performance.now())}`, conversionMethod: "both", otaCommissionRate: rate, ...(deleted ? { deletedAt: new Date() } : {}) } });
 }

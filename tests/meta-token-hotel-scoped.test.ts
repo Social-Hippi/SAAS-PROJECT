@@ -51,7 +51,7 @@ async function makeAgency(tag: string) {
     data: {
       agencyId: agency.id,
       clerkId: `${PREFIX}clerk-${tag}-${Date.now()}`,
-      email: `${tag}@member.test`,
+      email: `${tag}@socialhippi.com`,
       name: `Member ${tag}`,
       role: "admin",
     },

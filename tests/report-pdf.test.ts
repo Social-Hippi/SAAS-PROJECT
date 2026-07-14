@@ -42,7 +42,7 @@ beforeAll(async () => {
   const member = await prisma.agencyMember.create({
     data: { agencyId, clerkId: `${PREFIX}c-${Date.now()}`, email: "m@x.test", name: "M", role: "admin" },
   });
-  h.member = { id: member.id, agencyId, role: "admin", agency: { id: agencyId, name: agency.name, plan: "starter" } };
+  h.member = { id: member.id, agencyId, email: "m@socialhippi.com", role: "admin", agency: { id: agencyId, name: agency.name, plan: "starter" } };
 
   const hotel = await prisma.hotelClient.create({
     data: {

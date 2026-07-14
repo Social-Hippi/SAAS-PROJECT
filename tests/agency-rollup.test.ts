@@ -48,7 +48,7 @@ type Fx = {
 let fx: Fx;
 
 async function makeAgency(tag: string) { return prisma.agency.create({ data: { name: `${PREFIX}${tag}`, email: `${PREFIX.toLowerCase()}${tag}@x.test`, subscriptionStatus: "active" } }); }
-async function makeMember(agencyId: string, tag: string) { return prisma.agencyMember.create({ data: { agencyId, clerkId: `${PREFIX}clerk-${tag}-${Date.now()}-${Math.round(performance.now())}`, email: `${tag}@m.test`, name: `M ${tag}`, role: "admin" } }); }
+async function makeMember(agencyId: string, tag: string) { return prisma.agencyMember.create({ data: { agencyId, clerkId: `${PREFIX}clerk-${tag}-${Date.now()}-${Math.round(performance.now())}`, email: `${tag}@socialhippi.com`, name: `M ${tag}`, role: "admin" } }); }
 async function makeHotel(agencyId: string, tag: string, deleted = false) {
   return prisma.hotelClient.create({ data: { agencyId, name: `${PREFIX}${tag}`, websiteUrl: "https://h.example", contactName: "C", contactEmail: "c@t.local", siteId: `${PREFIX}site-${tag}-${Date.now()}-${Math.round(performance.now())}`, conversionMethod: "both", ...(deleted ? { deletedAt: new Date() } : {}) } });
 }

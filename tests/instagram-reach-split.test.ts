@@ -100,7 +100,7 @@ beforeAll(async () => {
 
   const memberAClerk = `${PREFIX}memA-${randomUUID()}`;
   const m = await prisma.agencyMember.create({ data: { agencyId: agencyA, clerkId: memberAClerk, email: "a@m.test", name: "A", role: "admin" } });
-  memberA = { id: m.id, agencyId: agencyA, role: "admin" };
+  memberA = { id: m.id, agencyId: agencyA, email: "a@socialhippi.com", role: "admin" };
 
   infA = await mkInfluencer(agencyA, hMain, "priya");
   infA2 = await mkInfluencer(agencyA, hOther, "ravi");

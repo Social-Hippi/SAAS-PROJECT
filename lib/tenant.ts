@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { cache } from "react";
 import { getCurrentMember, getPlatformRole } from "@/lib/auth";
 import { agencyScopedFor } from "@/lib/tenant-scope";
+import { isAllowedStaffEmail } from "@/lib/access";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LAYER 1 — Centralised agency-scoped query helpers (see MULTITENANCY.md).
@@ -43,12 +44,25 @@ export type AgencyContext = {
  * Resolves the current request's agency context from the Clerk session.
  * Throws TenantAuthError if the user is not signed in or has no AgencyMember.
  * `cache`d so repeated calls within one request render share the lookup.
+ *
+ * This is also the AUTHORITATIVE staff-access read gate. The domain rule was
+ * previously enforced only at agency CREATION (createAgencyForCurrentUser), so a
+ * member provisioned before the lockdown whose email is not a Social Hippi staff
+ * address could still read agency data. Because every agency-scoped read/write
+ * funnels through here (agencyScoped → requireAgencyId → getAgencyContext), the
+ * check runs on EVERY request — reusing member.email (a stored column), so no
+ * extra Clerk/DB call. A valid staff member's email passes and nothing changes.
  */
 export const getAgencyContext = cache(async (): Promise<AgencyContext> => {
   const member = await getCurrentMember();
   if (!member) {
     throw new TenantAuthError(
       "No agency context: the user is not signed in or has no agency membership.",
+    );
+  }
+  if (!isAllowedStaffEmail(member.email)) {
+    throw new TenantAuthError(
+      "Access is restricted to Social Hippi staff accounts.",
     );
   }
   return { agencyId: member.agencyId, memberId: member.id, role: member.role };

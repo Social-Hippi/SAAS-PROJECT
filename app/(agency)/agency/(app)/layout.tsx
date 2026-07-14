@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { UserButton } from "@clerk/nextjs";
 import { AgencySidebar, AgencyMobileNav } from "@/components/nav/AgencySidebar";
 import { getCurrentMember } from "@/lib/auth";
+import { isAllowedStaffEmail } from "@/lib/access";
 import { hasDashboardAccess } from "@/lib/plans";
 import { BILLING_ENABLED } from "@/lib/billing-config";
 import { mustCompleteContactInfo } from "@/lib/agency-contact";
@@ -17,6 +18,27 @@ export default async function AgencyAppLayout({
 }) {
   const member = await getCurrentMember();
   if (!member) redirect("/agency/onboarding");
+
+  // AUTHORITATIVE staff gate mirrored for the UX: a member provisioned before the
+  // access lockdown whose email is not a Social Hippi staff address is denied all
+  // agency data. getAgencyContext() already throws for them on every scoped read
+  // (so the API is closed regardless); here we render the same "Access restricted"
+  // state as onboarding so a human sees the message instead of an error boundary.
+  // A valid @socialhippi.com member passes and reaches the dashboard unchanged.
+  if (!isAllowedStaffEmail(member.email)) {
+    return (
+      <main className="flex flex-1 items-center justify-center py-12">
+        <div className="mx-auto max-w-md rounded-2xl border border-line bg-card p-8 text-center">
+          <h1 className="text-lg font-semibold text-ink">Access restricted</h1>
+          <p className="mt-3 text-sm text-ink-tertiary">
+            HotelTrack access is limited to Social Hippi staff accounts. This
+            account isn&apos;t eligible to access agency data. If you believe this
+            is a mistake, contact your administrator.
+          </p>
+        </div>
+      </main>
+    );
+  }
 
   // A super admin can suspend an agency independently of billing — block here.
   if (member.agency.suspendedAt) {

@@ -66,7 +66,7 @@ describe("My Instagram Content — data layer + isolation", () => {
     agencyA = A.id;
     const mA = await prisma.agencyMember.create({ data: { agencyId: A.id, clerkId: `${PREFIX}a-${Date.now()}`, email: "a@m.test", name: "A", role: "admin" } });
     const mB = await prisma.agencyMember.create({ data: { agencyId: B.id, clerkId: `${PREFIX}b-${Date.now()}`, email: "b@m.test", name: "B", role: "admin" } });
-    memberA = { id: mA.id, agencyId: A.id, role: "admin" }; memberB = { id: mB.id, agencyId: B.id, role: "admin" };
+    memberA = { id: mA.id, agencyId: A.id, email: "a@socialhippi.com", role: "admin" }; memberB = { id: mB.id, agencyId: B.id, email: "b@socialhippi.com", role: "admin" };
 
     const mk = (a: string, t: string) => prisma.hotelClient.create({ data: { agencyId: a, name: `${PREFIX}${t}`, websiteUrl: "https://h.example", contactName: "C", contactEmail: "c@t.local", siteId: `${PREFIX}s-${t}-${Date.now()}`, conversionMethod: "both" } });
     hMain = (await mk(A.id, "Main")).id;

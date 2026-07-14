@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
+import { isAllowedStaffEmail } from "@/lib/access";
 import type { Role } from "@/types/globals";
 
 /**
@@ -27,10 +28,16 @@ export const getCurrentMember = cache(async () => {
  * check is enforced SERVER-SIDE, never just hidden in the UI. Callers reject in
  * their own idiom: route handlers redirect or return 403; server actions return
  * an error object. `cache`d to share the lookup within one request render.
+ *
+ * The staff-domain check mirrors getAgencyContext(): a member provisioned before
+ * the access lockdown whose email is not a Social Hippi staff address is denied
+ * admin actions too, even the few that call requireAdmin without a scoped query.
  */
 export const requireAdmin = cache(async () => {
   const member = await getCurrentMember();
-  if (!member || member.role !== "admin") return null;
+  if (!member || member.role !== "admin" || !isAllowedStaffEmail(member.email)) {
+    return null;
+  }
   return member;
 });
 
