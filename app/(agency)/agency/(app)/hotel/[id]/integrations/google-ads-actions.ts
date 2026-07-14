@@ -5,7 +5,7 @@ import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { getTokenForApiCall } from "@/lib/token-access";
-import { describeCustomer, loginCustomerId } from "@/lib/google-ads";
+import { listCustomersWithDetails } from "@/lib/google-ads";
 import { runGoogleAdsSync } from "@/lib/google-ads-sync";
 
 // Server actions for the Google Ads (OAuth) integration card. Connecting happens
@@ -85,24 +85,36 @@ export async function selectGoogleAdsCustomer(
   });
   if (!conn) return { error: "Connect Google Ads first.", ok: false };
 
-  // Re-derive the account's name + currency server-side from the stored token —
-  // never trust the client-supplied id's metadata. This also validates the id is
-  // actually accessible under this connection's authorization.
+  // Re-derive the account server-side from the stored token — never trust the
+  // client-supplied id's metadata. listCustomersWithDetails returns only syncable
+  // NON-manager advertiser accounts (managers are expanded to their children), each
+  // carrying the login-customer-id (MCC) it's reached through. The selected id MUST
+  // be one of them; a manager/MCC or unknown id is rejected (it can't be synced —
+  // metrics against a manager fail with REQUESTED_METRICS_FOR_MANAGER).
   let name: string | null = null;
   let currency: string | null = null;
-  let isManager = false;
+  let login: string | null = null;
   try {
     const tok = await getTokenForApiCall("google_ads_access", conn.id, {
       agencyId: conn.agencyId,
       hotelClientId: id,
       source: "action:google-ads-select",
     });
-    const details = await describeCustomer(tok.reveal(), customerId);
-    name = details.descriptiveName;
-    currency = details.currencyCode;
-    isManager = details.manager;
+    const accounts = await listCustomersWithDetails(tok.reveal());
+    const match = accounts.find((a) => a.customerId === customerId);
+    if (!match) {
+      return {
+        error:
+          "That isn't a syncable advertiser account. Pick an advertiser account under your manager — a manager (MCC) account can't be synced.",
+        ok: false,
+      };
+    }
+    name = match.descriptiveName;
+    currency = match.currencyCode;
+    login = match.loginCustomerId;
   } catch {
-    // Fall through with nulls; the sync will refresh the token if it expired.
+    // Token likely expired: store the id and let the sync refresh + surface errors.
+    // loginCustomerId stays null; the next reconnect re-derives it.
   }
 
   await agencyScoped(prisma.googleAdsConnection).updateMany({
@@ -111,7 +123,7 @@ export async function selectGoogleAdsCustomer(
       customerId,
       customerName: name,
       currencyCode: currency,
-      loginCustomerId: isManager ? null : loginCustomerId(),
+      loginCustomerId: login,
       status: "ACTIVE",
       lastSyncError: null,
       requiresReconnect: false,

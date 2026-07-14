@@ -98,7 +98,7 @@ const GADS_ERROR_MESSAGES: Record<string, string> = {
   exchange_failed:
     "Google sign-in didn't complete — the token exchange failed. Please try again in a moment.",
   no_account:
-    "That Google account can't access any Google Ads accounts. Sign in with an account that has access to the hotel's Ads account.",
+    "No advertiser Google Ads account was found for this login. A manager (MCC) account can't be tracked directly — create or finish setting up an advertiser account under it (accounts still “Setup in progress” won't appear yet), then reconnect.",
   no_refresh:
     "Google didn't return a refresh token. Remove HotelTrack from your Google account's third-party access, then reconnect.",
 };

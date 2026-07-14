@@ -58,7 +58,7 @@ export function loginCustomerId(): string | null {
  *  Google sunsets versions ~yearly — set GOOGLE_ADS_API_VERSION to the current
  *  supported version if this default has been retired (calls 404 when sunset). */
 function apiVersion(): string {
-  return process.env.GOOGLE_ADS_API_VERSION || "v19";
+  return process.env.GOOGLE_ADS_API_VERSION || "v24";
 }
 export function googleAdsRedirectUri(): string {
   return (
@@ -158,16 +158,44 @@ function adsHeaders(accessToken: string, login?: string | null): Record<string, 
   return h;
 }
 
-/** Extracts a human-readable message from a Google Ads API error body. */
+type GoogleAdsErrorDetail = {
+  errors?: Array<{ errorCode?: Record<string, string>; message?: string }>;
+};
+type GoogleAdsErrorBody = {
+  error?: { message?: string; status?: string; details?: GoogleAdsErrorDetail[] };
+};
+
+/**
+ * Extracts the SPECIFIC failure from a Google Ads API error body. The top-level
+ * message is always the generic "Request contains an invalid argument." — the
+ * actionable detail (e.g. `queryError: REQUESTED_METRICS_FOR_MANAGER` /
+ * `PROHIBITED_RESOURCE_TYPE_IN_SELECT_CLAUSE`) lives in
+ * error.details[].errors[].errorCode. We surface `CODE: message` so logs and the
+ * connection's lastSyncError name the real problem, not "invalid argument".
+ */
 function adsErrorMessage(body: unknown, status: number): string {
-  const b = body as {
-    error?: { message?: string; status?: string; details?: unknown };
-  } | Array<{ error?: { message?: string } }>;
-  const err = Array.isArray(b) ? b[0]?.error : b?.error;
-  return err?.message ?? `HTTP ${status}`;
+  const b = body as GoogleAdsErrorBody | GoogleAdsErrorBody[];
+  const error = Array.isArray(b) ? b[0]?.error : b?.error;
+  const first = error?.details?.[0]?.errors?.[0];
+  if (first) {
+    const codeObj = first.errorCode ?? {};
+    const code = Object.values(codeObj)[0] ?? Object.keys(codeObj)[0] ?? "";
+    const msg = first.message ?? error?.message ?? `HTTP ${status}`;
+    return code ? `${code}: ${msg}` : msg;
+  }
+  return error?.message ?? `HTTP ${status}`;
 }
 
-export type AdsCustomer = { customerId: string; descriptiveName: string | null; currencyCode: string | null; manager: boolean };
+export type AdsCustomer = {
+  customerId: string;
+  descriptiveName: string | null;
+  currencyCode: string | null;
+  manager: boolean;
+  // The manager (MCC) id to send as login-customer-id when syncing this account.
+  // Null for a directly-owned account; set to the MCC id for accounts reached
+  // through a manager (Google requires the header for manager-linked accounts).
+  loginCustomerId: string | null;
+};
 
 /**
  * Lists the customer accounts the consenting user can directly access. Returns
@@ -175,17 +203,21 @@ export type AdsCustomer = { customerId: string; descriptiveName: string | null; 
  * currency come from describeCustomer() — this endpoint returns ids only.
  */
 export async function listAccessibleCustomers(accessToken: string): Promise<string[]> {
-  const res = await fetch(`${ADS_HOST}/${apiVersion()}/customers:listAccessibleCustomers`, {
+  const url = `${ADS_HOST}/${apiVersion()}/customers:listAccessibleCustomers`;
+
+  const res = await fetch(url, {
     method: "GET",
     headers: adsHeaders(accessToken),
   });
-  const json = (await res.json().catch(() => ({}))) as { resourceNames?: string[] };
+
+  const text = await res.text();
+  const json = (text ? JSON.parse(text) : {}) as { resourceNames?: string[] };
   if (!res.ok) {
     const msg = adsErrorMessage(json, res.status);
     if (res.status === 401 || res.status === 403) throw new GoogleAdsAuthError(`listAccessibleCustomers unauthorized: ${msg}`);
     throw new GoogleAdsApiError(`listAccessibleCustomers failed (${res.status}): ${msg}`);
   }
-  return (json.resourceNames ?? []).map((r) => r.split("/").pop() ?? "").filter(Boolean);
+  return (json.resourceNames ?? []).map((r: string) => r.split("/").pop() ?? "").filter(Boolean);
 }
 
 export type GaqlRow = Record<string, unknown>;
@@ -208,10 +240,20 @@ export async function searchStream(
     headers: adsHeaders(accessToken, login),
     body: JSON.stringify({ query }),
   });
-  const json = (await res.json().catch(() => ({}))) as
-    | Array<{ results?: GaqlRow[] }>
-    | { error?: unknown };
+  // Read as text first so the FULL error body survives even if it isn't valid JSON.
+  const text = await res.text();
+  let json: Array<{ results?: GaqlRow[] }> | { error?: unknown };
+  try {
+    json = text ? JSON.parse(text) : [];
+  } catch {
+    json = [];
+  }
   if (!res.ok) {
+    // The generic top-level message is "Request contains an invalid argument."; the
+    // actionable queryError is only in the body — log the whole thing (no tokens here).
+    console.error(
+      `[GADS-ERR] searchStream ${res.status} customer=${cid} login=${login ?? "(none)"} body=${text.slice(0, 2000)}`,
+    );
     const msg = adsErrorMessage(json, res.status);
     if (res.status === 401 || res.status === 403) throw new GoogleAdsAuthError(`searchStream unauthorized: ${msg}`);
     throw new GoogleAdsApiError(`searchStream failed (${res.status}): ${msg}`);
@@ -232,7 +274,10 @@ export async function describeCustomer(
   login?: string | null,
 ): Promise<AdsCustomer> {
   const cid = customerId.replace(/\D/g, "");
-  const fallback: AdsCustomer = { customerId: cid, descriptiveName: null, currencyCode: null, manager: false };
+  const fallback: AdsCustomer = {
+    customerId: cid, descriptiveName: null, currencyCode: null, manager: false,
+    loginCustomerId: login ?? null,
+  };
   try {
     const rows = await searchStream(
       accessToken,
@@ -246,6 +291,7 @@ export async function describeCustomer(
       descriptiveName: c.descriptiveName ?? null,
       currencyCode: c.currencyCode ?? null,
       manager: Boolean(c.manager),
+      loginCustomerId: login ?? null,
     };
   } catch (err) {
     if (err instanceof GoogleAdsAuthError) throw err;
@@ -253,12 +299,84 @@ export async function describeCustomer(
   }
 }
 
+/**
+ * Enumerates the NON-manager advertiser accounts beneath a manager (MCC), via the
+ * customer_client resource. Google requires metrics to be pulled from client
+ * accounts (never the manager itself — see REQUESTED_METRICS_FOR_MANAGER), so
+ * these are the real sync targets. customer_client returns ALL descendants, so a
+ * nested MCC hierarchy is flattened. Each result carries loginCustomerId = the
+ * manager id, which the sync sends as the login-customer-id header.
+ *
+ * MUST be called with login-customer-id = the manager id (set here automatically).
+ */
+export async function listClientAccounts(accessToken: string, managerId: string): Promise<AdsCustomer[]> {
+  const mcc = managerId.replace(/\D/g, "");
+  const rows = await searchStream(
+    accessToken,
+    mcc,
+    "SELECT customer_client.id, customer_client.descriptive_name, customer_client.currency_code, customer_client.manager, customer_client.status FROM customer_client WHERE customer_client.manager = false AND customer_client.status = 'ENABLED'",
+    mcc,
+  );
+  return rows
+    .map((r) => {
+      const c = (r.customerClient ?? {}) as {
+        id?: string | number; descriptiveName?: string; currencyCode?: string; manager?: boolean;
+      };
+      return {
+        customerId: String(c.id ?? ""),
+        descriptiveName: c.descriptiveName ?? null,
+        currencyCode: c.currencyCode ?? null,
+        manager: false,
+        loginCustomerId: mcc,
+      } satisfies AdsCustomer;
+    })
+    .filter((c) => c.customerId && c.customerId !== mcc);
+}
+
 /** Lists accessible customers with names/currency resolved (best-effort per account). */
 export async function listCustomersWithDetails(accessToken: string): Promise<AdsCustomer[]> {
   const ids = await listAccessibleCustomers(accessToken);
   const out: AdsCustomer[] = [];
+  const seen = new Set<string>();
+  const add = (c: AdsCustomer) => {
+    if (!c.customerId || seen.has(c.customerId)) return;
+    seen.add(c.customerId);
+    out.push(c);
+  };
+
   for (const id of ids) {
-    out.push(await describeCustomer(accessToken, id));
+    let customer: AdsCustomer;
+    try {
+      customer = await describeCustomer(accessToken, id);
+    } catch {
+      console.log("[GADS] Skipping customer (describe failed):", id);
+      continue;
+    }
+
+    // A MANAGER (MCC) account cannot be synced — metrics queries against it fail
+    // with REQUESTED_METRICS_FOR_MANAGER. Expand it into the advertiser accounts
+    // beneath it; each is synced with login-customer-id = this manager. This is
+    // the multi-tenant path: each hotel picks one advertiser account under the MCC.
+    if (customer.manager) {
+      try {
+        const children = await listClientAccounts(accessToken, id);
+        console.log(`[GADS] manager ${id} → ${children.length} advertiser account(s)`);
+        for (const child of children) add(child);
+      } catch (err) {
+        console.log("[GADS] manager expansion failed for", id, err instanceof Error ? err.message : String(err));
+      }
+      continue;
+    }
+
+    // A directly-owned advertiser account. Skip if still being created / inaccessible.
+    if (customer.descriptiveName === null && customer.currencyCode === null) {
+      console.log("[GADS] Skipping inaccessible customer:", id);
+      continue;
+    }
+    add(customer);
   }
+  // NOTE: only NON-manager advertiser accounts are returned — these are the valid
+  // sync targets. If empty, the caller must tell the user no advertiser account is
+  // available yet (e.g. one still "Setup in progress" under their manager).
   return out;
 }

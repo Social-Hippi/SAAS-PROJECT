@@ -1,3 +1,4 @@
+
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, tooManyRequests, clientIpFromHeaders } from "@/lib/ratelimit";
@@ -7,7 +8,6 @@ import { getTokenForApiCall } from "@/lib/token-access";
 import {
   exchangeCodeForTokens,
   listCustomersWithDetails,
-  loginCustomerId,
   mask,
   type AdsCustomer,
 } from "@/lib/google-ads";
@@ -112,12 +112,10 @@ export async function GET(request: Request) {
     redirect(integrationsUrl(hotelClientId, { gads_error: "no_account" }));
   }
 
-  // Auto-select when there's exactly one non-manager account; otherwise let the
-  // user pick. (A lone manager account still auto-selects — the picker/sync will
-  // surface "no campaigns" rather than erroring.)
-  const nonManager = customers.filter((c) => !c.manager);
-  const selected =
-    customers.length === 1 ? customers[0] : nonManager.length === 1 ? nonManager[0] : null;
+  // listCustomersWithDetails returns only NON-manager advertiser accounts (managers
+  // are expanded into their client accounts and can't be synced). Auto-select when
+  // there's exactly one; otherwise send the user to the picker.
+  const selected = customers.length === 1 ? customers[0] : null;
 
   // ── Encrypt tokens. Google only returns a refresh_token on the FIRST consent;
   // prompt=consent forces one, but if it's ever absent reuse the stored one. ──
@@ -146,9 +144,10 @@ export async function GET(request: Request) {
     });
   }
 
-  // Record the manager id we authenticated under only when the selected account
-  // is reached THROUGH a manager (env-configured); direct-owned accounts store null.
-  const login = selected && !selected.manager ? loginCustomerId() : null;
+  // The login-customer-id header the sync must send: the MCC the selected advertiser
+  // is reached through (set during manager expansion), or null for a directly-owned
+  // account. This is per-account — never a single platform-wide env value.
+  const login = selected?.loginCustomerId ?? null;
 
   try {
     const saved = await prisma.googleAdsConnection.upsert({

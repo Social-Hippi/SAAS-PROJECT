@@ -132,6 +132,10 @@ export async function syncGoogleAdsConnection(conn: Conn, days = 30): Promise<Go
   }
 
   const { start, end } = dateRange(days);
+  // Per-campaign metrics MUST come FROM campaign. Selecting campaign.* FROM customer
+  // is rejected with PROHIBITED_RESOURCE_TYPE_IN_SELECT_CLAUSE (the campaign resource
+  // is incompatible with the customer resource in the FROM clause). Verified against
+  // the Google Ads API v24 GAQL grammar.
   const query = `
     SELECT
       campaign.id,

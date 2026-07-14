@@ -60,6 +60,9 @@ const isPublicRoute = createRouteMatcher([
   // GA4 OAuth callback: the browser arrives from accounts.google.com; the signed
   // 10-minute state token (bound to agency + hotel) is the auth.
   "/api/auth/ga4/callback(.*)",
+  // Google Ads OAuth routes
+  "/api/auth/google-ads/start(.*)",
+  "/api/auth/google-ads/callback(.*)",
   // Daily visitor-journey 90-day retention cron, gated by CRON_SECRET in-route.
   "/api/cron/cleanup-journey(.*)",
 ]);
