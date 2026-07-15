@@ -40,7 +40,8 @@ import { getBudgetStatus, rupeesFromPaise } from "@/lib/budget";
 import { InstagramActions } from "./InstagramActions";
 import { SendGuideModal } from "./SendGuideModal";
 import { Ga4Card, type Ga4CardStatus } from "./Ga4Card";
-import { GoogleAdsCard, type GoogleAdsCardStatus, type GoogleAdsAccount } from "./GoogleAdsCard";
+import { GoogleAdsCard, type GoogleAdsCardStatus, type GoogleAdsAccount, type GoogleAdsCardMetrics } from "./GoogleAdsCard";
+import { loadChannelView } from "@/lib/channel-view";
 import { listCustomersWithDetails } from "@/lib/google-ads";
 import { getActiveBackfill } from "@/app/(agency)/agency/(app)/settings/backfill-actions";
 import { BackfillProgress } from "@/app/(agency)/agency/(app)/settings/BackfillProgress";
@@ -378,6 +379,32 @@ export default async function HotelIntegrationsPage({
       gadsAccounts = await listCustomersWithDetails(tok.reveal());
     } catch (err) {
       console.error("[GADS-OAUTH] account list for picker failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  // Trailing-30-day headline metrics for the connected card. Reuses the dashboard's
+  // Google Ads channel loader so the numbers are identical by construction: spend
+  // already in rupees, CTR/CPC recomputed from summed totals, agency-scoped. Only
+  // runs when the account is active; null when there's no in-range activity.
+  let gadsMetrics: GoogleAdsCardMetrics | null = null;
+  if (gadsStatus === "active") {
+    // Snapshots are keyed at UTC midnight, so align the 30-day window's start to
+    // midnight — otherwise a mid-day `start` would drop the oldest day's row and
+    // under-report spend.
+    const end = new Date();
+    const start = new Date(end);
+    start.setUTCDate(start.getUTCDate() - 30);
+    start.setUTCHours(0, 0, 0, 0);
+    const gv = await loadChannelView(hotel.id, "google_ads", start, end);
+    if (gv && gv.channelType === "paid_ads" && gv.hasData && gv.kpis) {
+      const k = gv.kpis;
+      gadsMetrics = {
+        totalSpend: k.totalSpend,
+        impressions: k.impressions,
+        clicks: k.linkClicks,
+        ctr: k.ctr,
+        cpc: k.cpc,
+      };
     }
   }
 
@@ -914,6 +941,7 @@ export default async function HotelIntegrationsPage({
           lastSyncedAt={gads?.lastSyncedAt?.toISOString() ?? null}
           lastSyncError={gads?.lastSyncError ?? null}
           accounts={gadsAccounts}
+          metrics={gadsMetrics}
         />
       </IntegrationCard>
     </div>
