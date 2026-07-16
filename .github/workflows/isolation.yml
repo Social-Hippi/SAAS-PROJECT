@@ -18,6 +18,10 @@ jobs:
       # A dedicated test database is strongly recommended (the suite creates and
       # deletes TEST_ISO*-prefixed rows). Point this secret at it.
       DATABASE_URL: ${{ secrets.TEST_DATABASE_URL || secrets.DATABASE_URL }}
+      # tests/encryption.test.ts encrypts/decrypts round-trip; lib/encryption.ts
+      # reads ENCRYPTION_KEY as the v1 key (legacy fallback). Any valid 64-hex
+      # (32-byte) key works — a throwaway is fine; it never touches prod data.
+      ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
     steps:
       - uses: actions/checkout@v4
 
