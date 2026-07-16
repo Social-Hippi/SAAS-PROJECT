@@ -18,12 +18,15 @@ jobs:
       # A dedicated test database is strongly recommended (the suite creates and
       # deletes TEST_ISO*-prefixed rows). Point this secret at it.
       DATABASE_URL: ${{ secrets.TEST_DATABASE_URL || secrets.DATABASE_URL }}
-      # tests/encryption.test.ts encrypts/decrypts round-trip; lib/encryption.ts
-      # reads ENCRYPTION_KEY as the v1 key (legacy fallback). Any valid 64-hex
-      # (32-byte) key works — a throwaway is fine; it never touches prod data.
-      ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
     steps:
       - uses: actions/checkout@v4
+
+      # tests/encryption.test.ts encrypts/decrypts round-trip; lib/encryption.ts
+      # needs a valid 64-hex (32-byte) key. This is a PURE THROWAWAY — the tests
+      # only round-trip within the run and never touch prod data — so we mint a
+      # fresh one at runtime instead of depending on a secret's exact value.
+      - name: Mint a throwaway ENCRYPTION_KEY for tests
+        run: echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
