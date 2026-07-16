@@ -14,10 +14,36 @@ on:
 jobs:
   security-tests:
     runs-on: ubuntu-latest
+
+    # The suite is DB-heavy (hundreds of sequential inserts/reads per test). Run
+    # it against a throwaway Postgres INSIDE the runner, not a remote database:
+    # a remote Neon test DB added ~30–50ms per round-trip, blowing single files
+    # out to 3–5 minutes and — combined with Neon compute cold-starts / transient
+    # connection drops — causing intermittent silent write/read failures that
+    # surfaced as flaky "expected +0" assertions in a DIFFERENT file each run.
+    # A local service container is fast, deterministic, and disposable. It is a
+    # standard superuser Postgres, so `prisma migrate deploy` can create the
+    # `hoteltrack_app` role + RLS policies, and the isolation tests still switch
+    # to that non-owner role (SET LOCAL ROLE) to genuinely exercise RLS.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hoteltrack_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
-      # A dedicated test database is strongly recommended (the suite creates and
-      # deletes TEST_ISO*-prefixed rows). Point this secret at it.
-      DATABASE_URL: ${{ secrets.TEST_DATABASE_URL || secrets.DATABASE_URL }}
+      # Local, ephemeral DB — created fresh for every run, thrown away after.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hoteltrack_test?sslmode=disable
+
     steps:
       - uses: actions/checkout@v4
 
