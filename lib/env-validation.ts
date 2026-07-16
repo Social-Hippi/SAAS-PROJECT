@@ -86,6 +86,29 @@ export function validatePlatformEnv(): void {
     );
   }
 
+  // ── Clerk (auth) — required for any PRODUCTION build ─────────────────────────
+  // If the publishable/secret key is absent, @clerk/nextjs silently drops into
+  // KEYLESS mode: clerk-js is then requested from the "/__clerk" default proxy path
+  // (DEFAULT_PROXY_PATH in @clerk/shared), which is a dev-only handler. In a
+  // production build that path 404s → "Failed to load Clerk JS" and a BLANK /sign-in.
+  // NEXT_PUBLIC_* is inlined at BUILD time, so this must be present in the BUILD
+  // environment (on Vercel: BOTH the Production and Preview scopes). Gated to
+  // production so intentional keyless local dev still works.
+  if (process.env.NODE_ENV === "production") {
+    const clerkEmpty = ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"].filter(
+      (v) => isEmpty(process.env[v]),
+    );
+    if (clerkEmpty.length > 0) {
+      throw new Error(
+        `FATAL ENV MISCONFIGURATION: ${clerkEmpty.join(", ")} ${clerkEmpty.length === 1 ? "is" : "are"} ` +
+          `empty in a production build. @clerk/nextjs falls back to keyless mode and clerk-js 404s from the ` +
+          `/__clerk proxy path, blanking /sign-in. Set ${clerkEmpty.length === 1 ? "it" : "them"} in the ` +
+          `deployment's env (Vercel: Production AND Preview scopes) and REDEPLOY — NEXT_PUBLIC_ vars are ` +
+          `inlined at build time, so adding them without a rebuild does nothing.`,
+      );
+    }
+  }
+
   const strict =
     process.env.STRICT_ENV_VALIDATION === "1" ||
     process.env.STRICT_ENV_VALIDATION === "true";
