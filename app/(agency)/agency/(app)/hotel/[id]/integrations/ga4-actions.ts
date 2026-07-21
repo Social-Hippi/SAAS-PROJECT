@@ -11,7 +11,17 @@ import { runGa4Sync } from "@/lib/ga4-sync";
 // property when the user has more than one. All multi-tenant: the hotel/connection
 // is mutated through the agency-scoped delegate.
 
-export type Ga4ActionState = { error: string | null; ok: boolean };
+// `notice` is the third outcome, distinct from ok/error: the sync itself
+// succeeded but wrote nothing, so the UI must not claim success. Optional so
+// existing callers constructing { error, ok } keep compiling.
+export type Ga4ActionState = { error: string | null; ok: boolean; notice?: string | null };
+
+// Shown when GA4 answered normally but had no rows for the window — a brand-new
+// property, a property with no traffic yet, or the wrong property picked. This
+// is not an error, so it must not read as one; it is also not success, so it
+// must not render "Synced ✓".
+const NO_DATA_NOTICE =
+  "Connected successfully, but no GA4 data was found for the selected date range.";
 
 async function ownHotelId(hotelId: string): Promise<string | null> {
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
@@ -37,11 +47,19 @@ export async function syncGa4Now(_prev: Ga4ActionState, formData: FormData): Pro
 
   const res = await runGa4Sync({ agencyId: member.agencyId, hotelClientId: id });
   revalidate(id);
-  if (res.synced === 0 && res.errors.length > 0) {
+  // Single-hotel scope, so any recorded error is THIS hotel's — report it even
+  // if the connection also counted as synced.
+  if (res.errors.length > 0) {
     return { error: res.errors[0].error, ok: false };
   }
   if (res.processed === 0) {
     return { error: "No active GA4 property to sync. Pick a property first.", ok: false };
+  }
+  // The connection synced cleanly but GA4 returned zero rows for every report,
+  // so no Ga4Snapshot was written. Reporting success here is what made a
+  // misconfigured property look healthy.
+  if (res.daysSynced === 0) {
+    return { error: null, ok: false, notice: NO_DATA_NOTICE };
   }
   return { error: null, ok: true };
 }
@@ -76,8 +94,12 @@ export async function selectGa4Property(_prev: Ga4ActionState, formData: FormDat
     data: { propertyId, propertyName, status: "ACTIVE", lastSyncError: null },
   });
 
-  // Kick off a first sync so the dashboard fills immediately.
-  await runGa4Sync({ agencyId: member.agencyId, hotelClientId: id });
+  // Kick off a first sync so the dashboard fills immediately. Surface the same
+  // three outcomes as "Sync now" — picking a property that turns out to hold no
+  // data must not report a bare success.
+  const res = await runGa4Sync({ agencyId: member.agencyId, hotelClientId: id });
   revalidate(id);
+  if (res.errors.length > 0) return { error: res.errors[0].error, ok: false };
+  if (res.daysSynced === 0) return { error: null, ok: false, notice: NO_DATA_NOTICE };
   return { error: null, ok: true };
 }
