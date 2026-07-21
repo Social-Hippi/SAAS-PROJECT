@@ -49,7 +49,17 @@ function developerToken(): string {
   if (!v) throw new GoogleAdsApiError("GOOGLE_ADS_DEVELOPER_TOKEN is not configured.");
   return v;
 }
-/** Manager (MCC) account id for the login-customer-id header, digits only. Optional. */
+/**
+ * Legacy platform-wide manager (MCC) account id from env, digits only.
+ *
+ * @deprecated Never applied automatically. login-customer-id is per-connection
+ * (GoogleAdsConnection.loginCustomerId, derived from the consenting user's own
+ * account hierarchy at OAuth time). This value is read at exactly ONE call site
+ * — the sync in lib/google-ads-sync.ts — as a compatibility fallback for
+ * connections stored with a null column. Account DISCOVERY must never send it:
+ * one agency's MCC id on another agency's lookup yields USER_PERMISSION_DENIED,
+ * which surfaces as a misleading "no accessible account".
+ */
 export function loginCustomerId(): string | null {
   const v = (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || "").replace(/\D/g, "");
   return v || null;
@@ -153,8 +163,14 @@ function adsHeaders(accessToken: string, login?: string | null): Record<string, 
     "developer-token": developerToken(),
     "Content-Type": "application/json",
   };
-  const lc = login ?? loginCustomerId();
-  if (lc) h["login-customer-id"] = lc;
+  // login-customer-id is PER-CONNECTION: it is the manager (MCC) that actually
+  // sits above this customer, derived from the consenting user's own account
+  // hierarchy at OAuth time and stored on GoogleAdsConnection. It must NOT fall
+  // back to a platform-wide env value — sending one agency's MCC id on another
+  // agency's request yields USER_PERMISSION_DENIED, which the discovery path
+  // then swallows into a misleading "no accessible account" dead end. A direct
+  // (non-managed) account correctly sends no header at all.
+  if (login) h["login-customer-id"] = login;
   return h;
 }
 

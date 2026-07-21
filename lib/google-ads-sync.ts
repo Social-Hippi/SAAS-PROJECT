@@ -5,6 +5,7 @@ import { getTokenForApiCall } from "@/lib/token-access";
 import { encryptWithAudit } from "@/lib/token-audit";
 import {
   searchStream,
+  loginCustomerId,
   refreshAccessToken,
   GoogleAdsAuthError,
   GoogleAdsOAuthError,
@@ -153,7 +154,15 @@ export async function syncGoogleAdsConnection(conn: Conn, days = 30): Promise<Go
 
   let rows: GaqlRow[];
   try {
-    rows = await searchStream(accessToken, conn.customerId, query, conn.loginCustomerId);
+    // login-customer-id is per-connection (derived from the account hierarchy at
+    // OAuth time). Fall back to the legacy platform MCC env var ONLY here, for
+    // connections stored before that derivation existed or whose derivation was
+    // skipped by the catch in selectGoogleAdsCustomer — without it those rows
+    // would start failing USER_PERMISSION_DENIED. Account DISCOVERY deliberately
+    // does not use this fallback: sending one agency's MCC on another agency's
+    // lookup is what made a valid account look inaccessible.
+    const login = conn.loginCustomerId ?? loginCustomerId();
+    rows = await searchStream(accessToken, conn.customerId, query, login);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown Google Ads sync error.";
     const tokenExpired = err instanceof GoogleAdsAuthError;
