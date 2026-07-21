@@ -46,6 +46,9 @@ describe("channel keys", () => {
 describe("DB-backed", () => {
   let agencyA: string;
   let hMain: string, hEmpty: string, hB: string;
+  // Dedicated hotels for the Google Ads health scenarios, so their tracked rows
+  // can't perturb the channel totals the other tests assert on.
+  let hGadsUntagged: string, hGadsTagged: string;
   let memberA: Record<string, unknown>, memberB: Record<string, unknown>;
 
   function conv(a: string, hotel: string, value: number, o: { source?: string; medium?: string; campaign?: string; session?: string; when?: Date } = {}) {
@@ -119,6 +122,32 @@ describe("DB-backed", () => {
     await prisma.influencerRedemption.create({ data: { agencyId: A.id, hotelClientId: hMain, couponCodeId: code.id, influencerId: inf.id, bookingValue: "9000.00", redemptionSource: "snippet_auto", redeemedAt: IN } });
     await prisma.influencerRedemption.create({ data: { agencyId: A.id, hotelClientId: hMain, couponCodeId: code.id, influencerId: inf.id, bookingValue: "6000.00", redemptionSource: "manual_entry", redeemedAt: IN } });
 
+    // ── Google Ads ───────────────────────────────────────────────────────────
+    // Two hotels: one whose ads aren't UTM-tagged (auto-tagging/gclid only, so
+    // HotelTrack sees no google_ads traffic), one that is tagged correctly.
+    hGadsUntagged = (await mk(A.id, "GadsUntagged")).id;
+    hGadsTagged = (await mk(A.id, "GadsTagged")).id;
+    const gadsConn = (hotel: string) => prisma.googleAdsConnection.create({ data: {
+      agencyId: A.id, hotelClientId: hotel, customerId: "1234567890", customerName: "Test Ads",
+      accessToken: "x", refreshToken: "y", tokenExpiresAt: new Date(Date.now() + 3600_000),
+      scope: "https://www.googleapis.com/auth/adwords", status: "ACTIVE", lastSyncedAt: new Date(),
+    } });
+    const gadsSnap = (hotel: string, campaign: string, spend: number, clicks: number, conversions: number, value: number) =>
+      prisma.googleAdsCampaignSnapshot.create({ data: {
+        agencyId: A.id, hotelClientId: hotel, customerId: "1234567890",
+        campaignId: `gc_${randomUUID()}`, campaignName: campaign, status: "ENABLED", date: IN,
+        spend: spend.toFixed(2), impressions: 50000, clicks, conversions, conversionsValue: value.toFixed(2),
+      } });
+    await gadsConn(hGadsUntagged);
+    // Google reports plenty of clicks + "conversions" (every conversion ACTION),
+    // and a unit-less conversion value — none of which are bookings or revenue.
+    await gadsSnap(hGadsUntagged, "Brand", 20000, 1240, 546, 537);
+    await gadsConn(hGadsTagged);
+    await gadsSnap(hGadsTagged, "Brand", 10000, 900, 300, 250);
+    // Correctly tagged traffic: utm_source=google + a paid medium.
+    await sess(A.id, hGadsTagged, `sess_${randomUUID()}`, { source: "google", medium: "cpc" });
+    await conv(A.id, hGadsTagged, 40000, { source: "google", medium: "cpc", campaign: "Brand" });
+
     // Agency B isolation row.
     await conv(B.id, hB, 99000, { source: "facebook", medium: "cpc", campaign: "Other" });
   });
@@ -161,6 +190,64 @@ describe("DB-backed", () => {
     expect(d.hasData).toBe(false);
     expect(d.integrationStatus).toBe("not_connected");
     expect(d.channelName).toBe("Google Ads");
+    // Health explains the absence rather than leaving it unexplained.
+    expect(d.health!.layers.linked).toBe("failed");
+    expect(d.health!.diagnoses[0].code).toBe("AUTH_NEVER_CONNECTED");
+  });
+
+  // Google-reported conversions are NOT bookings, and conversion value is NOT
+  // revenue. Displaying them as such is the defect this suite locks down.
+  test("google_ads: platform figures never leak into bookings/revenue", async () => {
+    loginAs(memberA);
+    const d = (await loadChannelView(hGadsUntagged, "google_ads", START, END)) as PaidChannelView;
+    expect(d.hasData).toBe(true);
+    // Platform half — preserved, clearly labelled.
+    expect(d.kpis!.conversions).toBe(546);
+    expect(d.kpis!.platformConversionValue).toBe(537);
+    expect(d.kpis!.totalSpend).toBe(20000);
+    // Tracked half — genuinely zero, because nothing was tagged google_ads.
+    expect(d.kpis!.bookings).toBe(0);
+    expect(d.kpis!.revenue).toBe(0);
+    expect(d.kpis!.roas).toBe(0);
+  });
+
+  test("google_ads: untagged account is diagnosed, not silently zeroed", async () => {
+    loginAs(memberA);
+    const d = (await loadChannelView(hGadsUntagged, "google_ads", START, END)) as PaidChannelView;
+    expect(d.health!.layers.linked).toBe("ok");
+    expect(d.health!.layers.flowing).toBe("ok");
+    expect(d.health!.layers.usable).toBe("failed");
+    const diag = d.health!.diagnoses.find((x) => x.code === "ATTRIBUTION_PAID_CLICKS_UNTAGGED")!;
+    expect(diag).toBeDefined();
+    expect(diag.confidence).toBe("inferred");
+    expect(diag.capabilitiesBlocked).toContain("paid.attribution");
+    // The invariant: a negative layer always carries its reason.
+    expect(d.health!.diagnoses.length).toBeGreaterThan(0);
+  });
+
+  test("google_ads: correctly tagged account attributes real bookings", async () => {
+    loginAs(memberA);
+    const d = (await loadChannelView(hGadsTagged, "google_ads", START, END)) as PaidChannelView;
+    expect(d.kpis!.bookings).toBe(1);
+    expect(d.kpis!.revenue).toBe(40000);
+    expect(d.kpis!.roas).toBeCloseTo(4, 6); // 40000 / 10000
+    expect(d.kpis!.costPerBooking).toBeCloseTo(10000, 6);
+    // Platform figures still reported alongside, unmixed.
+    expect(d.kpis!.conversions).toBe(300);
+    expect(d.kpis!.platformConversionValue).toBe(250);
+    expect(d.health!.overall).toBe("ok");
+    expect(d.health!.diagnoses).toHaveLength(0);
+    // Campaign table is built from tracked conversions joined by utm_campaign.
+    const brand = d.topCampaigns!.find((c) => c.campaignName === "Brand")!;
+    expect(brand.revenue).toBe(40000);
+    expect(brand.bookings).toBe(1);
+  });
+
+  test("google_ads: tenant isolation", async () => {
+    loginAs(memberB);
+    const d = (await loadChannelView(hGadsUntagged, "google_ads", START, END)) as PaidChannelView;
+    expect(d.hasData).toBe(false);
+    expect(d.integrationStatus).toBe("not_connected");
   });
 
   test("instagram_organic: KPIs + top posts", async () => {

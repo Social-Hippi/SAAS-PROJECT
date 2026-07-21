@@ -272,9 +272,10 @@ function PaidBody({ data, hotelId, ownerView }: { data: PaidChannelView; hotelId
   const k = data.kpis;
   const accounts = data.accounts ?? [];
   const archived = data.archivedAccountIds ?? [];
-  // Google Ads revenue/conversions are Ads-reported (from the account's own
-  // conversion tracking); Meta's revenue is from tracked bookings. Same layout,
-  // accurate sub-labels per channel.
+  // Revenue/bookings are TRACKED figures for every paid channel (TrackingEvent
+  // classified into the channel); `conversions` is what the ad platform's own
+  // conversion tracking reported. The two are different measurements — see the
+  // PaidKpis contract — so only the Conversions stat is labelled per platform.
   const isGoogle = data.channelName === "Google Ads";
   return (
     <div className="space-y-4">
@@ -283,7 +284,7 @@ function PaidBody({ data, hotelId, ownerView }: { data: PaidChannelView; hotelId
             full ₹0.00 precision so small values aren't rounded to ₹0. CTR/CPC/CPM
             are recomputed from totals server-side (never averaged across rows). */}
         <Stat label="Total spend" value={formatCurrency(k.totalSpend, { compact: true })} sub={accounts.length > 1 ? `${accounts.length} accounts` : undefined} />
-        <Stat label="Revenue" value={formatCurrency(k.revenue, { compact: true })} sub={isGoogle ? `${formatNumber(k.bookings)} conversions` : `${formatNumber(k.bookings)} tracked bookings`} />
+        <Stat label="Revenue" value={formatCurrency(k.revenue, { compact: true })} sub={`${formatNumber(k.bookings)} tracked bookings`} />
         <Stat label="ROAS" value={formatMultiple(k.roas)} sub="Revenue ÷ spend" />
         <Stat label="Conversions" value={formatNumber(k.conversions)} sub={isGoogle ? "Google-reported" : "Meta-reported"} />
         <Stat label="Cost / conversion" value={k.costPerConversion == null ? "—" : formatCurrencyCents(k.costPerConversion)} />

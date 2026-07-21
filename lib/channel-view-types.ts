@@ -3,6 +3,8 @@
 // pulling the server query graph into the browser bundle. The server loaders
 // live in lib/channel-view.ts (which re-exports everything here for callers).
 
+import type { IntegrationHealth } from "@/lib/integration-health-types";
+
 export const CHANNEL_KEYS = [
   "all",
   "meta_ads",
@@ -21,13 +23,28 @@ export function isChannelKey(v: unknown): v is ChannelKey {
 
 export type TrendPoint = Record<string, number | string>;
 
+// The contract below applies to EVERY paid channel, not just Meta:
+//   • conversions / costPerConversion / platformConversionValue are PLATFORM-
+//     reported — whatever the ad network's own conversion tracking counted.
+//   • bookings / revenue / roas / costPerBooking / conversionRate are TRACKED —
+//     derived from TrackingEvent rows classified into this channel by
+//     lib/source-classifier.ts.
+// Mixing the two is what made Google-reported conversions display as HotelTrack
+// bookings; keep the halves separate when adding a channel.
 export type PaidKpis = {
   totalSpend: number; impressions: number; reach: number; frequency: number;
   cpc: number; cpm: number; ctr: number; linkClicks: number;
-  // Meta-reported conversions (AdSnapshot.conversions) + cost per conversion.
+  // Platform-reported conversions (AdSnapshot / GoogleAdsCampaignSnapshot).
   conversions: number;
   costPerConversion: number | null;
-  // Tracked bookings/revenue (from TrackingEvent classified meta_ads) drive ROAS.
+  /**
+   * Platform-reported conversion VALUE (e.g. Google's metrics.conversions_value).
+   * Optional: only channels that report one populate it. NOT revenue — it is only
+   * money when the advertiser configured monetary conversion values, so it must
+   * never be summed into revenue or fed to a ROAS.
+   */
+  platformConversionValue?: number | null;
+  // Tracked bookings/revenue (from TrackingEvent classified to this channel).
   bookings: number; revenue: number; roas: number | null;
   costPerBooking: number | null; conversionRate: number | null;
 };
@@ -44,6 +61,13 @@ export type PaidChannelView = {
   topCampaigns?: { campaignName: string; spend: number; revenue: number; bookings: number; roas: number | null; ctr: number }[];
   topCreatives?: null;
   trend?: { date: string; spend: number; revenue: number; bookings: number }[];
+  /**
+   * Integration Health (Linked → Flowing → Usable + diagnoses). Optional: today
+   * only the Google Ads loader produces it. When a blocking diagnosis blocks
+   * `paid.attribution`, consumers MUST render that diagnosis instead of the
+   * booking/revenue figures — a zero we did not measure is not a zero.
+   */
+  health?: IntegrationHealth;
 };
 
 // One Instagram post row for the "My Instagram Content" table. postedAt is an
