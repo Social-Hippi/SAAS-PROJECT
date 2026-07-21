@@ -304,7 +304,7 @@ export async function syncGa4Connection(conn: Conn, days = 30): Promise<Ga4Accou
         // userEngagementDuration is event-scoped → compatible with pagePath (unlike
         // session-scoped engagementRate/averageSessionDuration, which GA4 rejects
         // here; those live in the day-level Engagement report R1).
-        metrics: [{ name: "screenPageViews" }, { name: "entrances" }, { name: "userEngagementDuration" }],
+        metrics: [{ name: "screenPageViews" }, { name: "sessions" }, { name: "userEngagementDuration" }],
         orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }], limit: 50000 }),
       safeRun("R7-landingBySource", { dateRanges, dimensions: [
         { name: "date" }, { name: "landingPagePlusQueryString" }, { name: "sessionSource" }, { name: "sessionMedium" },
@@ -398,7 +398,7 @@ export async function syncGa4Connection(conn: Conn, days = 30): Promise<Ga4Accou
       const path = r.dimensionValues[1]?.value || "/";
       const title = r.dimensionValues[2]?.value ?? "";
       addTally(b.pages, keyOf(path, title), {
-        views: num(r.metricValues[0]?.value), entrances: num(r.metricValues[1]?.value),
+        views: num(r.metricValues[0]?.value), sessions: num(r.metricValues[1]?.value),
         engSeconds: num(r.metricValues[2]?.value),
       });
     }
@@ -572,7 +572,13 @@ export async function runGa4Sync(
   const delay = opts.accountDelayMs ?? 500;
   const conns = await prisma.ga4Connection.findMany({
     where: {
-      status: "ACTIVE",
+      // ERROR is a RETRYABLE state, not a terminal one: it is set by a transient
+      // data failure (a Google 5xx, a quota blip, one incompatible report), and a
+      // successful sync clears it back to ACTIVE below. Excluding it here would
+      // mean a single bad day silently stops this hotel syncing forever, with no
+      // path back except re-picking the property. TOKEN_EXPIRED / REVOKED stay
+      // excluded — those genuinely require the user to reconnect.
+      status: { in: ["ACTIVE", "ERROR"] },
       propertyId: { not: "" }, // skip connections still awaiting property selection
       hotelClient: { deletedAt: null }, // never sync soft-deleted hotels
       ...(opts.agencyId ? { agencyId: opts.agencyId } : {}),

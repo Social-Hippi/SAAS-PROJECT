@@ -9,6 +9,10 @@ import { renderEmail, p, lead, esc } from "@/lib/email";
 // agencyId (the caller — a server action — has already resolved + ownership-
 // checked it via getCurrentMember), so they operate only on that one agency.
 
+// Base for the dashboard link AND the tracking snippet in the hotel welcome
+// email. The localhost fallback is dev-only: validatePlatformEnv() refuses to
+// boot a production server without NEXT_PUBLIC_APP_URL, so a real hotel can
+// never receive a localhost snippet.
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 
 // Unambiguous charset — no 0/O/1/I/L — so a code is easy to read aloud / retype.
@@ -120,7 +124,10 @@ export function hotelWelcomeEmail(opts: {
   agencyContact?: { email?: string | null; mobile?: string | null } | null;
 }): { subject: string; html: string } {
   const dashboardUrl = `${APP_URL}/hotel/${opts.hotelClientId}/dashboard`;
-  const snippet = `&lt;script async src="${esc(APP_URL)}/t.js" data-ht-site="${esc(opts.siteId)}"&gt;&lt;/script&gt;`;
+  // Must match the snippet shown in the agency UI: public/t.js locates its own
+  // <script> tag by looking for "id=" in the src and reads the siteId from that
+  // query param — a data-* attribute is never read, so the tag must carry ?id=.
+  const snippet = `&lt;script src="${esc(APP_URL)}/t.js?id=${esc(opts.siteId)}" async&gt;&lt;/script&gt;`;
   const contactLine =
     opts.agencyContact && (opts.agencyContact.email || opts.agencyContact.mobile)
       ? p(

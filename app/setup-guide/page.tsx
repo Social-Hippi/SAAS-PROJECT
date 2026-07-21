@@ -378,7 +378,7 @@ export default function SetupGuidePage() {
                   </p>
                   <CodeBlock
                     caption="Tracking snippet"
-                    code={`<script src="https://www.hoteltrack.in/t.js?id=YOUR-SITE-ID" async></script>`}
+                    code={`<script src="https://hoteltrack.in/t.js?id=YOUR-SITE-ID" async></script>`}
                   />
                   <p>
                     Save this code somewhere you can copy from later — like a

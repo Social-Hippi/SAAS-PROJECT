@@ -55,9 +55,9 @@ import {
 import { SpendChart } from "@/components/report/SpendChart";
 import { FollowerChart } from "@/components/report/FollowerChart";
 import { ReportMenu } from "./ReportMenu";
-import { HotelShareManager } from "./HotelShareManager";
+import { ShareLinkManager } from "./ShareLinkManager";
 import { DeleteHotelDangerZone } from "./DeleteHotelDangerZone";
-import { hotelShareUrl } from "@/lib/hotel-share";
+import { shareBaseUrl } from "@/lib/hotel-share";
 import { getBudgetStatus } from "@/lib/budget";
 import { BudgetStatusCard } from "@/components/dashboard/BudgetStatusCard";
 import { loadGa4Dashboard } from "@/lib/ga4-dashboard";
@@ -193,9 +193,6 @@ export default async function HotelDashboardPage({
       snippetStatus: true,
       lastEventAt: true,
       lastSyncedAt: true,
-      shareToken: true,
-      shareTokenCreatedAt: true,
-      shareTokenRevoked: true,
       showAdSpendToHotel: true,
     },
   });
@@ -252,29 +249,32 @@ export default async function HotelDashboardPage({
   // Hotel-owner share link + its access audit trail (last viewed / views in the
   // last 30 days), so the agency can see engagement and get a nudge to follow up
   // when the hotel hasn't looked in a while. All scoped to this agency.
-  const thirtyDaysAgo = new Date(Date.now() - 30 * DAY_MS);
-  const [lastAccess, shareViews30d, shareViewsTotal] = await Promise.all([
-    agencyScoped(prisma.hotelShareAccess).findFirst({
-      where: { hotelClientId: hotel.id },
-      orderBy: { accessedAt: "desc" },
-      select: { accessedAt: true },
-    }),
-    agencyScoped(prisma.hotelShareAccess).count({
-      where: { hotelClientId: hotel.id, accessedAt: { gte: thirtyDaysAgo } },
-    }),
-    agencyScoped(prisma.hotelShareAccess).count({
-      where: { hotelClientId: hotel.id },
-    }),
-  ]);
-  const shareUrl = hotel.shareToken ? hotelShareUrl(hotel.shareToken) : null;
-  const shareAccess = {
-    lastViewedAt: lastAccess?.accessedAt.toISOString() ?? null,
-    daysSinceLastView: lastAccess
-      ? Math.floor((Date.now() - lastAccess.accessedAt.getTime()) / DAY_MS)
-      : null,
-    views30d: shareViews30d,
-    totalViews: shareViewsTotal,
-  };
+  // The hotel's ONLY access path: a public /share/<token> report link. At most
+  // one live link per hotel (createShareLink revokes the previous one), so take
+  // the newest non-revoked row. Agency-scoped like every other read here.
+  const activeShareLink = await agencyScoped(prisma.shareLink).findFirst({
+    where: { hotelClientId: hotel.id, revokedAt: null },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      token: true,
+      passwordHash: true,
+      expiresAt: true,
+      viewCount: true,
+      lastViewedAt: true,
+    },
+  });
+  const shareLink = activeShareLink
+    ? {
+        id: activeShareLink.id,
+        token: activeShareLink.token,
+        hasPassword: activeShareLink.passwordHash !== null,
+        expiresAt: activeShareLink.expiresAt.toISOString(),
+        expired: activeShareLink.expiresAt.getTime() < Date.now(),
+        viewCount: activeShareLink.viewCount,
+        lastViewedAt: activeShareLink.lastViewedAt?.toISOString() ?? null,
+      }
+    : null;
 
   const sp = await searchParams;
   const one = (v: string | string[] | undefined) =>
@@ -2002,16 +2002,10 @@ export default async function HotelDashboardPage({
         title="Share with hotel"
         subtitle="A private, read-only dashboard the hotel owner can open on any browser — no login required. They only ever see this hotel's data."
       >
-        <HotelShareManager
+        <ShareLinkManager
           hotelId={hotel.id}
-          hotelName={hotel.name}
-          agencyName={member.agency.name}
-          contactEmail={hotel.contactEmail}
-          shareUrl={shareUrl}
-          createdAt={hotel.shareTokenCreatedAt?.toISOString() ?? null}
-          revoked={hotel.shareTokenRevoked}
-          showAdSpend={hotel.showAdSpendToHotel}
-          access={shareAccess}
+          shareBaseUrl={shareBaseUrl()}
+          link={shareLink}
         />
       </SectionCard>
 

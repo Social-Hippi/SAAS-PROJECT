@@ -37,6 +37,7 @@ function SyncButton({ hotelId, label = "Sync now" }: { hotelId: string; label?: 
         {pending ? "Syncing…" : label}
       </button>
       {state.error && <span className="text-xs text-danger">{state.error}</span>}
+      {state.notice && <span className="text-xs text-warning">{state.notice}</span>}
       {state.ok && <span className="text-xs text-success">Synced ✓</span>}
     </form>
   );
@@ -73,6 +74,7 @@ function PropertyPicker({
           also pass the first as a hint. */}
       <input type="hidden" name="propertyName" value="" />
       {state.error && <p className="text-sm text-danger">{state.error}</p>}
+      {state.notice && <p className="text-sm text-warning">{state.notice}</p>}
       <button
         type="submit"
         disabled={pending}

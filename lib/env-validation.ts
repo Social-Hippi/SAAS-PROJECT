@@ -39,6 +39,12 @@ const PROVIDERS: ProviderGroup[] = [
     vars: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GA4_REDIRECT_URI"],
   },
   {
+    // Meta Ads (ad ROI). Note the redirect var is META_OAUTH_REDIRECT_URI —
+    // lib/meta.ts reads that exact name, and the route is /api/auth/meta/callback.
+    name: "Meta",
+    vars: ["META_APP_ID", "META_APP_SECRET", "META_OAUTH_REDIRECT_URI"],
+  },
+  {
     // Google Ads reuses the GOOGLE_OAUTH_* client (validated by the GA4 group
     // above), so only its OWN vars are grouped here — otherwise a GA4-only
     // deployment would trip the partial-config guard. Ads-specific: a platform
@@ -51,6 +57,31 @@ const PROVIDERS: ProviderGroup[] = [
 const PLATFORM_WARNING =
   "These are PLATFORM-LEVEL credentials shared by every hotel — set them ONCE and " +
   "NEVER change them once hotels have connected (see INTEGRATIONS.md).";
+
+// Hostnames that are never valid for a production public origin — a snippet
+// built from one of these can only beacon back to the deploy itself.
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"]);
+
+/**
+ * Returns a human-readable problem with a candidate NEXT_PUBLIC_APP_URL, or
+ * null when it is a usable public origin. Exported for unit testing.
+ */
+export function appUrlProblem(raw: string): string | null {
+  if (isEmpty(raw)) return "is empty";
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return `is not an absolute URL (got "${raw}")`;
+  }
+  if (url.protocol !== "https:") return `must use https (got "${url.protocol}")`;
+  if (LOCAL_HOSTS.has(url.hostname)) return `points at a local address ("${url.hostname}")`;
+  if (url.hostname.endsWith(".vercel.app")) {
+    return `points at a preview deployment ("${url.hostname}")`;
+  }
+  if (url.hostname === "your-domain.com") return "is still the placeholder value";
+  return null;
+}
 
 function fatal(message: string): never {
   // One clear, greppable line. Throwing here aborts module load → the deploy
@@ -105,6 +136,30 @@ export function validatePlatformEnv(): void {
           `/__clerk proxy path, blanking /sign-in. Set ${clerkEmpty.length === 1 ? "it" : "them"} in the ` +
           `deployment's env (Vercel: Production AND Preview scopes) and REDEPLOY — NEXT_PUBLIC_ vars are ` +
           `inlined at build time, so adding them without a rebuild does nothing.`,
+      );
+    }
+  }
+
+  // ── Public app URL — required for any PRODUCTION build ──────────────────────
+  // Every tracking snippet handed to a hotel is built from this value (the
+  // welcome email in lib/hotel-invite.ts, plus the install + integrations
+  // pages), and public/t.js derives its own ingest origin from the src it was
+  // loaded with. A wrong or missing value therefore ships a snippet that
+  // beacons to the wrong host — or to localhost — and the hotel records zero
+  // traffic with no visible error. Same NEXT_PUBLIC_ build-time inlining caveat
+  // as the Clerk keys above: it must be set in the BUILD env, and changing it
+  // requires a REDEPLOY.
+  if (process.env.NODE_ENV === "production") {
+    const raw = (process.env.NEXT_PUBLIC_APP_URL ?? "").trim();
+    const reason = appUrlProblem(raw);
+    if (reason) {
+      throw new Error(
+        `FATAL ENV MISCONFIGURATION: NEXT_PUBLIC_APP_URL ${reason} in a production build. ` +
+          `It is the base of every hotel's tracking snippet, so an unset or non-production value ` +
+          `silently breaks booking attribution. Set it to the public https origin (e.g. ` +
+          `https://hoteltrack.in) in the deployment's env (Vercel: Production AND Preview scopes) ` +
+          `and REDEPLOY — NEXT_PUBLIC_ vars are inlined at build time, so adding it without a ` +
+          `rebuild does nothing.`,
       );
     }
   }

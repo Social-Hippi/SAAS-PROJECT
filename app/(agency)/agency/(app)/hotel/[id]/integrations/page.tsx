@@ -199,7 +199,10 @@ export default async function HotelIntegrationsPage({
       : "We couldn't complete the Facebook connection. Please try again, or paste a long-lived token instead."
     : null;
 
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://your-domain.com").replace(
+  // Falls back to the production origin, never a placeholder domain: this string
+  // is copied straight onto a hotel's website, and NEXT_PUBLIC_APP_URL is
+  // guaranteed present in production by validatePlatformEnv().
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://hoteltrack.in").replace(
     /\/$/,
     "",
   );
@@ -207,7 +210,7 @@ export default async function HotelIntegrationsPage({
   // Public URL for the setup-guide share modal (defaults to the prod domain so
   // the copied link is always shareable even if the env var isn't set locally).
   const guidePublicUrl = (
-    process.env.NEXT_PUBLIC_APP_URL || "https://www.hoteltrack.in"
+    process.env.NEXT_PUBLIC_APP_URL || "https://hoteltrack.in"
   ).replace(/\/$/, "");
 
   // ── Meta Ads (per-hotel token) ─────────────────────────────────────────────

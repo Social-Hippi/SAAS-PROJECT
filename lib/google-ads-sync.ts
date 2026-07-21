@@ -5,6 +5,7 @@ import { getTokenForApiCall } from "@/lib/token-access";
 import { encryptWithAudit } from "@/lib/token-audit";
 import {
   searchStream,
+  loginCustomerId,
   refreshAccessToken,
   GoogleAdsAuthError,
   GoogleAdsOAuthError,
@@ -153,7 +154,15 @@ export async function syncGoogleAdsConnection(conn: Conn, days = 30): Promise<Go
 
   let rows: GaqlRow[];
   try {
-    rows = await searchStream(accessToken, conn.customerId, query, conn.loginCustomerId);
+    // login-customer-id is per-connection (derived from the account hierarchy at
+    // OAuth time). Fall back to the legacy platform MCC env var ONLY here, for
+    // connections stored before that derivation existed or whose derivation was
+    // skipped by the catch in selectGoogleAdsCustomer — without it those rows
+    // would start failing USER_PERMISSION_DENIED. Account DISCOVERY deliberately
+    // does not use this fallback: sending one agency's MCC on another agency's
+    // lookup is what made a valid account look inaccessible.
+    const login = conn.loginCustomerId ?? loginCustomerId();
+    rows = await searchStream(accessToken, conn.customerId, query, login);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown Google Ads sync error.";
     const tokenExpired = err instanceof GoogleAdsAuthError;
@@ -244,7 +253,14 @@ export async function runGoogleAdsSync(
   const delay = opts.accountDelayMs ?? 500;
   const conns = await prisma.googleAdsConnection.findMany({
     where: {
-      status: "ACTIVE",
+      // ERROR is a RETRYABLE state, not a terminal one: it is set by a transient
+      // data failure (a Google 5xx, a quota blip, a bad SELECT clause), and a
+      // successful sync clears it back to ACTIVE below. Excluding it here would
+      // mean a single bad day silently stops this hotel syncing forever, and
+      // "Sync now" would report "Pick an account first" for an account that is
+      // already picked. TOKEN_EXPIRED / REVOKED stay excluded — those genuinely
+      // require the user to reconnect.
+      status: { in: ["ACTIVE", "ERROR"] },
       customerId: { not: "" }, // skip connections still awaiting account selection
       hotelClient: { deletedAt: null }, // never sync soft-deleted hotels
       ...(opts.agencyId ? { agencyId: opts.agencyId } : {}),
