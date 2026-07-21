@@ -244,7 +244,14 @@ export async function runGoogleAdsSync(
   const delay = opts.accountDelayMs ?? 500;
   const conns = await prisma.googleAdsConnection.findMany({
     where: {
-      status: "ACTIVE",
+      // ERROR is a RETRYABLE state, not a terminal one: it is set by a transient
+      // data failure (a Google 5xx, a quota blip, a bad SELECT clause), and a
+      // successful sync clears it back to ACTIVE below. Excluding it here would
+      // mean a single bad day silently stops this hotel syncing forever, and
+      // "Sync now" would report "Pick an account first" for an account that is
+      // already picked. TOKEN_EXPIRED / REVOKED stay excluded — those genuinely
+      // require the user to reconnect.
+      status: { in: ["ACTIVE", "ERROR"] },
       customerId: { not: "" }, // skip connections still awaiting account selection
       hotelClient: { deletedAt: null }, // never sync soft-deleted hotels
       ...(opts.agencyId ? { agencyId: opts.agencyId } : {}),
