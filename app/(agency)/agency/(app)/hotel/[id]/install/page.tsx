@@ -117,7 +117,10 @@ export default async function HotelInstallPage({
   });
   if (!hotel) notFound();
 
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://your-domain.com").replace(
+  // Falls back to the production origin, never a placeholder domain: this string
+  // is copied straight onto a hotel's website, and NEXT_PUBLIC_APP_URL is
+  // guaranteed present in production by validatePlatformEnv().
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://hoteltrack.in").replace(
     /\/$/,
     "",
   );
