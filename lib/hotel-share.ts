@@ -2,12 +2,15 @@ import "server-only";
 
 import { randomBytes, createHash } from "node:crypto";
 
-// Helpers for the hotel-owner share link — the public, read-only dashboard at
-// /h/<shareToken> (see the HotelClient.shareToken column + app/h/[shareToken]).
+// Helpers for the hotel share surface.
 //
-// The token is the ONLY thing standing between the public and a hotel's data, so
-// it must be unguessable: 256 bits of CSPRNG entropy, hex-encoded. Sequential or
-// guessable ids would let anyone enumerate other hotels' dashboards.
+// MIGRATION — PHASE 1: the hotel's live access path is the public /share/<token>
+// report link (ShareLink.token, minted by Prisma @default(uuid()) in
+// share-actions.ts and rendered by ShareLinkManager). The older /h/<shareToken>
+// flow is NO LONGER RENDERED anywhere, but generateShareToken() and
+// hotelShareUrl() below are deliberately retained so hotel-share-actions.ts and
+// HotelShareManager.tsx still compile and the change is trivially revertible.
+// Both are dead code in Phase 1 and are removed in Phase 2.
 
 /** A fresh 256-bit (32-byte) hex share token. */
 export function generateShareToken(): string {
@@ -42,16 +45,24 @@ export function clientIpFrom(headers: Headers): string | null {
 // Prefer the configured app URL (so local/preview links point at the right host)
 // and fall back to the production domain the spec documents.
 
-/** The origin used to build share links, e.g. "https://www.hoteltrack.in". */
+/** The origin used to build share links, e.g. "https://hoteltrack.in". */
 export function shareBaseUrl(): string {
   return (
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.NEXT_PUBLIC_SHARE_BASE_URL ||
-    "https://www.hoteltrack.in"
+    "https://hoteltrack.in"
   ).replace(/\/+$/, "");
 }
 
-/** The full public dashboard URL for a token, e.g. ".../h/<token>". */
+/**
+ * The full /h/<token> dashboard URL.
+ *
+ * @deprecated PHASE 1 — DEAD CODE. That route is retired
+ * (app/h/[shareToken]/page.tsx always 404s) and nothing renders this any more;
+ * the live hotel link is `${shareBaseUrl()}/share/<ShareLink.token>`, built in
+ * ShareLinkManager. Retained only so HotelShareManager.tsx /
+ * hotel-share-actions.ts keep compiling until Phase 2 removes them.
+ */
 export function hotelShareUrl(token: string): string {
   return `${shareBaseUrl()}/h/${token}`;
 }
