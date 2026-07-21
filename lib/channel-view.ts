@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { classifySourceType, type SourceType } from "@/lib/source-classifier";
+import { assessGoogleAdsHealth } from "@/lib/google-ads-health";
 import { loadInstagramReachSplit } from "@/lib/instagram-reach-split";
 import {
   CHANNEL_KEYS, isChannelKey, type ChannelKey, type PaidKpis,
@@ -234,10 +235,13 @@ async function loadMetaAds(hotelClientId: string, start: Date, end: Date): Promi
 }
 
 async function loadGoogleAds(hotelClientId: string, start: Date, end: Date): Promise<PaidChannelView> {
-  const [conn, campSnaps] = await Promise.all([
+  const [conn, campSnaps, conversions, sessions] = await Promise.all([
     agencyScoped(prisma.googleAdsConnection).findFirst({
       where: { hotelClientId },
-      select: { customerId: true },
+      select: {
+        customerId: true, status: true, requiresReconnect: true,
+        lastSyncedAt: true, lastSyncError: true,
+      },
     }),
     agencyScoped(prisma.googleAdsCampaignSnapshot).findMany({
       where: { hotelClientId, date: { gte: start, lte: end } },
@@ -246,44 +250,95 @@ async function loadGoogleAds(hotelClientId: string, start: Date, end: Date): Pro
         spend: true, impressions: true, clicks: true, conversions: true, conversionsValue: true,
       },
     }),
+    // TRACKED bookings/revenue — the same source the Meta loader uses. Without
+    // these, this loader had no way to report a real booking and was filling the
+    // tracked fields with Google-reported conversions instead.
+    conversionsInRange(hotelClientId, start, end),
+    // Sessions classified google_ads are the tagging signal behind Layer 3: if
+    // Google reports clicks and we saw none, the ads aren't UTM-tagged.
+    sessionsInRange(hotelClientId, start, end),
   ]);
+
+  const gConv = conversions.filter((c) => classifySourceType(c) === "google_ads");
+  const gSessions = sessions.filter((s) => classifySourceType(s) === "google_ads");
+  const bookings = gConv.length;
+  const revenue = gConv.reduce((sum, c) => sum + num(c.conversionValue), 0);
+
+  const window = { start, end };
+  const healthConnection = conn
+    ? {
+        status: conn.status as string,
+        customerId: conn.customerId,
+        requiresReconnect: conn.requiresReconnect,
+        lastSyncedAt: conn.lastSyncedAt,
+        lastSyncError: conn.lastSyncError,
+      }
+    : null;
 
   // No connection at all → "not connected". A connection with no rows in-range is
   // CONNECTED but empty (the UI shows "no active campaigns", not a connect CTA).
   if (!conn || conn.customerId === "") {
-    return { channelType: "paid_ads", channelName: "Google Ads", hasData: false, integrationStatus: "not_connected" };
-  }
-  if (campSnaps.length === 0) {
-    return { channelType: "paid_ads", channelName: "Google Ads", hasData: false };
+    return {
+      channelType: "paid_ads", channelName: "Google Ads", hasData: false,
+      integrationStatus: "not_connected",
+      health: assessGoogleAdsHealth({
+        hotelClientId, window, connection: healthConnection,
+        platform: { rows: 0, clicks: 0, conversions: 0, conversionValue: 0, campaignNames: [] },
+        tracked: { sessions: gSessions.length, bookings, campaignKeys: [] },
+      }),
+    };
   }
 
-  // Sum raw numerators/denominators; CTR/CPC/CPM/ROAS recomputed from totals
-  // (never averaged across rows), exactly like the Meta loader. Money, conversions,
-  // and value are all Ads-REPORTED (from the account's own conversion tracking).
-  let totalSpend = 0, impressions = 0, clicks = 0, conversions = 0, revenue = 0;
+  // Sum raw numerators/denominators; CTR/CPC/CPM recomputed from totals (never
+  // averaged across rows), exactly like the Meta loader.
+  //
+  // TWO SEPARATE HALVES — see the PaidKpis contract:
+  //   platform* = Google-reported (its own conversion tracking)
+  //   bookings/revenue = HotelTrack-tracked (TrackingEvent classified google_ads)
+  // Google's metrics.conversions counts every conversion ACTION (page views,
+  // call clicks, form opens), and metrics.conversions_value is unit-less unless
+  // the advertiser configured monetary values — neither is a booking or revenue.
+  let totalSpend = 0, impressions = 0, clicks = 0, platformConversions = 0, platformValue = 0;
   const acctAgg = new Map<string, { accountId: string; spend: number; impressions: number; clicks: number }>();
-  const campAgg = new Map<string, { campaignName: string; spend: number; impressions: number; clicks: number; conversions: number; revenue: number }>();
-  const byDay = new Map<string, { spend: number; revenue: number; bookings: number }>();
+  const campAgg = new Map<string, { campaignName: string; spend: number; impressions: number; clicks: number }>();
+  const spendByDay = new Map<string, number>();
 
   for (const s of campSnaps) {
     const spend = num(s.spend);
-    const value = num(s.conversionsValue);
     totalSpend += spend; impressions += s.impressions; clicks += s.clicks;
-    conversions += s.conversions; revenue += value;
+    platformConversions += s.conversions; platformValue += num(s.conversionsValue);
 
     const a = acctAgg.get(s.customerId) ?? { accountId: s.customerId, spend: 0, impressions: 0, clicks: 0 };
     a.spend += spend; a.impressions += s.impressions; a.clicks += s.clicks;
     acctAgg.set(s.customerId, a);
 
-    const key = s.campaignName.trim().toLowerCase() || s.campaignId;
-    const c = campAgg.get(key) ?? { campaignName: s.campaignName.trim() || s.campaignId, spend: 0, impressions: 0, clicks: 0, conversions: 0, revenue: 0 };
-    c.spend += spend; c.impressions += s.impressions; c.clicks += s.clicks; c.conversions += s.conversions; c.revenue += value;
+    const name = s.campaignName.trim();
+    const key = name.toLowerCase() || s.campaignId;
+    const c = campAgg.get(key) ?? { campaignName: name || s.campaignId, spend: 0, impressions: 0, clicks: 0 };
+    c.spend += spend; c.impressions += s.impressions; c.clicks += s.clicks;
     campAgg.set(key, c);
 
-    const dk = dayKey(s.date);
-    const d = byDay.get(dk) ?? { spend: 0, revenue: 0, bookings: 0 };
-    d.spend += spend; d.revenue += value; d.bookings += s.conversions;
-    byDay.set(dk, d);
+    spendByDay.set(dayKey(s.date), (spendByDay.get(dayKey(s.date)) ?? 0) + spend);
+  }
+
+  const health = assessGoogleAdsHealth({
+    hotelClientId, window, connection: healthConnection,
+    platform: {
+      rows: campSnaps.length, clicks, conversions: platformConversions,
+      conversionValue: platformValue,
+      campaignNames: [...campAgg.values()].map((c) => c.campaignName),
+    },
+    tracked: {
+      sessions: gSessions.length,
+      bookings,
+      campaignKeys: gConv
+        .map((c) => (c.utmCampaign ?? "").trim().toLowerCase())
+        .filter(Boolean),
+    },
+  });
+
+  if (campSnaps.length === 0 && bookings === 0) {
+    return { channelType: "paid_ads", channelName: "Google Ads", hasData: false, health };
   }
 
   const kpis: PaidKpis = {
@@ -293,39 +348,66 @@ async function loadGoogleAds(hotelClientId: string, start: Date, end: Date): Pro
     cpm: impressions > 0 ? (totalSpend / impressions) * 1000 : 0,
     ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
     linkClicks: clicks,
-    conversions: Math.round(conversions),
-    costPerConversion: conversions > 0 ? totalSpend / conversions : null,
-    bookings: Math.round(conversions),
+    // Platform-reported half.
+    conversions: Math.round(platformConversions),
+    costPerConversion: platformConversions > 0 ? totalSpend / platformConversions : null,
+    platformConversionValue: platformValue,
+    // Tracked half.
+    bookings,
     revenue,
     roas: totalSpend > 0 ? revenue / totalSpend : null,
-    costPerBooking: conversions > 0 ? totalSpend / conversions : null,
-    conversionRate: clicks > 0 ? (conversions / clicks) * 100 : null,
+    costPerBooking: bookings > 0 ? totalSpend / bookings : null,
+    conversionRate: clicks > 0 ? (bookings / clicks) * 100 : null,
   };
 
   const accounts = [...acctAgg.values()].sort((a, b) => b.spend - a.spend);
-  const topCampaigns = [...campAgg.values()]
-    .map((c) => ({
-      campaignName: c.campaignName,
-      spend: c.spend,
-      revenue: c.revenue,
-      bookings: Math.round(c.conversions),
-      roas: c.spend > 0 ? c.revenue / c.spend : null,
-      ctr: c.impressions > 0 ? (c.clicks / c.impressions) * 100 : 0,
-    }))
+
+  // Revenue/bookings per campaign come from TRACKED conversions (by utmCampaign),
+  // joined to per-campaign spend/impressions/clicks — the same shape as Meta.
+  const convByCampaign = new Map<string, { revenue: number; bookings: number }>();
+  for (const c of gConv) {
+    const name = (c.utmCampaign ?? "").trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    const row = convByCampaign.get(key) ?? { revenue: 0, bookings: 0 };
+    row.revenue += num(c.conversionValue); row.bookings += 1;
+    convByCampaign.set(key, row);
+  }
+  const campaignKeys = new Set([...campAgg.keys(), ...convByCampaign.keys()]);
+  const topCampaigns = [...campaignKeys]
+    .map((key) => {
+      const a = campAgg.get(key);
+      const cv = convByCampaign.get(key) ?? { revenue: 0, bookings: 0 };
+      const spend = a?.spend ?? 0;
+      return {
+        campaignName: a?.campaignName ?? key,
+        spend, revenue: cv.revenue, bookings: cv.bookings,
+        roas: spend > 0 ? cv.revenue / spend : null,
+        ctr: a && a.impressions > 0 ? (a.clicks / a.impressions) * 100 : 0,
+      };
+    })
     .sort((x, y) => y.revenue - x.revenue || y.spend - x.spend)
     .slice(0, 5);
 
+  // Daily trend: spend (snapshots) + revenue/bookings (tracked conversions).
+  const revByDay = new Map<string, { revenue: number; bookings: number }>();
+  for (const c of gConv) {
+    const k = dayKey(c.createdAt);
+    const row = revByDay.get(k) ?? { revenue: 0, bookings: 0 };
+    row.revenue += num(c.conversionValue); row.bookings += 1;
+    revByDay.set(k, row);
+  }
   const trend = dayKeys(start, end).map((date) => ({
     date,
-    spend: byDay.get(date)?.spend ?? 0,
-    revenue: byDay.get(date)?.revenue ?? 0,
-    bookings: Math.round(byDay.get(date)?.bookings ?? 0),
+    spend: spendByDay.get(date) ?? 0,
+    revenue: revByDay.get(date)?.revenue ?? 0,
+    bookings: revByDay.get(date)?.bookings ?? 0,
   }));
 
   return {
     channelType: "paid_ads", channelName: "Google Ads",
     hasData: true,
-    kpis, accounts, topCampaigns, topCreatives: null, trend,
+    kpis, accounts, topCampaigns, topCreatives: null, trend, health,
   };
 }
 

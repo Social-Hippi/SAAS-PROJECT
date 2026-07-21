@@ -6,7 +6,7 @@ import autoTable from "jspdf-autotable";
 import { prisma } from "@/lib/prisma";
 import { agencyScopedFor } from "@/lib/tenant-scope";
 import { loadHotelReport } from "@/lib/report-data";
-import { loadChannelView, type ChannelView } from "@/lib/channel-view";
+import { loadChannelView, type ChannelView, type PaidChannelView } from "@/lib/channel-view";
 import { loadGa4Dashboard } from "@/lib/ga4-dashboard";
 import { aggregateRevenueBySource, type ConversionRow } from "@/lib/revenue-by-source";
 import { computeFunnel, stageRank } from "@/lib/funnel";
@@ -371,17 +371,36 @@ function renderChannels(
   const byName = (name: string) => views.find((v) => v?.channelName === name) ?? null;
   const none = (t: string) => h.para(t, { size: 9.5, color: MUTE, gap: 6 });
 
+  // A blocking diagnosis on `paid.attribution` means booking/revenue figures for
+  // that channel are not measurable — the report must show the reason, not a 0.
+  const blockingAttributionDiagnosis = (v: PaidChannelView) =>
+    v.health?.diagnoses.find(
+      (d) => d.severity === "blocking" && d.capabilitiesBlocked.includes("paid.attribution"),
+    ) ?? null;
+  const attributionUsable = (v: PaidChannelView) => blockingAttributionDiagnosis(v) == null;
+
   for (const [name, label] of [["Meta Ads", "Meta Ads (Facebook & Instagram)"], ["Google Ads", "Google Ads"]] as const) {
     const v = byName(name);
     h.subhead(label);
     if (!v || v.channelType !== "paid_ads") { none("No data for this period."); continue; }
     if (v.integrationStatus === "not_connected" || !v.kpis) { none("Not connected for this hotel."); continue; }
     const k = v.kpis;
+    // "Bookings" must be the TRACKED count (k.bookings), never the platform's own
+    // conversion count (k.conversions) — those are different things, and printing
+    // the latter under this label is what made the report contradict itself.
+    const attributable = attributionUsable(v);
     h.kvLine([
       ["Spend", money(k.totalSpend)], ["Times shown", formatNumber(k.impressions)], ["Clicks to site", formatNumber(k.linkClicks)],
-      ["Bookings", formatNumber(k.conversions)], ["Back per ₹1", `₹${(k.roas ?? 0).toFixed(2)}`],
+      ...(attributable
+        ? ([["Bookings", formatNumber(k.bookings)], ["Back per ₹1", `₹${(k.roas ?? 0).toFixed(2)}`]] as [string, string][])
+        : ([] as [string, string][])),
     ]);
-    if (v.topCampaigns && v.topCampaigns.length > 0) {
+    if (!attributable) {
+      // Never print a zero we did not measure — say why instead.
+      const d = blockingAttributionDiagnosis(v);
+      none(d ? `${d.summary} ${d.remedy?.instruction ?? ""}`.trim() : "Bookings from this channel cannot be attributed for this period.");
+    }
+    if (attributable && v.topCampaigns && v.topCampaigns.length > 0) {
       h.table(["Campaign", "Spend", "Revenue", "Bookings", "Back per ₹1"],
         v.topCampaigns.slice(0, 5).map((c) => [c.campaignName, money(c.spend), money(c.revenue), formatNumber(c.bookings), `₹${(c.roas ?? 0).toFixed(2)}`]),
         [1, 2, 3, 4]);
