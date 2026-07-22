@@ -6,6 +6,17 @@
    regenerate the minified public/t.js that hotels actually load. */
 (function () {
   "use strict";
+  // Idempotency guard. If the snippet tag is accidentally included more than once
+  // on the same page (a common WordPress/theme misconfiguration), the whole IIFE
+  // would otherwise run once per tag — duplicating the pageview, the config fetch,
+  // the session/click/form/conversion listeners, and every event beacon. Scripts
+  // execute sequentially, so the first inclusion claims the flag and every later
+  // inclusion returns here before any side effect. Reading/writing this property
+  // cannot throw in a browser, so it is safe to run ahead of the outer try. A
+  // single inclusion sees the flag unset and initializes exactly as before. The
+  // name is deliberately verbose and namespaced to avoid host-page collisions.
+  if (window.__HOTELTRACK_SNIPPET_INITIALIZED__) return;
+  window.__HOTELTRACK_SNIPPET_INITIALIZED__ = true;
   try {
     // 1. Find our own <script> tag and read the Hotel Site ID from its src.
     var me = document.currentScript;
