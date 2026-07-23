@@ -19,6 +19,11 @@ const isPublicRoute = createRouteMatcher([
   // session itself and simply skips analytics when there's no session.
   "/setup-guide(.*)",
   "/api/guide(.*)",
+  // Public legal pages. The Privacy Policy MUST be reachable without a session:
+  // Meta and Google both require a publicly-loading Privacy Policy URL before an
+  // app can leave Development mode, and a Clerk redirect to /sign-in makes the
+  // URL return 307 instead of 200, which fails their automated verification.
+  "/privacy-policy(.*)",
   // Public, UUID-addressed hotel report links. No login: access is gated by the
   // unguessable token (and an optional password) inside the route itself.
   "/share(.*)",
@@ -48,6 +53,16 @@ const isPublicRoute = createRouteMatcher([
   // Instagram OAuth callback: the browser arrives from instagram.com; the
   // signed 10-minute state token (bound to agency + hotel) is the auth.
   "/api/auth/instagram/callback(.*)",
+  // Meta (Facebook Ads) OAuth callback: the browser arrives from facebook.com;
+  // the signed 10-minute state token (bound to agency + hotel) is the auth —
+  // exactly like the Instagram / GA4 / Google Ads callbacks above.
+  //
+  // This entry was MISSING, which made Meta the only OAuth callback still behind
+  // Clerk. A session-less return from Facebook (expired session mid-flow, a
+  // cookie-partitioning browser, or any cross-site navigation that drops the
+  // __session cookie) was 307-redirected to /sign-in, so the ?code never reached
+  // the handler and the connection silently failed with no error surfaced.
+  "/api/auth/meta/callback(.*)",
   // Razorpay posts webhooks with no Clerk session; the route verifies the
   // Razorpay HMAC-SHA256 signature instead.
   "/api/webhooks/razorpay(.*)",

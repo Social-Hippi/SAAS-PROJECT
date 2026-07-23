@@ -533,14 +533,44 @@ export const META_OAUTH_SCOPES = ["ads_read", "business_management"] as const;
 // stores this far-future sentinel for those (mirrors the manual flow).
 export const META_NEVER_EXPIRES = new Date("2999-12-31T00:00:00.000Z");
 
+/**
+ * The OAuth callback URL, derived the SAME way as Google Ads / GA4
+ * (lib/google-ads.ts googleAdsRedirectUri, lib/ga4.ts). Explicit env wins;
+ * otherwise it is built from the canonical public origin.
+ *
+ * WHY THE FALLBACK MATTERS: Meta previously *threw* when
+ * META_OAUTH_REDIRECT_URI was unset, while Google Ads silently fell back to
+ * the correct origin — which is precisely why Google Ads worked and Meta did
+ * not. Deriving from one canonical origin also removes the www/non-www skew:
+ * hoteltrack.in 308-redirects to www.hoteltrack.in, so the registered URI (and
+ * therefore this value) MUST be the www form. A non-www value produces Meta's
+ * "URL Blocked" / Instagram's "Invalid redirect_uri".
+ */
+export function metaRedirectUri(): string {
+  const explicit = process.env.META_OAUTH_REDIRECT_URI?.trim();
+  if (explicit) return explicit;
+  const origin = (process.env.NEXT_PUBLIC_APP_URL || "https://www.hoteltrack.in").replace(/\/+$/, "");
+  return `${origin}/api/auth/meta/callback`;
+}
+
 function oauthEnv(): { appId: string; appSecret: string; redirectUri: string } {
   const appId = process.env.META_APP_ID;
   const appSecret = process.env.META_APP_SECRET;
-  const redirectUri = process.env.META_OAUTH_REDIRECT_URI;
   if (!appId) throw new Error("META_APP_ID is not configured.");
   if (!appSecret) throw new Error("META_APP_SECRET is not configured.");
-  if (!redirectUri) throw new Error("META_OAUTH_REDIRECT_URI is not configured.");
-  return { appId, appSecret, redirectUri };
+  return { appId, appSecret, redirectUri: metaRedirectUri() };
+}
+
+/**
+ * Optional Facebook Login for Business configuration id. When set, the login
+ * dialog is driven by the Configuration created in the App Dashboard
+ * (Login product → Configurations) and `config_id` REPLACES `scope` — that is
+ * Meta's documented contract, and mixing the two is explicitly discouraged.
+ * When unset we fall back to classic Facebook Login with `scope`, preserving
+ * the previous behaviour exactly.
+ */
+function metaLoginConfigId(): string | null {
+  return process.env.META_LOGIN_CONFIG_ID?.trim() || null;
 }
 
 /**
@@ -548,14 +578,26 @@ function oauthEnv(): { appId: string; appSecret: string; redirectUri: string } {
  * is the EXACT one registered in the Meta app (no dynamic redirects) — Meta
  * rejects the request on its own screen if it doesn't match a whitelisted URI.
  * Throws if the Meta app env vars are missing.
+ *
+ * Two modes, decided by META_LOGIN_CONFIG_ID:
+ *   set   → Facebook Login for Business (config_id, no scope)
+ *   unset → classic Facebook Login (scope)
+ * The mode MUST match the product configured on the Meta app, or the dialog
+ * fails to load / reports the app as inaccessible.
  */
 export function buildMetaAuthorizeUrl(state: string): string {
   const { appId, redirectUri } = oauthEnv();
+  const configId = metaLoginConfigId();
   const u = new URL(`https://www.facebook.com/${GRAPH_API_VERSION}/dialog/oauth`);
   u.searchParams.set("client_id", appId);
   u.searchParams.set("redirect_uri", redirectUri);
   u.searchParams.set("response_type", "code");
-  u.searchParams.set("scope", META_OAUTH_SCOPES.join(","));
+  if (configId) {
+    // Facebook Login for Business: permissions come from the Configuration.
+    u.searchParams.set("config_id", configId);
+  } else {
+    u.searchParams.set("scope", META_OAUTH_SCOPES.join(","));
+  }
   u.searchParams.set("state", state);
   return u.toString();
 }

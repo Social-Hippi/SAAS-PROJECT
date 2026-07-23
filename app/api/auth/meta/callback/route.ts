@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { rateLimit, tooManyRequests, clientIpFromHeaders } from "@/lib/ratelimit";
 import { verifyOauthState } from "@/lib/signed-state";
 import { encryptWithAudit } from "@/lib/token-audit";
 import { queueBackfillJob } from "@/lib/backfill";
@@ -8,6 +9,7 @@ import {
   exchangeForLongLivedToken,
   validateToken,
   getAdAccounts,
+  metaRedirectUri,
   META_OAUTH_SCOPES,
   META_NEVER_EXPIRES,
 } from "@/lib/meta";
@@ -45,11 +47,21 @@ function returnUrl(hotelClientId: string, params: Record<string, string>): strin
 }
 
 export async function GET(request: Request) {
+  // Per-IP cap to slow brute-forcing of the signed state token. Fails CLOSED.
+  // Mirrors the Instagram callback — this route is public (see proxy.ts), so the
+  // signed state is the ONLY credential and must be rate-limited like one.
+  const rl = await rateLimit("oauthCallback", clientIpFromHeaders(request.headers));
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
+
   const url = new URL(request.url);
   const state = (url.searchParams.get("state") ?? "").trim();
   const code = (url.searchParams.get("code") ?? "").trim();
   const oauthError = url.searchParams.get("error");
   const oauthErrorReason = url.searchParams.get("error_reason");
+  // Meta puts the ACTIONABLE text here ("App is not active", "Permissions error",
+  // App Review / Advanced Access refusals). Previously dropped, which is why the
+  // logs showed a bare access_denied with no cause.
+  const oauthErrorDescription = url.searchParams.get("error_description");
 
   console.log(
     `${LOG} callback hit:`,
@@ -59,8 +71,13 @@ export async function GET(request: Request) {
       hasState: !!state,
       oauthError: oauthError ?? null,
       oauthErrorReason: oauthErrorReason ?? null,
+      oauthErrorDescription: oauthErrorDescription ?? null,
       META_APP_ID: process.env.META_APP_ID ? "(set)" : "(unset)",
-      META_OAUTH_REDIRECT_URI: process.env.META_OAUTH_REDIRECT_URI ?? "(unset)",
+      // Log the EFFECTIVE value (env or derived), not just the raw env — the raw
+      // env being unset is no longer an error, so the raw value alone misleads.
+      metaRedirectUri_effective: metaRedirectUri(),
+      META_OAUTH_REDIRECT_URI_raw: process.env.META_OAUTH_REDIRECT_URI ?? "(unset → derived)",
+      META_LOGIN_CONFIG_ID: process.env.META_LOGIN_CONFIG_ID ? "(set → Business Login)" : "(unset → classic scope)",
       META_APP_SECRET_present: !!process.env.META_APP_SECRET,
     }),
   );
@@ -87,7 +104,8 @@ export async function GET(request: Request) {
   // User denied on Facebook's screen, or Meta returned an error (no code).
   if (oauthError || !code) {
     console.warn(
-      `${LOG} no code / oauth error (${oauthError ?? "missing code"}; reason=${oauthErrorReason ?? "n/a"}) → access_denied`,
+      `${LOG} no code / oauth error (${oauthError ?? "missing code"}; reason=${oauthErrorReason ?? "n/a"}; ` +
+        `description=${oauthErrorDescription ?? "n/a"}) → access_denied`,
     );
     redirect(returnUrl(hotelClientId, { meta_error: "access_denied" }));
   }
