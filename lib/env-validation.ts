@@ -26,33 +26,79 @@ function isEmpty(v: string | undefined): boolean {
   return v == null || v.trim() === "";
 }
 
-/** A provider's required vars; validated as a group (all-or-partial-or-none). */
+/**
+ * A provider's CREDENTIAL vars; validated as a group (all-or-partial-or-none).
+ *
+ * Redirect URIs are deliberately NOT listed here. Every provider derives its
+ * callback from NEXT_PUBLIC_APP_URL when the explicit var is absent
+ * (metaRedirectUri / instagramRedirectUri / ga4RedirectUri / googleAdsRedirectUri),
+ * so an omitted *_REDIRECT_URI is a valid, fully-working configuration. Treating
+ * one as a missing group member made the validator report a "partial config"
+ * FATAL and refuse to boot a correctly-configured deployment.
+ */
 type ProviderGroup = { name: string; vars: string[] };
 
 const PROVIDERS: ProviderGroup[] = [
   {
     name: "Instagram",
-    vars: ["INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET", "INSTAGRAM_REDIRECT_URI"],
+    vars: ["INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET"],
   },
   {
     name: "Google / GA4",
-    vars: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GA4_REDIRECT_URI"],
+    vars: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"],
   },
   {
-    // Meta Ads (ad ROI). Note the redirect var is META_OAUTH_REDIRECT_URI —
-    // lib/meta.ts reads that exact name, and the route is /api/auth/meta/callback.
+    // Meta Ads (ad ROI). The callback route is /api/auth/meta/callback; the
+    // optional override var is META_OAUTH_REDIRECT_URI (see lib/meta.ts).
     name: "Meta",
-    vars: ["META_APP_ID", "META_APP_SECRET", "META_OAUTH_REDIRECT_URI"],
+    vars: ["META_APP_ID", "META_APP_SECRET"],
   },
   {
     // Google Ads reuses the GOOGLE_OAUTH_* client (validated by the GA4 group
-    // above), so only its OWN vars are grouped here — otherwise a GA4-only
-    // deployment would trip the partial-config guard. Ads-specific: a platform
-    // developer token + its dedicated OAuth redirect URI.
+    // above), so only its OWN var is grouped here — otherwise a GA4-only
+    // deployment would trip the partial-config guard.
     name: "Google Ads",
-    vars: ["GOOGLE_ADS_DEVELOPER_TOKEN", "GOOGLE_ADS_REDIRECT_URI"],
+    vars: ["GOOGLE_ADS_DEVELOPER_TOKEN"],
   },
 ];
+
+/**
+ * Optional redirect-URI overrides. Not required (each is derived), but when one
+ * IS set it must be an absolute https URL on the canonical origin — a non-www
+ * value against a www-canonical deployment is exactly what produced Meta's
+ * "URL Blocked" and Instagram's "Invalid redirect_uri". Warn loudly; never crash.
+ */
+const REDIRECT_URI_VARS = [
+  "META_OAUTH_REDIRECT_URI",
+  "INSTAGRAM_REDIRECT_URI",
+  "GA4_REDIRECT_URI",
+  "GOOGLE_ADS_REDIRECT_URI",
+] as const;
+
+function checkRedirectUris(): void {
+  const appOrigin = (process.env.NEXT_PUBLIC_APP_URL ?? "").trim().replace(/\/+$/, "");
+  for (const name of REDIRECT_URI_VARS) {
+    const raw = process.env[name]?.trim();
+    if (!raw) continue; // absent is fine — it is derived
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      console.warn(`[ENV] WARNING: ${name} is not an absolute URL ("${raw}"). OAuth will fail.`);
+      continue;
+    }
+    if (process.env.NODE_ENV === "production" && u.protocol !== "https:") {
+      console.warn(`[ENV] WARNING: ${name} must use https in production (got "${u.protocol}").`);
+    }
+    if (appOrigin && !raw.startsWith(`${appOrigin}/`)) {
+      console.warn(
+        `[ENV] WARNING: ${name} ("${u.origin}") does not sit on NEXT_PUBLIC_APP_URL ("${appOrigin}"). ` +
+          `The provider redirects to the registered URI, so a host mismatch (typically www vs non-www) ` +
+          `causes "URL Blocked" / "Invalid redirect_uri". Align both, or unset ${name} to derive it.`,
+      );
+    }
+  }
+}
 
 const PLATFORM_WARNING =
   "These are PLATFORM-LEVEL credentials shared by every hotel — set them ONCE and " +
@@ -167,6 +213,9 @@ export function validatePlatformEnv(): void {
   const strict =
     process.env.STRICT_ENV_VALIDATION === "1" ||
     process.env.STRICT_ENV_VALIDATION === "true";
+
+  // ── Optional redirect-URI overrides (warn-only) ─────────────────────────────
+  checkRedirectUris();
 
   // ── Per-provider groups ─────────────────────────────────────────────────────
   for (const provider of PROVIDERS) {

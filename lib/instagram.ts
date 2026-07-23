@@ -97,16 +97,31 @@ async function igGet<T>(
 // OAuth — code exchange, long-lived exchange, refresh
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The Instagram OAuth callback URL. Explicit env wins; otherwise derived from
+ * the canonical public origin, the same way Google Ads / GA4 / Meta do it.
+ *
+ * The live "Invalid redirect_uri" failure was caused by this value disagreeing
+ * with the URI registered on the Meta app: hoteltrack.in 308-redirects to
+ * www.hoteltrack.in, so the registered (and therefore configured) URI must be
+ * the www form. Deriving it from ONE origin removes the skew permanently.
+ */
+export function instagramRedirectUri(): string {
+  const explicit = process.env.INSTAGRAM_REDIRECT_URI?.trim();
+  if (explicit) return explicit;
+  const origin = (process.env.NEXT_PUBLIC_APP_URL || "https://www.hoteltrack.in").replace(/\/+$/, "");
+  return `${origin}/api/auth/instagram/callback`;
+}
+
 function oauthEnv() {
   const clientId = process.env.INSTAGRAM_APP_ID;
   const clientSecret = process.env.INSTAGRAM_APP_SECRET;
-  const redirectUri = process.env.INSTAGRAM_REDIRECT_URI;
-  if (!clientId || !clientSecret || !redirectUri) {
+  if (!clientId || !clientSecret) {
     throw new InstagramApiError(
-      "Instagram Login is not configured — set INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET and INSTAGRAM_REDIRECT_URI.",
+      "Instagram Login is not configured — set INSTAGRAM_APP_ID and INSTAGRAM_APP_SECRET.",
     );
   }
-  return { clientId, clientSecret, redirectUri };
+  return { clientId, clientSecret, redirectUri: instagramRedirectUri() };
 }
 
 /** The authorize URL the browser is redirected to from /api/auth/instagram/start. */
