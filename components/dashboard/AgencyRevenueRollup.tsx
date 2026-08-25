@@ -26,7 +26,11 @@ const RANGES = [{ key: "7", label: "7d" }, { key: "30", label: "30d" }, { key: "
 
 type Hotel = { id: string; name: string };
 type Overview = {
-  totalRevenue: number; totalBookings: number; totalAdSpend: number; roas: number | null;
+  totalRevenue: number; totalBookings: number;
+  // Phase 0: NULL when the agency's ad accounts report in currencies that
+  // cannot be safely combined. Must render "—", never ₹0 — formatCurrency(null)
+  // silently produces "₹0", which reads as "spent nothing".
+  totalAdSpend: number | null; roas: number | null;
   activeHotelsCount: number; totalHotelsCount: number;
   topSource: { key: string; revenue: number } | null;
   topHotel: { hotelClientId: string; name: string; revenue: number } | null;
@@ -145,7 +149,13 @@ export function AgencyRevenueRollup({ hotels }: { hotels: Hotel[] }) {
           tone={overview?.periodOverPeriodGrowth != null ? (overview.periodOverPeriodGrowth >= 0 ? "text-success" : "text-danger") : undefined} />
         <Kpi label="Total bookings" value={overview ? formatNumber(overview.totalBookings) : "—"} />
         <Kpi label="ROAS" value={overview ? (overview.roas == null ? "—" : formatMultiple(overview.roas)) : "—"}
-          hint={overview ? `Ad spend ${formatCurrency(overview.totalAdSpend, { compact: true })}` : undefined} />
+          hint={
+            overview
+              ? overview.totalAdSpend == null
+                ? "Ad spend — (accounts report in different currencies)"
+                : `Ad spend ${formatCurrency(overview.totalAdSpend, { compact: true })}`
+              : undefined
+          } />
         <Kpi label="Active hotels" value={overview ? `${overview.activeHotelsCount} of ${overview.totalHotelsCount}` : "—"} hint="generating bookings" />
       </div>
 

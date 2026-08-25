@@ -114,9 +114,13 @@ export function PublicReport({
               <KpiCard
                 label="Cost / booking"
                 value={kpis.costPerBooking == null ? "—" : formatCurrencyCents(kpis.costPerBooking)}
-                hint="Ad spend ÷ bookings"
+                hint="Paid ad spend ÷ paid bookings"
               />
-              <KpiCard label="Overall ROAS" value={formatMultiple(kpis.roas)} hint="Revenue ÷ ad spend" />
+              <KpiCard
+                label="Overall ROAS"
+                value={formatMultiple(kpis.roas)}
+                hint="Paid revenue ÷ paid ad spend"
+              />
             </>
           )}
         </div>
@@ -154,7 +158,28 @@ export function PublicReport({
             {showAdSpend && (
               <div className="bg-card p-4">
                 <p className="text-xs font-medium uppercase tracking-wide text-ink-tertiary">Ad spend</p>
-                <p className="mt-1 text-xl font-semibold tabular-nums text-ink">{formatCurrency(ads.spend)}</p>
+                {/* Phase 0: the COMBINED paid spend (Meta + Google) — the same
+                    basis the "Overall ROAS" KPI above divides by. This tile used
+                    to show `ads.spend`, which is Meta-only, so on a hotel running
+                    Google Ads the spend shown and the spend the ROAS used were
+                    different numbers. Null (currencies not safely combinable)
+                    renders "—", never ₹0: an unavailable total must not read as
+                    "no spend". */}
+                <p className="mt-1 text-xl font-semibold tabular-nums text-ink">
+                  {kpis.spend == null ? "—" : formatCurrency(kpis.spend)}
+                </p>
+                {kpis.spend == null ? (
+                  <p className="mt-0.5 text-xs text-ink-tertiary">
+                    Ad accounts report in different currencies
+                  </p>
+                ) : (
+                  kpis.spendByPlatform.google > 0 && (
+                    <p className="mt-0.5 text-xs text-ink-tertiary">
+                      {formatCurrency(kpis.spendByPlatform.meta, { compact: true })} Meta ·{" "}
+                      {formatCurrency(kpis.spendByPlatform.google, { compact: true })} Google
+                    </p>
+                  )
+                )}
               </div>
             )}
             <div className="bg-card p-4">
@@ -182,8 +207,11 @@ export function PublicReport({
           </div>
           {showAdSpend && (
             <div className="p-4">
+              {/* `ads.spendOverTime` is Meta-only (it comes from AdSnapshot), so
+                  it is labelled as such — otherwise it reads as a breakdown of
+                  the combined "Ad spend" tile above. */}
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-tertiary">
-                Spend over time
+                Meta spend over time
               </p>
               <SpendChart data={ads.spendOverTime} />
             </div>

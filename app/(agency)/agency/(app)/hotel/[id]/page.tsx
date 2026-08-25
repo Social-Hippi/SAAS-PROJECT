@@ -83,6 +83,7 @@ import { shouldShowContactBanner } from "@/lib/agency-contact";
 import { ChannelSelector } from "@/components/dashboard/ChannelSelector";
 import { ChannelView } from "@/components/dashboard/ChannelView";
 import { isChannelKey, type ChannelKey } from "@/lib/channel-view";
+import { getSpendByPlatform } from "@/lib/ad-spend";
 
 const POST_TYPES = ["image", "video", "carousel", "reels"] as const;
 type PostType = (typeof POST_TYPES)[number];
@@ -332,8 +333,11 @@ export default async function HotelDashboardPage({
     pixelMode
       ? Promise.resolve([] as Array<{
           eventType: "visit" | "conversion";
+          utmSource: string | null;
+          utmMedium: string | null;
           utmContent: string | null;
           utmCampaign: string | null;
+          gclid: string | null; gbraid: string | null; wbraid: string | null; fbclid: string | null;
           sessionId: string;
           conversionValue: import("@prisma/client").Prisma.Decimal | null;
         }>)
@@ -344,8 +348,12 @@ export default async function HotelDashboardPage({
           },
           select: {
             eventType: true,
+            // Phase 0: needed to classify paid vs non-paid revenue for ROAS.
+            utmSource: true,
+            utmMedium: true,
             utmContent: true,
             utmCampaign: true,
+            gclid: true, gbraid: true, wbraid: true, fbclid: true,
             sessionId: true,
             conversionValue: true,
           },
@@ -533,21 +541,25 @@ export default async function HotelDashboardPage({
   const periodMs = range.until.getTime() - range.since.getTime();
   const prevSince = new Date(range.since.getTime() - periodMs);
   const prevUntil = range.since;
-  const [prevConversions, prevSpendAgg, websiteVisits, prevWebsiteVisits] = await Promise.all([
+  const [prevConversions, prevPaidSpend, websiteVisits, prevWebsiteVisits] = await Promise.all([
     pixelMode
-      ? Promise.resolve([] as { conversionValue: import("@prisma/client").Prisma.Decimal | null }[])
+      ? Promise.resolve([] as {
+          utmSource: string | null;
+          utmMedium: string | null;
+          conversionValue: import("@prisma/client").Prisma.Decimal | null;
+          gclid: string | null; gbraid: string | null; wbraid: string | null; fbclid: string | null;
+        }[])
       : agencyScoped(prisma.trackingEvent).findMany({
           where: {
             hotelClientId: hotel.id,
             eventType: "conversion",
             createdAt: { gte: prevSince, lt: prevUntil },
           },
-          select: { conversionValue: true },
+          // Phase 0: source/medium so the previous period is measured on the
+          // SAME paid-only basis as the current one (else every delta is noise).
+          select: { utmSource: true, utmMedium: true, conversionValue: true, gclid: true, gbraid: true, wbraid: true, fbclid: true, },
         }),
-    agencyScoped(prisma.adSnapshot).aggregate({
-      where: { hotelClientId: hotel.id, archived: false, date: { gte: prevSince, lt: prevUntil } },
-      _sum: { spend: true },
-    }),
+    getSpendByPlatform(hotel.id, prevSince, prevUntil),
     // Website visits = distinct browsing sessions in the range (Phase 1 journey
     // capture; recorded regardless of pixel mode, unlike snippet "visit" events).
     // Plus the previous-period count for the KPI delta badge.
@@ -764,10 +776,13 @@ export default async function HotelDashboardPage({
   const contentInputs: ContentInput[] = content;
   const eventInputs: EventInput[] = events.map((e) => ({
     eventType: e.eventType,
+    utmSource: e.utmSource,
+    utmMedium: e.utmMedium,
     utmContent: e.utmContent,
     utmCampaign: e.utmCampaign,
     sessionId: e.sessionId,
     conversionValue: e.conversionValue == null ? null : Number(e.conversionValue),
+    gclid: e.gclid, gbraid: e.gbraid, wbraid: e.wbraid, fbclid: e.fbclid,
   }));
   const snapshotInputs: AdSnapshotInput[] = snapshots.map((s) => ({
     date: s.date,
@@ -782,7 +797,10 @@ export default async function HotelDashboardPage({
 
   // ── Compute ──
   const ads = computeAdsSummary(snapshotInputs);
-  const kpis = computeKpis(eventInputs, ads.spend);
+  // Phase 0: KPIs divide by CANONICAL paid spend (Meta + Google) — `ads.spend`
+  // is Meta-only and stays that way (it drives the Meta-reported block).
+  const paidSpend = await getSpendByPlatform(hotel.id, range.since, range.until);
+  const kpis = computeKpis(eventInputs, paidSpend);
   const contentPerf = computeContentPerformance(contentInputs, eventInputs);
   const influencerRows = computeInfluencerImpact(contentInputs, redemptionInputs);
 
@@ -1023,25 +1041,55 @@ export default async function HotelDashboardPage({
 
   // ── Mission-control derived metrics ──────────────────────────────────────
   // Previous-period rollups for the delta badges.
-  const prevRevenue = prevConversions.reduce((s, e) => s + (e.conversionValue == null ? 0 : Number(e.conversionValue)), 0);
-  const prevBookings = prevConversions.length;
-  const prevSpend = Number(prevSpendAgg._sum.spend ?? 0);
-  const prevRoas = prevSpend > 0 ? prevRevenue / prevSpend : null;
+  // Phase 0: run the previous period through the SAME computeKpis, so prevRoas /
+  // prevCpb are paid-only exactly like the current period. Comparing a paid ROAS
+  // against a blended one produced meaningless delta badges.
+  const prevKpis = computeKpis(
+    prevConversions.map((e) => ({
+      eventType: "conversion" as const,
+      utmSource: e.utmSource,
+      utmMedium: e.utmMedium,
+      utmContent: null,
+      utmCampaign: null,
+      sessionId: "",
+      conversionValue: e.conversionValue == null ? null : Number(e.conversionValue),
+      gclid: e.gclid, gbraid: e.gbraid, wbraid: e.wbraid, fbclid: e.fbclid,
+    })),
+    prevPaidSpend,
+  );
+  const prevRevenue = prevKpis.revenue;
+  const prevBookings = prevKpis.bookings;
+  const prevSpend = prevPaidSpend.total ?? 0;
+  const prevRoas = prevKpis.roas;
   const prevAdr = prevBookings > 0 ? prevRevenue / prevBookings : null;
-  const prevCpb = prevBookings > 0 ? prevSpend / prevBookings : null;
+  const prevCpb = prevKpis.costPerBooking;
   // Fractional change vs previous; null when there's no prior baseline.
   const pctDelta = (cur: number | null, prev: number | null): number | null =>
     prev == null || prev === 0 || cur == null ? null : (cur - prev) / prev;
+
+  // A paid figure is meaningful when EITHER paid platform is in play. Meta alone
+  // used to gate these cards, which hid spend/ROAS from Google-only hotels.
+  const paidConnected = metaConnected || paidSpend.google > 0;
+  // Spell out what the combined spend is made of, so "Ad spend" is never read as
+  // Meta-only again.
+  const paidSpendHint =
+    paidSpend.google > 0 && paidSpend.meta > 0
+      ? `${formatCurrency(paidSpend.meta, { compact: true })} Meta · ${formatCurrency(paidSpend.google, { compact: true })} Google`
+      : paidSpend.google > 0
+        ? "Google Ads"
+        : "Meta Ads";
 
   const adr = kpis.bookings > 0 ? kpis.revenue / kpis.bookings : null; // avg booking value
   const trueRoasColor =
     kpis.roas == null ? "text-ink" : kpis.roas > 4 ? "text-success" : kpis.roas >= 2 ? "text-warning" : "text-danger";
 
-  // Cost/booking divides total ad spend by *tracked* bookings, so with only a
-  // handful of tracked conversions the figure is meaningless (e.g. ₹7.6L / 2 =
+  // Cost/booking divides paid ad spend by *paid-attributed tracked* bookings, so
+  // with only a handful of them the figure is meaningless (e.g. ₹7.6L / 2 =
   // ₹3.8L per booking). Suppress it until tracking coverage is high enough.
+  // Phase 0: the reliability floor now counts PAID bookings — the denominator
+  // actually used — not every booking including organic ones.
   const MIN_CPB_BOOKINGS = 10;
-  const cpbReliable = kpis.costPerBooking != null && kpis.bookings >= MIN_CPB_BOOKINGS;
+  const cpbReliable = kpis.costPerBooking != null && kpis.paidBookings >= MIN_CPB_BOOKINGS;
 
   const kpiCards: KpiCardSpec[] = [
     {
@@ -1057,20 +1105,26 @@ export default async function HotelDashboardPage({
       delta: pctDelta(kpis.revenue, prevRevenue),
     },
     {
+      // Phase 0: combined PAID spend (Meta + Google), matching the ROAS
+      // denominator. Null when currencies can't be safely combined.
       label: "Ad spend",
-      value: metaConnected ? formatCurrency(ads.spend, { compact: true }) : "—",
-      title: metaConnected ? formatCurrency(ads.spend) : "Connect Meta Ads to see this metric",
-      delta: metaConnected ? pctDelta(ads.spend, prevSpend) : null,
+      value: paidConnected && kpis.spend != null ? formatCurrency(kpis.spend, { compact: true }) : "—",
+      title: !paidConnected
+        ? "Connect Meta or Google Ads to see this metric"
+        : kpis.spend == null
+          ? "Ad accounts report in different currencies — see each platform separately"
+          : formatCurrency(kpis.spend),
+      delta: paidConnected ? pctDelta(kpis.spend, prevSpend) : null,
       goodWhenUp: false,
-      hint: metaConnected ? undefined : "Meta not connected",
+      hint: paidConnected ? paidSpendHint : "No ad account connected",
     },
     {
       label: "True ROAS",
-      value: metaConnected ? formatMultiple(kpis.roas) : "—",
-      title: metaConnected ? undefined : "Connect Meta Ads to see this metric",
-      delta: metaConnected ? pctDelta(kpis.roas, prevRoas) : null,
-      valueClassName: metaConnected ? trueRoasColor : undefined,
-      hint: metaConnected ? "Real revenue ÷ spend" : "Meta not connected",
+      value: paidConnected ? formatMultiple(kpis.roas) : "—",
+      title: paidConnected ? undefined : "Connect Meta or Google Ads to see this metric",
+      delta: paidConnected ? pctDelta(kpis.roas, prevRoas) : null,
+      valueClassName: paidConnected ? trueRoasColor : undefined,
+      hint: paidConnected ? "Paid-channel revenue ÷ paid ad spend" : "No ad account connected",
     },
     { label: "Bookings", value: formatNumber(kpis.bookings), delta: pctDelta(kpis.bookings, prevBookings) },
     {
@@ -1082,19 +1136,19 @@ export default async function HotelDashboardPage({
     },
     {
       label: "Cost / booking",
-      value: metaConnected && cpbReliable ? formatCurrency(kpis.costPerBooking!, { compact: true }) : "—",
-      title: !metaConnected
-        ? "Connect Meta Ads to see this metric"
+      value: paidConnected && cpbReliable ? formatCurrency(kpis.costPerBooking!, { compact: true }) : "—",
+      title: !paidConnected
+        ? "Connect Meta or Google Ads to see this metric"
         : cpbReliable
           ? formatCurrency(kpis.costPerBooking!)
           : undefined,
-      delta: metaConnected && cpbReliable ? pctDelta(kpis.costPerBooking, prevCpb) : null,
+      delta: paidConnected && cpbReliable ? pctDelta(kpis.costPerBooking, prevCpb) : null,
       goodWhenUp: false,
-      hint: !metaConnected
-        ? "Meta not connected"
+      hint: !paidConnected
+        ? "No ad account connected"
         : cpbReliable
-          ? "Ad spend ÷ tracked bookings"
-          : `Needs ≥${MIN_CPB_BOOKINGS} tracked bookings`,
+          ? "Paid ad spend ÷ paid-attributed bookings"
+          : `Needs ≥${MIN_CPB_BOOKINGS} paid-attributed bookings`,
     },
   ];
 

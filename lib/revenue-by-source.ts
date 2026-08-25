@@ -1,5 +1,6 @@
 import { normalizeSource, normalizeMedium, normalizeCampaign } from "./utm-normalize";
 import { classifySourceType, type SourceType } from "./source-classifier";
+import type { ClickIds } from "./click-ids";
 
 // Revenue-by-source aggregation — pure, no DB, no "server-only", so the API
 // route and the tests share one implementation. Turns conversion rows into the
@@ -12,7 +13,7 @@ export function isGranularity(v: unknown): v is Granularity {
   return typeof v === "string" && (GRANULARITIES as readonly string[]).includes(v);
 }
 
-export type ConversionRow = {
+export type ConversionRow = ClickIds & {
   utmSource: string | null;
   utmMedium: string | null;
   utmCampaign: string | null;

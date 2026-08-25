@@ -23,9 +23,17 @@
     var base = src.origin;
     var DEBUG = src.searchParams.get("debug") === "1";
 
-    var VERSION = "2.3.0"; // v2.3 adds coupon capture; v2.2 = click/form/identify; v2.1 = funnel stages; v2.0 = journeys; v1 = visit.
+    var VERSION = "2.4.0"; // v2.4 adds ad click ids; v2.3 = coupon capture; v2.2 = click/form/identify; v2.1 = funnel stages; v2.0 = journeys; v1 = visit.
     var converted = false, observer = null, cfg = null, pending = false;
     var UTM = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"];
+    // Ad-platform CLICK IDENTIFIERS (v2.4). Stronger evidence than a UTM: the
+    // platform stamps these itself, so they survive an advertiser forgetting to
+    // tag a link — and Google Ads AUTO-TAGGING (the default) sends gclid with NO
+    // utm params at all, which is why those visits used to look "direct".
+    //   gclid/gbraid/wbraid — Google Ads only (gbraid/wbraid are the iOS variants)
+    //   fbclid              — Meta; note it is added to ORGANIC post links too
+    var CLICK_IDS = ["gclid", "gbraid", "wbraid", "fbclid"];
+    var CLICK_MAX = 255; // real ids are ~60–100 chars; longer is not a click id
     // Funnel stages in order; rank = index + 1 (awareness=1 … booking=4).
     var STAGES = ["awareness", "consideration", "intent", "booking"];
 
@@ -75,6 +83,58 @@
     }
     attr = attr || {};
 
+    // ── Ad click identifiers (v2.4) ────────────────────────────────────────
+    // Captured from the LANDING url and held in a first-party cookie so they
+    // survive internal navigation, later sessions, and the eventual conversion —
+    // the query string is gone after the first click-through, so without this the
+    // identifier would be lost on page 2. No third-party cookie, no localStorage.
+    //
+    // 90 days: Google Ads conversion windows run up to 90 days, so a shorter
+    // cookie would drop evidence Google itself would still credit. The window is
+    // SLIDING (re-stamped on every page) so an active visitor never ages out.
+    var CLICK_KEY = "_ht_clk", CLICK_DAYS = 90;
+    // Click ids are URL-safe tokens. A value outside that charset was tampered
+    // with or mis-parsed — reject it rather than "clean" it into a different
+    // string that could never match the ad platform's own records.
+    function normClickId(v) {
+      if (v == null) return null;
+      var s = String(v).trim();
+      if (!s || s.length > CLICK_MAX) return null;
+      return /^[A-Za-z0-9._-]+$/.test(s) ? s : null;
+    }
+    function urlClickIds() {
+      var q = new URLSearchParams(location.search), o = {}, has = false;
+      CLICK_IDS.forEach(function (k) {
+        var v = normClickId(q.get(k));
+        if (v) { o[k] = v; has = true; }
+      });
+      return has ? o : null;
+    }
+    // Merge is per-key and ADD-ONLY: a page without a click id (every internal
+    // navigation) can never erase one, while a genuinely new ad click replaces
+    // that platform's value. A Meta click after a Google click keeps both.
+    var clicks = parse(getCookie(CLICK_KEY) || "");
+    if (!clicks || typeof clicks !== "object" || clicks instanceof Array) clicks = {};
+    var landedClicks = urlClickIds();
+    if (landedClicks) {
+      CLICK_IDS.forEach(function (k) { if (landedClicks[k]) clicks[k] = landedClicks[k]; });
+    }
+    // Re-stamp on every load so the 90-day window slides for an active visitor.
+    var hasClicks = false;
+    CLICK_IDS.forEach(function (k) { if (clicks[k]) hasClicks = true; });
+    if (hasClicks) setCookie(CLICK_KEY, JSON.stringify(clicks), CLICK_DAYS);
+    // Copy of the stored ids for a payload. Only present keys are emitted, so an
+    // event never carries `"gclid": null` noise.
+    function clickIdPayload() {
+      var o = {};
+      CLICK_IDS.forEach(function (k) { if (clicks[k]) o[k] = clicks[k]; });
+      return o;
+    }
+    function addClickIds(payload) {
+      CLICK_IDS.forEach(function (k) { if (clicks[k]) payload[k] = clicks[k]; });
+      return payload;
+    }
+
     // Session id — per-tab browsing session held in sessionStorage, with a
     // 30-minute inactivity window. A new tab (fresh sessionStorage) or being idle
     // for >30 min starts a new session. "ht_session_last" records the last event
@@ -115,16 +175,29 @@
     function hostOf(u) { try { return new URL(u).host; } catch (e) { return ""; } }
     function buildTouch() {
       var u = urlUtms() || {};
-      return {
+      var t = {
         ts: Date.now(),
         utm_source: u.utm_source || null, utm_medium: u.utm_medium || null,
         utm_campaign: u.utm_campaign || null, utm_content: u.utm_content || null,
         referrer: clip(document.referrer || null, 200),
         landing_page: clip(location.href, 200)
       };
+      // Only THIS page's click ids (not the stored ones) belong on a touch — a
+      // touch describes one marketing interaction, so stamping the remembered id
+      // onto later touches would invent ad clicks that never happened.
+      // Absent keys are omitted to keep the journey cookie small (it is capped at
+      // 20 touches and browsers cap a cookie at ~4KB).
+      var c = landedClicks || {};
+      CLICK_IDS.forEach(function (k) { if (c[k]) t[k] = c[k]; });
+      return t;
     }
     function sameTouch(a, b) {
-      return !!a && !!b && a.utm_source === b.utm_source && a.utm_medium === b.utm_medium &&
+      if (!a || !b) return false;
+      // A new ad click is always a NEW touch, even on an otherwise identical page.
+      for (var ci = 0; ci < CLICK_IDS.length; ci++) {
+        if ((a[CLICK_IDS[ci]] || null) !== (b[CLICK_IDS[ci]] || null)) return false;
+      }
+      return a.utm_source === b.utm_source && a.utm_medium === b.utm_medium &&
         a.utm_campaign === b.utm_campaign && a.utm_content === b.utm_content && a.referrer === b.referrer;
     }
     var journey = parse(getCookie(JKEY) || "");
@@ -132,8 +205,13 @@
     var tp = buildTouch();
     var hasUtm = !!(tp.utm_source || tp.utm_medium || tp.utm_campaign || tp.utm_content);
     var extRef = !!(tp.referrer && hostOf(tp.referrer) && hostOf(tp.referrer) !== location.host);
+    // An ad click ALWAYS earns a touch. Auto-tagged Google traffic carries no UTM,
+    // and its referrer can be stripped (referrer-policy, app→web), so without this
+    // the strongest evidence we have would be dropped from the journey entirely.
+    var hasClick = false;
+    CLICK_IDS.forEach(function (k) { if (tp[k]) hasClick = true; });
     var lastTp = journey.length ? journey[journey.length - 1] : null;
-    if ((hasUtm || extRef || journey.length === 0) && !sameTouch(tp, lastTp)) {
+    if ((hasUtm || hasClick || extRef || journey.length === 0) && !sameTouch(tp, lastTp)) {
       journey.push(tp);
       if (journey.length > JMAX) journey = journey.slice(journey.length - JMAX);
     }
@@ -163,6 +241,10 @@
         pageUrl: location.href, sessionId: sid, deviceType: device(),
         value: value == null ? null : value
       };
+      // Ad click ids ride on EVERY visit and conversion (v2.4) — the stored ones,
+      // not just this page's, so a booking made three pages deep still carries
+      // the identifier of the ad click that started the journey.
+      addClickIds(payload);
       if (type === "conversion") {
         var j = parse(getCookie(JKEY) || "");
         payload.journey = (j instanceof Array) ? j : journey;
@@ -232,6 +314,9 @@
         utmCampaign: attr.utm_campaign || null, utmContent: attr.utm_content || null,
         utmTerm: attr.utm_term || null
       };
+      // Pageviews carry them too, so the Session row can be stamped with the ad
+      // click that started it (a session's landing evidence, not just the event's).
+      addClickIds(payload);
       post(JSON.stringify(payload));
       log("pageview", payload);
       maybeStageReached(stage);
@@ -699,6 +784,10 @@
           readCouponField: readCouponField,
           couponForConversion: couponForConversion,
           stashCoupon: stashCoupon,
+          // Ad click ids (v2.4).
+          normClickId: normClickId,
+          urlClickIds: urlClickIds,
+          getClickIds: clickIdPayload,
           VERSION: VERSION
         };
       } catch (e) {}

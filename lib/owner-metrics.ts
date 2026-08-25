@@ -2,7 +2,13 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
-import { classifySourceType, SOURCE_TYPE_LABEL, type SourceType } from "@/lib/source-classifier";
+import {
+  classifySourceType,
+  isPaidSourceType,
+  SOURCE_TYPE_LABEL,
+  type SourceType,
+} from "@/lib/source-classifier";
+import { getSpendByPlatform, safeRoas } from "@/lib/ad-spend";
 import { formatDuration } from "@/lib/format";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,81 +37,151 @@ import { formatDuration } from "@/lib/format";
 const num = (d: { toString(): string } | null | undefined): number =>
   d == null ? 0 : Number(d);
 
-// ── 1. Marketing spend (Meta only in v1; Google not integrated yet) ──────────
+// ── 1. Marketing spend (Meta + Google, via the canonical spend service) ──────
+//
+// Phase 0: this used to read AdSnapshot directly and return
+// `{ total: meta, meta, google: null }` — so "Marketing Spend" on the dashboard
+// was Meta-only while being labelled as the total across connected ad accounts.
+// Google Ads has been syncing into GoogleAdsCampaignSnapshot the whole time.
 
-export type MarketingSpend = { total: number; meta: number; google: number | null };
+export type MarketingSpend = {
+  /** meta + google, or NULL when the currencies can't be safely combined. */
+  total: number | null;
+  meta: number;
+  google: number;
+  /** True when a combined total would mix currencies (total is then null). */
+  mixedCurrency: boolean;
+  currency: string;
+};
 
 export async function calculateMarketingSpend(
   hotelClientId: string,
   startDate: Date,
   endDate: Date,
 ): Promise<MarketingSpend> {
-  const agg = await agencyScoped(prisma.adSnapshot).aggregate({
-    where: { hotelClientId, archived: false, date: { gte: startDate, lte: endDate } },
-    _sum: { spend: true },
-  });
-  const meta = num(agg._sum.spend);
-  return { total: meta, meta, google: null };
+  const spend = await getSpendByPlatform(hotelClientId, startDate, endDate);
+  return {
+    total: spend.total,
+    meta: spend.meta,
+    google: spend.google,
+    mixedCurrency: spend.mixedCurrency,
+    currency: spend.currency,
+  };
 }
 
 // ── 2. Cost per booking ──────────────────────────────────────────────────────
 
-export type CostPerBooking = { costPerBooking: number | null; bookings: number; totalSpend: number };
+export type CostPerBooking = {
+  /** Paid spend ÷ PAID-attributed bookings. Null when either side is unusable. */
+  costPerBooking: number | null;
+  /** Bookings classified meta_ads / google_ads — the actual denominator. */
+  paidBookings: number;
+  /** All tracked bookings, kept for context ("12 of 40 bookings were paid"). */
+  bookings: number;
+  /** Combined paid spend, or null when currencies can't be combined. */
+  totalSpend: number | null;
+};
 
+/**
+ * Phase 0: the denominator is now PAID-attributed bookings. Dividing paid ad
+ * spend by every tracked booking (including direct and organic ones) understated
+ * the real cost of acquiring a booking through ads, sometimes by an order of
+ * magnitude on hotels with strong direct traffic.
+ */
 export async function calculateCostPerBooking(
   hotelClientId: string,
   startDate: Date,
   endDate: Date,
 ): Promise<CostPerBooking> {
-  const [spendAgg, bookings] = await Promise.all([
-    agencyScoped(prisma.adSnapshot).aggregate({
-      where: { hotelClientId, archived: false, date: { gte: startDate, lte: endDate } },
-      _sum: { spend: true },
-    }),
-    agencyScoped(prisma.trackingEvent).count({
+  const [spend, conversions] = await Promise.all([
+    getSpendByPlatform(hotelClientId, startDate, endDate),
+    agencyScoped(prisma.trackingEvent).findMany({
       where: { hotelClientId, eventType: "conversion", createdAt: { gte: startDate, lte: endDate } },
+      select: { utmSource: true, utmMedium: true, utmContent: true, gclid: true, gbraid: true, wbraid: true, fbclid: true, },
     }),
   ]);
-  const totalSpend = num(spendAgg._sum.spend);
+
+  const bookings = conversions.length;
+  const paidBookings = conversions.filter((c) => isPaidSourceType(classifySourceType(c))).length;
+  const totalSpend = spend.total;
+
   return {
-    costPerBooking: bookings > 0 ? totalSpend / bookings : null,
+    costPerBooking:
+      totalSpend != null && totalSpend > 0 && paidBookings > 0 ? totalSpend / paidBookings : null,
+    paidBookings,
     bookings,
     totalSpend,
   };
 }
 
-// ── 3. ROAS (overall + Meta; Google null) ────────────────────────────────────
+// ── 3. ROAS (paid-only, per platform + combined) ─────────────────────────────
+//
+// PHASE 0 CORRECTION. `overall` was `totalRevenue / metaSpend` — every rupee of
+// booking revenue (direct, organic, influencer, email, WhatsApp, Google-driven)
+// divided by Meta-only ad spend, and shown to agencies and hotels as "ROAS". On
+// a hotel with strong direct traffic and modest Meta spend that produced a
+// spectacular, meaningless number.
+//
+// Now: paid revenue over paid spend, per platform and combined, with the blended
+// figure kept but honestly named.
 
-export type Roas = { overall: number | null; meta: number | null; google: number | null };
+export type Roas = {
+  /** (metaRevenue + googleRevenue) ÷ (metaSpend + googleSpend). THE ROAS. */
+  overall: number | null;
+  meta: number | null;
+  google: number | null;
+  /** ALL revenue ÷ paid spend. NOT return on ad spend — label it "Blended". */
+  blended: number | null;
+  /** Revenue classified meta_ads or google_ads. */
+  paidRevenue: number;
+  /** Everything else: direct, organic, influencer, email, whatsapp, other. */
+  nonPaidRevenue: number;
+  /** All tracked booking revenue = paidRevenue + nonPaidRevenue. */
+  totalRevenue: number;
+  metaRevenue: number;
+  googleRevenue: number;
+  /** True when overall/blended are null because currencies can't be combined. */
+  mixedCurrency: boolean;
+};
 
 export async function calculateROAS(
   hotelClientId: string,
   startDate: Date,
   endDate: Date,
 ): Promise<Roas> {
-  const [spendAgg, conversions] = await Promise.all([
-    agencyScoped(prisma.adSnapshot).aggregate({
-      where: { hotelClientId, archived: false, date: { gte: startDate, lte: endDate } },
-      _sum: { spend: true },
-    }),
+  const [spend, conversions] = await Promise.all([
+    getSpendByPlatform(hotelClientId, startDate, endDate),
     agencyScoped(prisma.trackingEvent).findMany({
       where: { hotelClientId, eventType: "conversion", createdAt: { gte: startDate, lte: endDate } },
-      select: { conversionValue: true, utmSource: true, utmMedium: true, utmContent: true },
+      select: { conversionValue: true, utmSource: true, utmMedium: true, utmContent: true, gclid: true, gbraid: true, wbraid: true, fbclid: true, },
     }),
   ]);
-  const metaSpend = num(spendAgg._sum.spend); // all integrated ad spend is Meta in v1
+
   let totalRevenue = 0;
   let metaRevenue = 0;
+  let googleRevenue = 0;
   for (const c of conversions) {
     const value = num(c.conversionValue);
     totalRevenue += value;
-    if (classifySourceType(c) === "meta_ads") metaRevenue += value;
+    const type = classifySourceType(c);
+    if (type === "meta_ads") metaRevenue += value;
+    else if (type === "google_ads") googleRevenue += value;
   }
-  // Use "—" (null) — not 0× — whenever the denominator is 0 (Part 5 #5).
+  const paidRevenue = metaRevenue + googleRevenue;
+
+  // safeRoas returns null — never 0× — whenever the denominator is missing or
+  // zero, so the UI keeps rendering "—" for "no data" (Part 5 #5).
   return {
-    overall: metaSpend > 0 ? totalRevenue / metaSpend : null,
-    meta: metaSpend > 0 ? metaRevenue / metaSpend : null,
-    google: null,
+    overall: safeRoas(paidRevenue, spend.total),
+    meta: safeRoas(metaRevenue, spend.meta),
+    google: safeRoas(googleRevenue, spend.google),
+    blended: safeRoas(totalRevenue, spend.total),
+    paidRevenue,
+    nonPaidRevenue: totalRevenue - paidRevenue,
+    totalRevenue,
+    metaRevenue,
+    googleRevenue,
+    mixedCurrency: spend.mixedCurrency,
   };
 }
 
@@ -306,24 +382,38 @@ export async function calculateTopCampaigns(
   endDate: Date,
   limit = 5,
 ): Promise<TopCampaigns> {
-  const [conversions, campaignSnaps] = await Promise.all([
+  const [conversions, campaignSnaps, googleCampaignSnaps] = await Promise.all([
     agencyScoped(prisma.trackingEvent).findMany({
       where: { hotelClientId, eventType: "conversion", createdAt: { gte: startDate, lte: endDate } },
-      select: { utmCampaign: true, utmSource: true, utmMedium: true, utmContent: true, conversionValue: true },
+      select: { utmCampaign: true, utmSource: true, utmMedium: true, utmContent: true, conversionValue: true, gclid: true, gbraid: true, wbraid: true, fbclid: true, },
     }),
     // Per-campaign Meta spend (AdSnapshot has no campaign dimension).
     agencyScoped(prisma.adCampaignSnapshot).findMany({
       where: { hotelClientId, archived: false, date: { gte: startDate, lte: endDate } },
       select: { campaignName: true, spend: true },
     }),
+    // Per-campaign GOOGLE spend. Phase 0: without this, a Google campaign's
+    // revenue was divided by whatever Meta campaign happened to share its name.
+    agencyScoped(prisma.googleAdsCampaignSnapshot).findMany({
+      where: { hotelClientId, date: { gte: startDate, lte: endDate } },
+      select: { campaignName: true, spend: true },
+    }),
   ]);
 
-  // Meta spend per campaign, keyed by case-insensitive trimmed name.
-  const spendByName = new Map<string, number>();
+  // Spend per campaign name, kept PER PLATFORM so a Meta campaign's spend can
+  // never be matched to a Google campaign's revenue (or vice versa) just because
+  // the two share a name. Keyed case-insensitively, as before.
+  const metaSpendByName = new Map<string, number>();
   for (const s of campaignSnaps) {
     const key = s.campaignName.trim().toLowerCase();
     if (!key) continue;
-    spendByName.set(key, (spendByName.get(key) ?? 0) + num(s.spend));
+    metaSpendByName.set(key, (metaSpendByName.get(key) ?? 0) + num(s.spend));
+  }
+  const googleSpendByName = new Map<string, number>();
+  for (const s of googleCampaignSnaps) {
+    const key = s.campaignName.trim().toLowerCase();
+    if (!key) continue;
+    googleSpendByName.set(key, (googleSpendByName.get(key) ?? 0) + num(s.spend));
   }
 
   type Agg = { campaignName: string; revenue: number; bookings: number; source: TopCampaign["source"] };
@@ -343,15 +433,24 @@ export async function calculateTopCampaigns(
 
   const campaigns: TopCampaign[] = [...byCampaign.entries()]
     .map(([key, a]): TopCampaign => {
-      const spend = spendByName.has(key) ? spendByName.get(key)! : null;
+      // Match spend to the campaign's OWN platform only. An "other"-source
+      // campaign (organic/influencer UTM) gets no ad spend and therefore no
+      // ROAS — its revenue was not bought with ad spend.
+      const platformSpend =
+        a.source === "meta"
+          ? metaSpendByName
+          : a.source === "google"
+            ? googleSpendByName
+            : null;
+      const spend = platformSpend?.has(key) ? platformSpend.get(key)! : null;
       return {
         campaignName: a.campaignName,
         source: a.source,
         spend,
         revenue: a.revenue,
         bookings: a.bookings,
-        roas: spend != null && spend > 0 ? a.revenue / spend : null,
-        costPerBooking: spend != null && a.bookings > 0 ? spend / a.bookings : null,
+        roas: safeRoas(a.revenue, spend),
+        costPerBooking: spend != null && spend > 0 && a.bookings > 0 ? spend / a.bookings : null,
       };
     })
     .sort((x, y) => y.revenue - x.revenue)
@@ -406,7 +505,13 @@ export type OwnerMetrics = {
   averageTimeOnSite: AverageTimeOnSite;
   topCampaigns: TopCampaigns;
   bookingsBySource: BookingsBySource;
-  meta: { metaConnected: boolean };
+  meta: {
+    metaConnected: boolean;
+    /** Phase 0: Google Ads IS integrated — the UI must stop saying otherwise. */
+    googleConnected: boolean;
+    /** Either paid platform is connected — gates the spend/ROAS/CPB cards. */
+    paidConnected: boolean;
+  };
 };
 
 /** Run every calculation for one hotel + period in parallel. */
@@ -427,6 +532,7 @@ export async function loadOwnerMetrics(
     topCampaigns,
     bookingsBySource,
     adSnapshotCount,
+    googleAdsConnectionCount,
   ] = await Promise.all([
     calculateMarketingSpend(hotelClientId, startDate, endDate),
     calculateCostPerBooking(hotelClientId, startDate, endDate),
@@ -441,6 +547,12 @@ export async function loadOwnerMetrics(
     // "Has this hotel ever had any (non-archived) Meta ad data?" — drives the
     // "Connect Meta Ads…" hint vs a real ₹0 (Part 5 #2).
     agencyScoped(prisma.adSnapshot).count({ where: { hotelClientId, archived: false } }),
+    // Same question for Google Ads: an ACTIVE connection with a chosen account.
+    // Presence of the connection (not of spend) is the right signal — a
+    // connected account with zero spend this period is a real ₹0, not "absent".
+    agencyScoped(prisma.googleAdsConnection).count({
+      where: { hotelClientId, customerId: { not: "" } },
+    }),
   ]);
 
   return {
@@ -454,6 +566,10 @@ export async function loadOwnerMetrics(
     averageTimeOnSite,
     topCampaigns,
     bookingsBySource,
-    meta: { metaConnected: adSnapshotCount > 0 },
+    meta: {
+      metaConnected: adSnapshotCount > 0,
+      googleConnected: googleAdsConnectionCount > 0,
+      paidConnected: adSnapshotCount > 0 || googleAdsConnectionCount > 0,
+    },
   };
 }

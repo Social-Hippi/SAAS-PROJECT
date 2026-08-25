@@ -54,6 +54,12 @@ function createPrismaClient() {
           return scrub(scrub(await query(args), "accessToken"), "refreshToken");
         },
       },
+      bookingConnection: {
+        async $allOperations({ args, query }) {
+          // The booking provider's shared secret / API key (Phase 1B).
+          return scrub(await query(args), "credentials");
+        },
+      },
     },
   });
 }

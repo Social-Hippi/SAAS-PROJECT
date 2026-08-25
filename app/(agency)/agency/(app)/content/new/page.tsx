@@ -15,6 +15,25 @@ export default async function NewContentPage() {
     select: { id: true, name: true },
   });
 
+  // Track A: the influencer picker submits a real Influencer id, so the tracked
+  // link resolves back by FOREIGN KEY instead of by display name. Archived
+  // influencers are excluded — same rule the rest of the app's pickers use.
+  const influencers = await agencyScoped(prisma.influencer).findMany({
+    where: { archivedAt: null },
+    orderBy: { name: "asc" },
+    select: {
+      id: true,
+      name: true,
+      instagramHandle: true,
+      hotelClientId: true,
+      couponCodes: {
+        where: { status: "ACTIVE" },
+        orderBy: { code: "asc" },
+        select: { code: true, hotelClientId: true },
+      },
+    },
+  });
+
   return (
     <div className="max-w-xl">
       <Link href="/agency/content" className="text-sm text-ink-tertiary hover:underline">
@@ -39,7 +58,7 @@ export default async function NewContentPage() {
           </Link>
         </div>
       ) : (
-        <ContentForm hotels={hotels} />
+        <ContentForm hotels={hotels} influencers={influencers} />
       )}
     </div>
   );

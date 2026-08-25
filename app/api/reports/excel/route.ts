@@ -61,6 +61,7 @@ export async function GET(request: Request) {
         utmMedium: true,
         utmCampaign: true,
         utmContent: true,
+        gclid: true, gbraid: true, wbraid: true, fbclid: true,
         sessionId: true,
         deviceType: true,
         conversionValue: true,
@@ -93,10 +94,13 @@ export async function GET(request: Request) {
 
   const eventInputs: EventInput[] = events.map((e) => ({
     eventType: e.eventType,
+    utmSource: e.utmSource,
+    utmMedium: e.utmMedium,
     utmContent: e.utmContent,
     utmCampaign: e.utmCampaign,
     sessionId: e.sessionId,
     conversionValue: e.conversionValue == null ? null : Number(e.conversionValue),
+    gclid: e.gclid, gbraid: e.gbraid, wbraid: e.wbraid, fbclid: e.fbclid,
   }));
 
   // ── Sheet 1: Daily visits/bookings by source ──

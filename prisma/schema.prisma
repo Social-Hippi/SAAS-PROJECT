@@ -91,84 +91,88 @@ enum GuideDownloadMethod {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Agency {
-  id                 String   @id @default(cuid())
-  name               String
-  email              String
+  id                     String    @id @default(cuid())
+  name                   String
+  email                  String
   // Billing is Razorpay (INR). The customer id is populated by Razorpay after the
   // first authorisation payment; the subscription id is the sub_… we open Checkout
   // against. subscriptionExpiresAt mirrors the current billing cycle's end.
-  razorpayCustomerId     String?  @unique
-  razorpaySubscriptionId String?  @unique
+  razorpayCustomerId     String?   @unique
+  razorpaySubscriptionId String?   @unique
   // Lifecycle: inactive (pre-subscription) | created | active | paused |
   // cancelled | completed | expired. Only `active` unlocks the dashboard.
-  subscriptionStatus    String    @default("inactive")
-  plan                  String    @default("starter") // starter | growth | agency
-  subscriptionExpiresAt DateTime?
+  subscriptionStatus     String    @default("inactive")
+  plan                   String    @default("starter") // starter | growth | agency
+  subscriptionExpiresAt  DateTime?
   // Set by a super admin to suspend the agency, independent of Razorpay billing.
   // When set, access to the agency dashboard is blocked (see the agency layout).
-  suspendedAt        DateTime?
+  suspendedAt            DateTime?
   // ── Budget-alert notification settings (see lib/budget-alerts.ts) ──
   // One Slack Incoming Webhook per agency; all budget alerts post to that one
   // channel. Email alerts go to alertEmailAddress (defaults to the owner email).
-  slackWebhookUrl    String?
-  slackEnabled       Boolean   @default(false)
-  slackLastTestAt    DateTime?
-  slackLastTestStatus String? // "success" | an error message (for the UI)
-  alertEmailAddress  String?
-  emailAlertsEnabled Boolean   @default(false)
+  slackWebhookUrl        String?
+  slackEnabled           Boolean   @default(false)
+  slackLastTestAt        DateTime?
+  slackLastTestStatus    String? // "success" | an error message (for the UI)
+  alertEmailAddress      String?
+  emailAlertsEnabled     Boolean   @default(false)
   // ── Agency contact info (shown to hotel owners on their dashboard) ──
   // All nullable for backward-compat: existing agencies are prompted to fill
   // them via a banner; new signups are required to provide them (validated in
   // the app, not the DB). See lib/agency-contact.ts.
-  mobile             String?   // primary phone, normalized "+91XXXXXXXXXX"
-  contactEmail       String?   // public contact email (separate from the login email)
-  address            String?   // physical address (may be multi-line)
-  websiteUrl         String?   // agency's own website
-  whatsappNumber     String?   // WhatsApp-enabled number (may equal mobile)
+  mobile                 String? // primary phone, normalized "+91XXXXXXXXXX"
+  contactEmail           String? // public contact email (separate from the login email)
+  address                String? // physical address (may be multi-line)
+  websiteUrl             String? // agency's own website
+  whatsappNumber         String? // WhatsApp-enabled number (may equal mobile)
   // ── Hotel self-signup invite (see lib/hotel-invite.ts) ──
   // Short human-readable code (SLUG-XXXXXXXX) hotels enter at /join/<code> to
   // join this agency themselves. Unique across all agencies. inviteCodeStatus
   // DISABLED blocks new signups without discarding the code.
-  inviteCode            String?   @unique
-  inviteCodeGeneratedAt DateTime?
-  inviteCodeStatus      String?   @default("ACTIVE") // 'ACTIVE' | 'DISABLED'
-  createdAt          DateTime @default(now())
+  inviteCode             String?   @unique
+  inviteCodeGeneratedAt  DateTime?
+  inviteCodeStatus       String?   @default("ACTIVE") // 'ACTIVE' | 'DISABLED'
+  createdAt              DateTime  @default(now())
 
-  members           AgencyMember[]
-  hotelClients      HotelClient[]
-  contentPieces     ContentPiece[]
-  trackingEvents    TrackingEvent[]
-  touchpoints       Touchpoint[]
-  metaTokens        MetaToken[]
-  adSnapshots       AdSnapshot[]
-  couponRedemptions CouponRedemption[]
-  reports           Report[]
-  alerts            Alert[]
-  shareLinks        ShareLink[]
-  instagramConnections InstagramConnection[]
-  socialSnapshots   SocialSnapshot[]
-  postSnapshots     PostSnapshot[]
-  storySnapshots    StorySnapshot[]
-  instagramAudience InstagramAudience[]
-  gaConnections     GoogleAnalyticsConnection[]
-  gaSnapshots       GaSnapshot[]
-  gaSourceBreakdowns GaSourceBreakdown[]
-  tokenAuditLogs    TokenAuditLog[]
-  backfillJobs      BackfillJob[]
-  backfillLogs      BackfillLog[]
-  syncFailures      SyncFailure[]
-  adCampaignSnapshots  AdCampaignSnapshot[]
-  campaignPerformances CampaignPerformance[]
-  guideDownloads       GuideDownload[]
-  hotelShareAccesses   HotelShareAccess[]
-  budgetAlerts         BudgetAlert[]
-  ga4Connections       Ga4Connection[]
-  ga4Snapshots         Ga4Snapshot[]
-  googleAdsConnections GoogleAdsConnection[]
+  members                    AgencyMember[]
+  hotelClients               HotelClient[]
+  contentPieces              ContentPiece[]
+  trackingEvents             TrackingEvent[]
+  touchpoints                Touchpoint[]
+  metaTokens                 MetaToken[]
+  adSnapshots                AdSnapshot[]
+  couponRedemptions          CouponRedemption[]
+  reports                    Report[]
+  alerts                     Alert[]
+  shareLinks                 ShareLink[]
+  instagramConnections       InstagramConnection[]
+  socialSnapshots            SocialSnapshot[]
+  postSnapshots              PostSnapshot[]
+  storySnapshots             StorySnapshot[]
+  instagramAudience          InstagramAudience[]
+  gaConnections              GoogleAnalyticsConnection[]
+  gaSnapshots                GaSnapshot[]
+  gaSourceBreakdowns         GaSourceBreakdown[]
+  tokenAuditLogs             TokenAuditLog[]
+  backfillJobs               BackfillJob[]
+  backfillLogs               BackfillLog[]
+  syncFailures               SyncFailure[]
+  adCampaignSnapshots        AdCampaignSnapshot[]
+  campaignPerformances       CampaignPerformance[]
+  guideDownloads             GuideDownload[]
+  hotelShareAccesses         HotelShareAccess[]
+  budgetAlerts               BudgetAlert[]
+  ga4Connections             Ga4Connection[]
+  ga4Snapshots               Ga4Snapshot[]
+  googleAdsConnections       GoogleAdsConnection[]
   googleAdsCampaignSnapshots GoogleAdsCampaignSnapshot[]
-  hotelInvites         HotelInvite[]
-  influencerInstagramPosts InfluencerInstagramPost[]
-  unattributedMentions     UnattributedMention[]
+  hotelInvites               HotelInvite[]
+  influencerInstagramPosts   InfluencerInstagramPost[]
+  unattributedMentions       UnattributedMention[]
+  bookingConnections         BookingConnection[]
+  bookings                   Booking[]
+  bookingStatusEvents        BookingStatusEvent[]
+  bookingJourneyMatches      BookingJourneyMatch[]
 }
 
 model AgencyMember {
@@ -186,64 +190,64 @@ model AgencyMember {
 }
 
 model HotelClient {
-  id                 String           @id @default(cuid())
-  agencyId           String
-  name               String
-  websiteUrl         String
+  id                      String           @id @default(cuid())
+  agencyId                String
+  name                    String
+  websiteUrl              String
   // Which platform the hotel's website runs on, used to show the right install
   // guide (WordPress / Shopify / Other). String + @default so the set of
   // supported platforms can grow without an enum migration.
-  sitePlatform       String           @default("other")
-  contactName        String
-  contactEmail       String
-  siteId             String           @unique @default(cuid()) // public id embedded in the tracking snippet
-  conversionMethod   ConversionMethod
-  thankYouUrlPattern String? // for conversionMethod = url_change / both
-  successPhrase      String? // for conversionMethod = same_page / both
-  successSelector    String? // for conversionMethod = same_page / both
-  snippetStatus      String           @default("not_installed")
+  sitePlatform            String           @default("other")
+  contactName             String
+  contactEmail            String
+  siteId                  String           @unique @default(cuid()) // public id embedded in the tracking snippet
+  conversionMethod        ConversionMethod
+  thankYouUrlPattern      String? // for conversionMethod = url_change / both
+  successPhrase           String? // for conversionMethod = same_page / both
+  successSelector         String? // for conversionMethod = same_page / both
+  snippetStatus           String           @default("not_installed")
   // Meta ad account (act_<id>) mapped to this hotel on /agency/settings, so its
   // dashboard can pull ad spend/ROI for the right account. Nullable until mapped.
-  metaAdAccountId    String?
+  metaAdAccountId         String?
   // ── Monthly ad-budget tracking (see lib/budget.ts) ──
   // monthlyAdBudget is stored in PAISE (₹2,00,000 = 20000000) so spend↔budget
   // maths stays integer. budgetResetDay (1–28) is the day of month the budget
   // window restarts on. Threshold alerts (80/90/100%) fire once per BudgetAlert.
-  monthlyAdBudget        Int?
-  budgetTrackingEnabled  Boolean        @default(false)
-  budgetResetDay         Int            @default(1)
+  monthlyAdBudget         Int?
+  budgetTrackingEnabled   Boolean          @default(false)
+  budgetResetDay          Int              @default(1)
   // Ad accounts previously mapped to this hotel (oldest→newest), recorded when
   // the agency switches the hotel to a DIFFERENT account. Their old AdSnapshot/
   // campaign data is archived (kept, hidden) and listed in Connection History.
   // AGENCY-ONLY — never exposed on hotel-facing views.
-  previousAdAccountIds String[]       @default([])
+  previousAdAccountIds    String[]         @default([])
   // When the CURRENT Meta ad account was mapped to this hotel. Drives the
   // "sync in progress" fresh-start state right after an account change.
-  metaAccountConnectedAt DateTime?
-  lastEventAt        DateTime?
+  metaAccountConnectedAt  DateTime?
+  lastEventAt             DateTime?
   // When the Meta ad sync (/api/meta/sync) last wrote AdSnapshots for this hotel.
   // Null until the first successful sync. Surfaced as "last sync" on the dashboard.
-  lastSyncedAt       DateTime?
+  lastSyncedAt            DateTime?
   // ── Hotel-owner share link (public, read-only dashboard at /h/<shareToken>) ──
   // A persistent, unguessable 256-bit token (crypto.randomBytes(32).hex). Null
   // until the agency generates one. Regenerating overwrites it (the old URL dies);
   // revoking flips shareTokenRevoked so the URL 404s without discarding the token.
   // showAdSpendToHotel gates whether spend/True-ROAS figures are revealed to the
   // hotel — default OFF, because most agencies hide their ad spend from clients.
-  shareToken          String?         @unique
-  shareTokenCreatedAt DateTime?
-  shareTokenRevoked   Boolean         @default(false)
-  showAdSpendToHotel  Boolean         @default(false)
+  shareToken              String?          @unique
+  shareTokenCreatedAt     DateTime?
+  shareTokenRevoked       Boolean          @default(false)
+  showAdSpendToHotel      Boolean          @default(false)
   // ── OTA commission savings (per-hotel) ──
   // Average commission % this hotel pays OTAs (Booking.com / MakeMyTrip / Agoda).
   // Used to show how much direct (snippet-tracked) bookings saved vs going through
   // an OTA: savings = booking revenue × rate/100. Null = not configured yet
   // (treated as the 18% default when calculating/displaying). Valid range 0–50.
-  otaCommissionRate   Decimal?        @default(18.0) @db.Decimal(5, 2)
+  otaCommissionRate       Decimal?         @default(18.0) @db.Decimal(5, 2)
   // ── Funnel-stage URL rules (Phase 2 journey funnel) ──
   // Optional [{ urlPattern, stage }] used to tag PageViews server-side when a
   // hotel can't add data-ht-stage attributes to its pages. See lib/funnel.ts.
-  funnelStageRules    Json?
+  funnelStageRules        Json?
   // ── Soft delete (admin-only; reversible via restoreHotel) ──
   // deletedAt null = active. When set, the hotel is hidden everywhere and all
   // syncing stops, but every row (tokens, events, attribution, snapshots) is
@@ -257,52 +261,54 @@ model HotelClient {
   // an invite link; null for hotels the agency created manually. Drives the
   // hotel-side dashboard authz (/hotel/[id]). The rest are owner-supplied details
   // captured at signup; the owner can edit channelManager / contact / OTA later.
-  createdByUserId    String?
-  contactPhone       String?
-  address            String?
-  whatsappNumber     String?
-  roomCount          Int?
-  channelManager     String?
+  createdByUserId         String?
+  contactPhone            String?
+  address                 String?
+  whatsappNumber          String?
+  roomCount               Int?
+  channelManager          String?
   // ── The hotel's OWN Instagram @handle (no leading @), e.g. "neelakurinji_resort".
   // Used by the Instagram Reach Split detection to decide "did this influencer
   // mention us?" — matched against influencer post captions. Separate from the
   // connected InstagramConnection (which is the account we sync metrics from).
   // Null until the agency fills it in on the integrations/settings page.
-  instagramHandle    String?
-  createdAt          DateTime         @default(now())
+  instagramHandle         String?
+  createdAt               DateTime         @default(now())
 
-  agency         Agency          @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  metaToken      MetaToken?
-  contentPieces  ContentPiece[]
-  trackingEvents TrackingEvent[]
-  touchpoints    Touchpoint[]
-  sessions       Session[]
-  adSnapshots    AdSnapshot[]
-  reports         Report[]
-  alerts          Alert[]
-  shareLinks      ShareLink[]
-  instagramConnections InstagramConnection[]
-  socialSnapshots SocialSnapshot[]
-  postSnapshots   PostSnapshot[]
-  storySnapshots  StorySnapshot[]
-  instagramAudience InstagramAudience[]
-  gaConnections   GoogleAnalyticsConnection[]
-  gaSnapshots     GaSnapshot[]
-  gaSourceBreakdowns GaSourceBreakdown[]
-  tokenAuditLogs  TokenAuditLog[]
-  adCampaignSnapshots  AdCampaignSnapshot[]
-  campaignPerformances CampaignPerformance[]
-  guideDownloads       GuideDownload[]
-  shareAccesses        HotelShareAccess[]
-  budgetAlerts         BudgetAlert[]
-  ga4Connection        Ga4Connection?
-  ga4Snapshots         Ga4Snapshot[]
-  googleAdsConnection  GoogleAdsConnection?
+  agency                     Agency                      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  metaToken                  MetaToken?
+  contentPieces              ContentPiece[]
+  trackingEvents             TrackingEvent[]
+  touchpoints                Touchpoint[]
+  sessions                   Session[]
+  adSnapshots                AdSnapshot[]
+  reports                    Report[]
+  alerts                     Alert[]
+  shareLinks                 ShareLink[]
+  instagramConnections       InstagramConnection[]
+  socialSnapshots            SocialSnapshot[]
+  postSnapshots              PostSnapshot[]
+  storySnapshots             StorySnapshot[]
+  instagramAudience          InstagramAudience[]
+  gaConnections              GoogleAnalyticsConnection[]
+  gaSnapshots                GaSnapshot[]
+  gaSourceBreakdowns         GaSourceBreakdown[]
+  tokenAuditLogs             TokenAuditLog[]
+  adCampaignSnapshots        AdCampaignSnapshot[]
+  campaignPerformances       CampaignPerformance[]
+  guideDownloads             GuideDownload[]
+  shareAccesses              HotelShareAccess[]
+  budgetAlerts               BudgetAlert[]
+  ga4Connection              Ga4Connection?
+  ga4Snapshots               Ga4Snapshot[]
+  googleAdsConnection        GoogleAdsConnection?
   googleAdsCampaignSnapshots GoogleAdsCampaignSnapshot[]
-  visitorIdentities    VisitorIdentity[]
-  hotelInvites         HotelInvite[]
-  influencerInstagramPosts InfluencerInstagramPost[]
-  unattributedMentions     UnattributedMention[]
+  visitorIdentities          VisitorIdentity[]
+  hotelInvites               HotelInvite[]
+  influencerInstagramPosts   InfluencerInstagramPost[]
+  unattributedMentions       UnattributedMention[]
+  bookingConnection          BookingConnection?
+  bookings                   Booking[]
 
   @@index([agencyId])
   @@index([createdByUserId]) // hotel-owner → their hotel lookup
@@ -360,53 +366,73 @@ model ContentPiece {
   destinationUrl String
   utmLink        String
   couponCode     String?
+  // DEPRECATED as an identity: free text, kept so historic rows are not lost and
+  // so the UI can still show what was typed. `influencerId` below is the real
+  // link — never resolve an influencer by matching this string.
   influencerName String?
+  // Deterministic link to the first-class Influencer (Track A). Nullable because
+  // every pre-existing ContentPiece has no influencer and non-influencer content
+  // legitimately has none. utm_content = `ht-<ContentPiece.id>` therefore
+  // resolves an influencer by FOREIGN KEY, not by display-name matching.
+  influencerId   String?
   status         String      @default("active")
   createdAt      DateTime    @default(now())
 
   agency            Agency             @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient       HotelClient        @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  influencer        Influencer?        @relation(fields: [influencerId], references: [id], onDelete: SetNull)
   couponRedemptions CouponRedemption[]
 
   @@index([agencyId])
   @@index([hotelClientId])
   @@index([couponCode])
+  @@index([influencerId])
 }
 
 model TrackingEvent {
-  id              String    @id @default(cuid())
+  id               String    @id @default(cuid())
   // agencyId is NOT in the original Step 2 field list, but the multi-tenancy
   // rule requires every non-Agency model to carry it. Denormalized here (from
   // HotelClient.agencyId at write time) so tenant filtering stays a direct index hit.
-  agencyId        String
-  hotelClientId   String
-  eventType       EventType
+  agencyId         String
+  hotelClientId    String
+  eventType        EventType
   // UTM params are nullable: direct/untagged visits legitimately have none.
-  utmSource       String?
-  utmMedium       String?
-  utmCampaign     String?
-  utmContent      String?
-  utmTerm         String?
-  pageUrl         String
-  conversionValue Decimal?  @db.Decimal(12, 2)
-  sessionId       String
+  utmSource        String?
+  utmMedium        String?
+  utmCampaign      String?
+  utmContent       String?
+  utmTerm          String?
+  pageUrl          String
+  conversionValue  Decimal?  @db.Decimal(12, 2)
+  sessionId        String
   // Persistent per-browser id from the snippet's _ht_vid cookie (30-day sliding).
   // Nullable: pre-multi-touch rows and old snippet payloads have none.
-  visitorId       String?
-  deviceType      String
+  visitorId        String?
+  deviceType       String
   // Which attribution model assigned this conversion's UTM credit. The snippet
   // stores FIRST-touch UTM on the event, so conversions are first_touch today;
   // the column lets last_touch / u_shaped credit be recorded per-row later
   // (Revenue by Source). Nullable + defaulted so existing rows read as first_touch.
-  attributionModel String?  @default("first_touch")
+  attributionModel String?   @default("first_touch")
   // Raw coupon code captured by the snippet at booking time (data-ht-coupon-field,
   // Phase R2). Uppercased/trimmed. Drives influencer attribution; null when no
   // code was present. Stored even when no matching CouponCode exists (for audit).
-  couponCodeUsed  String?
-  createdAt       DateTime  @default(now())
+  couponCodeUsed   String?
+  // ── Ad click identifiers (Phase 1A) ──
+  // The identifier in effect for the visitor/session when this event fired,
+  // denormalized so a conversion is self-contained: Phase 2's offline-conversion
+  // upload can name the originating ad click without walking the journey.
+  // Null on every pre-Phase-1A row — deliberately NOT backfilled from pageUrl,
+  // which would manufacture attribution for traffic captured under older rules.
+  gclid            String?
+  gbraid           String?
+  wbraid           String?
+  fbclid           String?
+  createdAt        DateTime  @default(now())
 
-  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  agency      Agency       @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient  @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
   // Touchpoints captured for a conversion event (multi-touch journey).
   touchpoints Touchpoint[]
 
@@ -415,6 +441,7 @@ model TrackingEvent {
   @@index([hotelClientId, eventType, createdAt]) // funnel queries over time
   @@index([agencyId, eventType, createdAt]) // agency-wide revenue rollups (R3)
   @@index([sessionId]) // stitch a visit to its later conversion
+  @@index([hotelClientId, gclid]) // look a conversion up by its Google click id
 }
 
 // One row per touchpoint in a visitor's journey, captured by the snippet's
@@ -435,12 +462,25 @@ model Touchpoint {
   utmMedium     String?
   utmCampaign   String?
   utmContent    String?
+  // utmTerm was missing here while Session and TrackingEvent both carried it —
+  // an existing schema inconsistency, closed in the click-identifier migration.
+  utmTerm       String?
+  // ── Ad click identifiers (Phase 1A) ──
+  // The identifier present on THIS page load, i.e. the one marketing interaction
+  // this touchpoint represents. Deliberately NOT the remembered cookie value:
+  // stamping that onto later touches would invent ad clicks that never happened.
+  // gclid/gbraid/wbraid are Google Ads only (gbraid/wbraid are the iOS variants);
+  // fbclid is Meta-origin evidence and NOT proof of a paid Meta click.
+  gclid         String?
+  gbraid        String?
+  wbraid        String?
+  fbclid        String?
   referrer      String?
   landingPage   String?
   createdAt     DateTime @default(now())
 
-  agency      Agency        @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  hotelClient HotelClient   @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  agency      Agency         @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient    @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
   conversion  TrackingEvent? @relation(fields: [conversionId], references: [id], onDelete: Cascade)
 
   @@index([agencyId])
@@ -462,30 +502,38 @@ model Touchpoint {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Session {
-  id            String    @id // 'sess_' + uuid (snippet-supplied)
-  visitorId     String
-  hotelClientId String
-  agencyId      String // denormalized for fast tenant-scoped queries
-  startedAt     DateTime
-  endedAt       DateTime? // null while the session is still active
-  landingPath   String // first pagePath of the session
-  exitPath      String? // last pagePath seen
-  pageViewCount Int       @default(0)
-  totalTimeMs   Int       @default(0)
+  id                  String    @id // 'sess_' + uuid (snippet-supplied)
+  visitorId           String
+  hotelClientId       String
+  agencyId            String // denormalized for fast tenant-scoped queries
+  startedAt           DateTime
+  endedAt             DateTime? // null while the session is still active
+  landingPath         String // first pagePath of the session
+  exitPath            String? // last pagePath seen
+  pageViewCount       Int       @default(0)
+  totalTimeMs         Int       @default(0)
   // Highest funnel stage reached this session (Phase 2) — denormalized for fast
   // funnel queries. Null until the session reaches a tagged/matched page.
   highestStageReached String?
-  utmSource     String?
-  utmMedium     String?
-  utmCampaign   String?
-  utmContent    String?
-  utmTerm       String?
-  referrer      String?
-  userAgent     String?
+  utmSource           String?
+  utmMedium           String?
+  utmCampaign         String?
+  utmContent          String?
+  utmTerm             String?
+  // ── Ad click identifiers (Phase 1A) ──
+  // What this browsing session LANDED with. Merged add-only across the session's
+  // pageviews: a page without an identifier can never erase one, while a genuinely
+  // new ad click replaces that platform's value.
+  gclid               String?
+  gbraid              String?
+  wbraid              String?
+  fbclid              String?
+  referrer            String?
+  userAgent           String?
 
-  hotelClient   HotelClient    @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
-  pageViews     PageView[]
-  stageReached  StageReached[]
+  hotelClient     HotelClient      @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  pageViews       PageView[]
+  stageReached    StageReached[]
   clickEvents     ClickEvent[]
   formFieldEvents FormFieldEvent[]
 
@@ -606,8 +654,8 @@ model FormFieldEvent {
 }
 
 model VisitorIdentity {
-  id                    String   @id @default(cuid())
-  visitorId             String   @unique
+  id                    String      @id @default(cuid())
+  visitorId             String      @unique
   hotelClientId         String
   agencyId              String
   name                  String?
@@ -652,10 +700,10 @@ model MetaToken {
   connectedFacebookUserId   String?
   connectedFacebookUserName String?
   // Soft-disconnect bookkeeping + refresh/expiry-warning state.
-  disconnectedAt     DateTime?
-  lastRefreshedAt    DateTime?
+  disconnectedAt            DateTime?
+  lastRefreshedAt           DateTime?
   // Dedup for manual-token expiry emails: null | "14d" | "7d" | "expired".
-  expiryWarningStage String?
+  expiryWarningStage        String?
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -665,18 +713,18 @@ model MetaToken {
 }
 
 model AdSnapshot {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   agencyId       String
   hotelClientId  String
   metaAccountId  String
-  date           DateTime @db.Date
-  spend          Decimal  @db.Decimal(12, 2)
+  date           DateTime  @db.Date
+  spend          Decimal   @db.Decimal(12, 2)
   impressions    Int
   reach          Int
   clicks         Int
   ctr            Float
-  cpc            Decimal  @db.Decimal(12, 4)
-  cpm            Decimal  @db.Decimal(12, 4)
+  cpc            Decimal   @db.Decimal(12, 4)
+  cpm            Decimal   @db.Decimal(12, 4)
   conversions    Int
   roas           Float
   pixelPurchases Int
@@ -706,7 +754,7 @@ model AdSnapshot {
 // (AdSnapshot stays account-level; this adds the campaign_name dimension that
 // campaign↔booking attribution joins on).
 model AdCampaignSnapshot {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   agencyId       String
   hotelClientId  String
   // Which Meta ad account this campaign belongs to. Nullable for rows written
@@ -715,14 +763,14 @@ model AdCampaignSnapshot {
   metaAccountId  String?
   metaCampaignId String
   campaignName   String
-  date           DateTime @db.Date
-  spend          Decimal  @db.Decimal(12, 2)
+  date           DateTime  @db.Date
+  spend          Decimal   @db.Decimal(12, 2)
   impressions    Int
   clicks         Int
   // Meta-reported pixel purchases for this campaign-day.
   conversions    Int
   // Meta-reported purchase value for this campaign-day.
-  purchaseValue  Decimal  @db.Decimal(12, 2)
+  purchaseValue  Decimal   @db.Decimal(12, 2)
   // Account-change archiving (see lib/meta-archive.ts + AdSnapshot above).
   archived       Boolean   @default(false)
   archivedAt     DateTime?
@@ -741,20 +789,20 @@ model AdCampaignSnapshot {
 // (see lib/campaign-attribution.ts). One row per hotel per campaign per day;
 // the "Direct / Unattributed" bucket uses campaignKey UNATTRIBUTED_KEY.
 model CampaignPerformance {
-  id                      String   @id @default(cuid())
+  id                      String    @id @default(cuid())
   agencyId                String
   hotelClientId           String
-  date                    DateTime @db.Date
+  date                    DateTime  @db.Date
   // Lowercased campaignName — the case-insensitive join key (also dedupes
   // Meta campaigns whose names differ only by case).
   campaignKey             String
   campaignName            String
   metaCampaignId          String?
-  metaSpend               Decimal  @db.Decimal(12, 2)
+  metaSpend               Decimal   @db.Decimal(12, 2)
   metaReportedConversions Int
-  metaReportedRevenue     Decimal  @db.Decimal(12, 2)
+  metaReportedRevenue     Decimal   @db.Decimal(12, 2)
   realBookings            Int
-  realBookingValue        Decimal  @db.Decimal(12, 2)
+  realBookingValue        Decimal   @db.Decimal(12, 2)
   // realBookingValue / metaSpend. Null when there is no spend that day.
   realRoas                Float?
   // ((realBookings − metaReportedConversions) / metaReportedConversions) × 100.
@@ -767,7 +815,7 @@ model CampaignPerformance {
   archived                Boolean   @default(false)
   archivedAt              DateTime?
   archivedReason          String?
-  computedAt              DateTime @default(now())
+  computedAt              DateTime  @default(now())
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -786,7 +834,7 @@ model CampaignPerformance {
 // alerts at most once per month. notificationsSent records which of the three
 // channels (in-app / email / slack) delivered. Multi-tenant: carries agencyId.
 model BudgetAlert {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   agencyId          String
   hotelClientId     String
   threshold         Int // 80 | 90 | 100
@@ -837,7 +885,7 @@ model CouponRedemption {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Influencer {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   agencyId        String // tenant scope
   hotelClientId   String? // optional: tied to one hotel, or agency-wide when null
   name            String
@@ -854,12 +902,13 @@ model Influencer {
   // Soft delete (PART 8): archived influencers are hidden from pickers but their
   // historical redemptions stay visible. Null = active.
   archivedAt      DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  couponCodes CouponCode[]
-  redemptions InfluencerRedemption[]
+  couponCodes    CouponCode[]
+  redemptions    InfluencerRedemption[]
   instagramPosts InfluencerInstagramPost[]
+  contentPieces  ContentPiece[]
 
   @@index([agencyId])
   @@index([hotelClientId])
@@ -890,12 +939,12 @@ model CouponCode {
 }
 
 model InfluencerRedemption {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   couponCodeId      String
   influencerId      String // denormalized for fast queries
   hotelClientId     String
   agencyId          String
-  bookingValue      Decimal  @db.Decimal(12, 2) // revenue from this booking
+  bookingValue      Decimal   @db.Decimal(12, 2) // revenue from this booking
   bookingReference  String? // optional: hotel's booking id for cross-reference
   guestName         String? // optional PII — show only to authorized members
   bookingDate       DateTime?
@@ -904,7 +953,7 @@ model InfluencerRedemption {
   sessionId         String? // link to Session when captured by the snippet
   notes             String?
   enteredByMemberId String? // which agency member logged a manual_entry
-  redeemedAt        DateTime @default(now())
+  redeemedAt        DateTime  @default(now())
 
   couponCode CouponCode @relation(fields: [couponCodeId], references: [id], onDelete: Cascade)
   influencer Influencer @relation(fields: [influencerId], references: [id])
@@ -964,28 +1013,28 @@ model InfluencerInstagramPost {
 }
 
 model UnattributedMention {
-  id                    String   @id @default(cuid())
-  agencyId              String
-  hotelClientId         String
-  instagramPostId       String   @unique // Meta/IGAA media id
-  posterInstagramUserId String? // who posted it (when the API exposes it)
-  posterUsername        String? // poster @handle (when available)
-  postedAt              DateTime
-  mediaType             String
-  permalink             String
-  captionText           String?  @db.Text
-  reach                 Int? // null = not available from the API (not zero)
-  impressions           Int      @default(0)
-  likes                 Int      @default(0)
-  comments              Int      @default(0)
-  saves                 Int      @default(0)
-  shares                Int      @default(0)
-  taggedHotelAccount      Boolean @default(false)
-  mentionedHotelInCaption Boolean @default(false)
+  id                      String   @id @default(cuid())
+  agencyId                String
+  hotelClientId           String
+  instagramPostId         String   @unique // Meta/IGAA media id
+  posterInstagramUserId   String? // who posted it (when the API exposes it)
+  posterUsername          String? // poster @handle (when available)
+  postedAt                DateTime
+  mediaType               String
+  permalink               String
+  captionText             String?  @db.Text
+  reach                   Int? // null = not available from the API (not zero)
+  impressions             Int      @default(0)
+  likes                   Int      @default(0)
+  comments                Int      @default(0)
+  saves                   Int      @default(0)
+  shares                  Int      @default(0)
+  taggedHotelAccount      Boolean  @default(false)
+  mentionedHotelInCaption Boolean  @default(false)
   // Set when an agency assigns this mention to an Influencer; the detection cron
   // then promotes future posts from this poster to InfluencerInstagramPost.
-  linkedInfluencerId    String?
-  syncedAt              DateTime @default(now())
+  linkedInfluencerId      String?
+  syncedAt                DateTime @default(now())
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -1105,29 +1154,29 @@ model ShareLink {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model InstagramConnection {
-  id             String    @id @default(cuid())
-  agencyId       String
-  hotelClientId  String
-  tokenType      String    @default("igaa_direct")
-  igUserId       String // the Instagram user id returned by the IGAA flow
-  username       String?
-  igAccountType  String? // BUSINESS | CREATOR (PERSONAL is rejected at connect)
-  profilePicUrl  String?
-  encryptedToken String // AES-256-GCM ciphertext (base64). NEVER log or expose.
-  tokenExpiresAt DateTime?
+  id                String    @id @default(cuid())
+  agencyId          String
+  hotelClientId     String
+  tokenType         String    @default("igaa_direct")
+  igUserId          String // the Instagram user id returned by the IGAA flow
+  username          String?
+  igAccountType     String? // BUSINESS | CREATOR (PERSONAL is rejected at connect)
+  profilePicUrl     String?
+  encryptedToken    String // AES-256-GCM ciphertext (base64). NEVER log or expose.
+  tokenExpiresAt    DateTime?
   // active | error | deprecated_eaa. "error" carries errorMessage and is set by
   // the sync when a connection fails; reconnecting via OAuth resets to active.
-  status         String    @default("active")
-  errorMessage   String?
-  lastSyncedAt   DateTime?
+  status            String    @default("active")
+  errorMessage      String?
+  lastSyncedAt      DateTime?
   // When the weekly refresh cron last rolled the 60-day IGAA token forward.
-  lastRefreshedAt DateTime?
+  lastRefreshedAt   DateTime?
   // Defensive surfacing: set true when an API call returns an auth failure so the
   // dashboard can show a one-click reconnect banner. lastErrorReason captures the
   // raw provider error. Cleared on a successful (re)connect or sync.
-  requiresReconnect Boolean  @default(false)
+  requiresReconnect Boolean   @default(false)
   lastErrorReason   String?
-  createdAt      DateTime  @default(now())
+  createdAt         DateTime  @default(now())
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -1277,20 +1326,20 @@ model GoogleAnalyticsConnection {
 }
 
 model GaSnapshot {
-  id                  String   @id @default(cuid())
-  agencyId            String
-  hotelClientId       String
-  date                DateTime @db.Date
-  totalUsers          Int      @default(0)
-  newUsers            Int      @default(0)
-  sessions            Int      @default(0)
+  id                 String   @id @default(cuid())
+  agencyId           String
+  hotelClientId      String
+  date               DateTime @db.Date
+  totalUsers         Int      @default(0)
+  newUsers           Int      @default(0)
+  sessions           Int      @default(0)
   // GA4 returns bounceRate + conversionRate as 0..1 floats. avgSessionDuration
   // is seconds. We keep them as float for easy aggregation across days.
-  bounceRate          Float    @default(0)
-  avgSessionDuration  Float    @default(0)
-  pageviews           Int      @default(0)
-  conversions         Int      @default(0)
-  conversionRate      Float    @default(0)
+  bounceRate         Float    @default(0)
+  avgSessionDuration Float    @default(0)
+  pageviews          Int      @default(0)
+  conversions        Int      @default(0)
+  conversionRate     Float    @default(0)
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -1343,27 +1392,27 @@ enum GA4Status {
 }
 
 model Ga4Connection {
-  id              String    @id @default(cuid())
-  hotelClientId   String    @unique // one GA4 connection per hotel
-  agencyId        String
-  propertyId      String // GA4 numeric property id, e.g. "123456789" ("" until picked)
-  propertyName    String?
-  accessToken     String    @db.Text // AES-256-GCM ciphertext. NEVER log or expose.
-  refreshToken    String    @db.Text // AES-256-GCM ciphertext. NEVER log or expose.
-  tokenExpiresAt  DateTime
-  scope           String
-  status          GA4Status @default(ACTIVE)
-  lastSyncedAt    DateTime?
-  lastSyncError   String?
+  id                String    @id @default(cuid())
+  hotelClientId     String    @unique // one GA4 connection per hotel
+  agencyId          String
+  propertyId        String // GA4 numeric property id, e.g. "123456789" ("" until picked)
+  propertyName      String?
+  accessToken       String    @db.Text // AES-256-GCM ciphertext. NEVER log or expose.
+  refreshToken      String    @db.Text // AES-256-GCM ciphertext. NEVER log or expose.
+  tokenExpiresAt    DateTime
+  scope             String
+  status            GA4Status @default(ACTIVE)
+  lastSyncedAt      DateTime?
+  lastSyncError     String?
   // Defensive surfacing: set true when token refresh / a data call returns an
   // OAuth/auth failure (e.g. a Google client-id swap orphans the refresh token)
   // so the dashboard can show a one-click reconnect banner. lastErrorReason holds
   // the raw Google error (invalid_grant / invalid_client / …). Cleared on a
   // successful (re)connect or sync.
-  requiresReconnect Boolean @default(false)
+  requiresReconnect Boolean   @default(false)
   lastErrorReason   String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -1372,48 +1421,48 @@ model Ga4Connection {
 }
 
 model Ga4Snapshot {
-  id                 String   @id @default(cuid())
-  hotelClientId      String
-  agencyId           String
-  date               DateTime @db.Date
+  id                        String   @id @default(cuid())
+  hotelClientId             String
+  agencyId                  String
+  date                      DateTime @db.Date
   // Traffic
-  sessions           Int      @default(0)
-  users              Int      @default(0)
-  newUsers           Int      @default(0)
-  pageViews          Int      @default(0)
-  bounceRate         Float    @default(0) // 0..1
-  avgSessionDuration Int      @default(0) // seconds
+  sessions                  Int      @default(0)
+  users                     Int      @default(0)
+  newUsers                  Int      @default(0)
+  pageViews                 Int      @default(0)
+  bounceRate                Float    @default(0) // 0..1
+  avgSessionDuration        Int      @default(0) // seconds
   // Engagement (R1 — day-level). Added by ga4_expand_reports.
-  engagedSessions           Int   @default(0)
-  engagementRate            Float @default(0) // 0..1
-  userEngagementDuration    Int   @default(0) // seconds (total)
-  screenPageViewsPerSession Float @default(0)
-  keyEvents                 Int   @default(0) // GA4 key events (formerly "conversions"), day total
-  returningUsers            Int   @default(0) // from newVsReturning
+  engagedSessions           Int      @default(0)
+  engagementRate            Float    @default(0) // 0..1
+  userEngagementDuration    Int      @default(0) // seconds (total)
+  screenPageViewsPerSession Float    @default(0)
+  keyEvents                 Int      @default(0) // GA4 key events (formerly "conversions"), day total
+  returningUsers            Int      @default(0) // from newVsReturning
   // Ecommerce (R5). Nullable: only present on ecommerce-enabled properties.
-  purchaseRevenue Int?   // paise
-  transactions    Int?
-  purchaserRate   Float? // 0..1
+  purchaseRevenue           Int? // paise
+  transactions              Int?
+  purchaserRate             Float? // 0..1
   // Acquisition (sessionDefaultChannelGroup)
-  organicSessions    Int      @default(0)
-  paidSessions       Int      @default(0)
-  socialSessions     Int      @default(0)
-  directSessions     Int      @default(0)
-  referralSessions   Int      @default(0)
+  organicSessions           Int      @default(0)
+  paidSessions              Int      @default(0)
+  socialSessions            Int      @default(0)
+  directSessions            Int      @default(0)
+  referralSessions          Int      @default(0)
   // Google Ads (google / cpc). Nullable: only present when ads run.
-  googleAdsClicks      Int?
-  googleAdsImpressions Int?
-  googleAdsCost        Int? // paise
-  googleAdsConversions Int?
+  googleAdsClicks           Int?
+  googleAdsImpressions      Int?
+  googleAdsCost             Int? // paise
+  googleAdsConversions      Int?
   // Geographic — [{ name, sessions }, …] top 5
-  topCountries    Json
-  topCities       Json
+  topCountries              Json
+  topCities                 Json
   // Device
-  mobileSessions  Int      @default(0)
-  desktopSessions Int      @default(0)
-  tabletSessions  Int      @default(0)
+  mobileSessions            Int      @default(0)
+  desktopSessions           Int      @default(0)
+  tabletSessions            Int      @default(0)
   // Landing pages — [{ path, sessions }, …] top 10
-  topLandingPages Json
+  topLandingPages           Json
   // Expanded GA4 reports (ga4_expand_reports). All nullable top-N JSON lists,
   // merged across the window by the dashboard. Shapes (each an array):
   //   topSources        [{ source, medium, sessions, users, keyEvents }]        (R2)
@@ -1424,16 +1473,16 @@ model Ga4Snapshot {
   //   landingBySource   [{ landing, source, medium, sessions, keyEvents, engagedSessions, users }] (R7 ⭐)
   //   newVsReturning    [{ segment, users, newUsers, sessions, keyEvents }]     (R8)
   //   topRegions        [{ name, sessions }]  topBrowsers [{ name, sessions }]  topOperatingSystems [{ name, sessions }] (R9)
-  topSources          Json?
-  topCampaigns        Json?
-  firstUserChannels   Json?
-  topEvents           Json?
-  topPages            Json?
-  landingBySource     Json?
-  newVsReturning      Json?
-  topRegions          Json?
-  topBrowsers         Json?
-  topOperatingSystems Json?
+  topSources                Json?
+  topCampaigns              Json?
+  firstUserChannels         Json?
+  topEvents                 Json?
+  topPages                  Json?
+  landingBySource           Json?
+  newVsReturning            Json?
+  topRegions                Json?
+  topBrowsers               Json?
+  topOperatingSystems       Json?
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -1457,29 +1506,29 @@ enum GoogleAdsStatus {
 }
 
 model GoogleAdsConnection {
-  id              String    @id @default(cuid())
-  hotelClientId   String    @unique // one Google Ads connection per hotel
-  agencyId        String
+  id                String          @id @default(cuid())
+  hotelClientId     String          @unique // one Google Ads connection per hotel
+  agencyId          String
   // Selected Ads customer account (10-digit id, no dashes; "" until picked).
-  customerId      String
-  customerName    String?
-  currencyCode    String? // ISO 4217 from the account, e.g. "INR" — for ₹ formatting
+  customerId        String
+  customerName      String?
+  currencyCode      String? // ISO 4217 from the account, e.g. "INR" — for ₹ formatting
   // The manager (MCC) id used as the login-customer-id header when the account is
   // reached through HotelTrack's manager. Null when the OAuth user owns it directly.
-  loginCustomerId String?
-  accessToken     String    @db.Text // AES-256-GCM ciphertext. NEVER log or expose.
-  refreshToken    String    @db.Text // AES-256-GCM ciphertext. NEVER log or expose.
-  tokenExpiresAt  DateTime
-  scope           String
-  status          GoogleAdsStatus @default(ACTIVE)
-  lastSyncedAt    DateTime?
-  lastSyncError   String?
+  loginCustomerId   String?
+  accessToken       String          @db.Text // AES-256-GCM ciphertext. NEVER log or expose.
+  refreshToken      String          @db.Text // AES-256-GCM ciphertext. NEVER log or expose.
+  tokenExpiresAt    DateTime
+  scope             String
+  status            GoogleAdsStatus @default(ACTIVE)
+  lastSyncedAt      DateTime?
+  lastSyncError     String?
   // Same reconnect-surfacing as Ga4Connection: set when a refresh / API call
   // returns an OAuth/auth failure so the dashboard can show a reconnect banner.
-  requiresReconnect Boolean @default(false)
+  requiresReconnect Boolean         @default(false)
   lastErrorReason   String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -1494,19 +1543,19 @@ model GoogleAdsConnection {
 // conversions/conversionsValue come from the account's own Google conversion
 // tracking. The dashboard maps these into the same PaidChannelView shape as Meta.
 model GoogleAdsCampaignSnapshot {
-  id            String   @id @default(cuid())
-  agencyId      String
-  hotelClientId String
-  customerId    String // the Ads account these rows came from
-  campaignId    String
-  campaignName  String
-  status        String // ENABLED | PAUSED | REMOVED (campaign.status)
-  date          DateTime @db.Date
-  spend         Decimal  @db.Decimal(12, 2) // cost_micros / 1_000_000
-  impressions   Int
-  clicks        Int
-  conversions   Float // Google conversions can be fractional
-  conversionsValue Decimal @db.Decimal(12, 2)
+  id               String   @id @default(cuid())
+  agencyId         String
+  hotelClientId    String
+  customerId       String // the Ads account these rows came from
+  campaignId       String
+  campaignName     String
+  status           String // ENABLED | PAUSED | REMOVED (campaign.status)
+  date             DateTime @db.Date
+  spend            Decimal  @db.Decimal(12, 2) // cost_micros / 1_000_000
+  impressions      Int
+  clicks           Int
+  conversions      Float // Google conversions can be fractional
+  conversionsValue Decimal  @db.Decimal(12, 2)
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -1595,4 +1644,244 @@ model GuideDownload {
 
   @@index([agencyId])
   @@index([agencyId, downloadedAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKING WORLD (Phase 1B foundation)
+//
+// The architectural rule this section exists to enforce: a Booking is a FACT
+// ("this reservation exists"), and any belief about which marketing journey
+// produced it is EVIDENCE, held separately in BookingJourneyMatch. An inferred
+// attribution relationship must never be written onto the booking record — that
+// is how "we think" silently becomes "we know", which is exactly the failure
+// mode the earlier phases were spent removing.
+//
+// Nothing writes a Booking yet. There is deliberately no provider integration:
+// BookingConnection is the provider-agnostic seam a real PMS / booking engine /
+// OTA connector plugs into next phase.
+//
+// Enum-vs-String follows this schema's stated rule (see the Enums header):
+// closed vocabularies specified up front are enums; open-ended ones
+// (`provider`, `bookingChannel`, connection `status`) stay String so they can
+// grow without a migration.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Lifecycle states a booking can be in. Closed set → enum. Uppercase matches
+/// the other status enums in this schema (GA4Status, GoogleAdsStatus).
+enum BookingStatus {
+  CONFIRMED
+  MODIFIED
+  CANCELLED
+  REFUNDED
+  COMPLETED
+}
+
+/// How a booking was connected to a customer journey. DETERMINISTIC methods
+/// only — there is intentionally no "similar timestamp", "same IP", or
+/// "same device fingerprint" member, because those are guesses, not matches.
+enum BookingMatchMethod {
+  booking_id
+  customer_id
+  email_hash
+  phone_hash
+  visitor_id
+  session_id
+  tracking_event
+  coupon_code
+  manual
+  unknown
+}
+
+/// How much the evidence actually proves. "A marketing source exists" is NOT
+/// proof that the source produced the booking — that case is PARTIAL or UNKNOWN.
+/// Attribution must be able to refuse to credit anything below its threshold.
+enum BookingMatchConfidence {
+  DETERMINISTIC
+  STRONG
+  PARTIAL
+  UNKNOWN
+}
+
+/// Per-hotel configuration for wherever this hotel's bookings come from — a PMS,
+/// a booking engine, an OTA feed, or a channel manager. Provider-agnostic on
+/// purpose: no vendor is hard-coded and none is integrated yet.
+/// Modelled on Ga4Connection / GoogleAdsConnection (one row per hotel).
+model BookingConnection {
+  id                    String    @id @default(cuid())
+  agencyId              String
+  hotelClientId         String    @unique // one booking source per hotel
+  /// Free-form provider key, e.g. "webhook" | "csv" | "cloudbeds" | "staah".
+  /// String (not enum) per this schema's open-vocabulary convention.
+  provider              String
+  /// The hotel's identifier AT the provider (property id, account id, …).
+  externalAccountId     String?
+  /// AES-256-GCM ciphertext (shared secret / API key), same handling as every
+  /// other stored secret: NEVER log or expose, stripped from ordinary Prisma
+  /// results by the scrub extension in lib/prisma.ts. Null until configured.
+  credentials           String?   @db.Text
+  /// Open-ended: pending | active | error | disconnected.
+  status                String    @default("pending")
+  /// When a booking was last actually received — the honest health signal.
+  lastBookingReceivedAt DateTime?
+  lastError             String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  bookings    Booking[]
+
+  @@index([agencyId])
+}
+
+/// A real reservation received from an external booking source. THE FACT.
+///
+/// Contains no attribution: see BookingJourneyMatch. Every money field is
+/// nullable because providers differ wildly in what they supply — a missing
+/// value stays NULL rather than being invented or defaulted to zero.
+model Booking {
+  id            String @id @default(cuid())
+  agencyId      String
+  hotelClientId String
+
+  /// Which source this booking arrived from; mirrors BookingConnection.provider.
+  provider          String
+  /// The provider's own reservation id / confirmation number. The join key that
+  /// makes re-delivery idempotent and lets a human reconcile against the PMS.
+  externalBookingId String
+  connectionId      String?
+
+  status BookingStatus @default(CONFIRMED)
+
+  /// HOW the booking was made — direct_web | phone | whatsapp | sales | ota |
+  /// travel_agent | other. This is NOT the marketing source: a Google-Ads-
+  /// acquired guest can book through an OTA. Keeping the two apart is the whole
+  /// point; marketing source lives on the journey side of the match.
+  bookingChannel String?
+
+  /// ISO-4217 from the booking source. NULL means UNKNOWN — never assume INR.
+  /// Any figure derived from these amounts must refuse to combine currencies.
+  currency String?
+
+  bookedAt DateTime
+  checkIn  DateTime?
+  checkOut DateTime?
+
+  /// Guest identity, hashed with the SAME salted chain as VisitorIdentity
+  /// (lib/pii.ts saltedHash over a client SHA-256), so a booking can be matched
+  /// to a known visitor WITHOUT either side ever storing a raw email or phone.
+  guestEmailHash  String?
+  guestPhoneHash  String?
+  /// Less sensitive, shown only inside the authenticated agency app (same policy
+  /// as InfluencerRedemption.guestName).
+  guestName       String?
+  /// The provider's own guest/customer id, when it supplies one.
+  externalGuestId String?
+
+  /// Revenue AS SUPPLIED. Nullable throughout: store only what the source sent.
+  grossAmount      Decimal? @db.Decimal(12, 2)
+  netAmount        Decimal? @db.Decimal(12, 2)
+  roomRevenue      Decimal? @db.Decimal(12, 2)
+  ancillaryRevenue Decimal? @db.Decimal(12, 2)
+  taxAmount        Decimal? @db.Decimal(12, 2)
+  refundedAmount   Decimal? @db.Decimal(12, 2)
+
+  /// The provider's original record, kept for audit and for repairing a bad
+  /// import without re-fetching. May contain PII — never exposed to hotel views.
+  rawPayload Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agency         Agency                @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient    HotelClient           @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  connection     BookingConnection?    @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  statusEvents   BookingStatusEvent[]
+  journeyMatches BookingJourneyMatch[]
+
+  /// Idempotent re-delivery: the same reservation from the same provider is the
+  /// same row, so a webhook retry or a re-import can never duplicate revenue.
+  @@unique([hotelClientId, provider, externalBookingId])
+  @@index([agencyId])
+  @@index([hotelClientId, bookedAt])
+  @@index([hotelClientId, status])
+  @@index([hotelClientId, guestEmailHash]) // deterministic identity match
+  @@index([hotelClientId, guestPhoneHash])
+  @@index([connectionId])
+}
+
+/// Append-only booking lifecycle. A cancellation or refund is a NEW ROW, never
+/// an overwrite, so original value → modifications → cancellation → refunds →
+/// final realized value stays reconstructable. `Booking.status` is the current
+/// state; this table is the history that proves how it got there.
+model BookingStatusEvent {
+  id        String        @id @default(cuid())
+  agencyId  String
+  bookingId String
+  status    BookingStatus
+
+  /// The amounts AS OF this event, when the source restates them (a modification
+  /// or a partial refund). Null when the event carries no new figures.
+  grossAmount    Decimal? @db.Decimal(12, 2)
+  netAmount      Decimal? @db.Decimal(12, 2)
+  refundedAmount Decimal? @db.Decimal(12, 2)
+  currency       String?
+
+  /// When it happened AT THE PROVIDER (not when we ingested it).
+  occurredAt DateTime
+  /// Where this event came from: the provider key, or "manual".
+  source     String
+  rawPayload Json?
+  createdAt  DateTime @default(now())
+
+  agency  Agency  @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId])
+  @@index([bookingId, occurredAt])
+}
+
+/// The EVIDENCE linking a booking to a marketing journey. Separate from Booking
+/// by design: this table may be wrong, incomplete, or absent, and none of that
+/// should corrupt the booking record.
+///
+/// Multiple rows per booking are ALLOWED and meaningful — two candidate visitors
+/// matching one guest email is genuine ambiguity, and collapsing it to a single
+/// row would manufacture certainty. There is deliberately no unique constraint.
+///
+/// NOTE ON THE MISSING FOREIGN KEYS: visitorId / sessionId / trackingEventId are
+/// plain indexed columns, exactly like InfluencerRedemption.sessionId /
+/// trackingEventId. A real FK to Session would let the 90-day journey-retention
+/// cron (/api/cron/cleanup-journey) CASCADE-DELETE the attribution evidence.
+/// Evidence must outlive the journey rows it describes.
+model BookingJourneyMatch {
+  id            String @id @default(cuid())
+  agencyId      String
+  hotelClientId String
+  bookingId     String
+
+  /// Whichever journey anchors this match provides. All nullable: a match on
+  /// email_hash may know the visitor but not a specific session or conversion.
+  visitorId       String?
+  sessionId       String?
+  trackingEventId String?
+
+  matchMethod     BookingMatchMethod     @default(unknown)
+  matchConfidence BookingMatchConfidence @default(UNKNOWN)
+
+  /// What was actually compared, for audit — e.g. { "matchedOn": "guestEmailHash",
+  /// "candidateCount": 2 }. Never contains a raw email, phone, or click id.
+  evidence Json?
+
+  matchedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  agency  Agency  @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId])
+  @@index([bookingId])
+  @@index([hotelClientId, matchConfidence])
+  @@index([visitorId])
+  @@index([trackingEventId])
 }

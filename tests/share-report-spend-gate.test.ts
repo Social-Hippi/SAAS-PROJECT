@@ -76,6 +76,11 @@ describe("loadHotelReport ad-spend gate for /share", () => {
     expect(r.kpis.spend).toBe(0);
     expect(r.kpis.costPerBooking).toBeNull();
     expect(r.kpis.roas).toBeNull();
+    // Phase 0: the new spend-derived fields must be stripped too. blendedRoas is
+    // (all revenue ÷ paid spend) — leaving it in would leak the spend figure by
+    // division, since revenue IS shown to the hotel.
+    expect(r.kpis.blendedRoas).toBeNull();
+    expect(r.kpis.spendByPlatform).toEqual({ meta: 0, google: 0, total: 0 });
     expect(r.realRoi).toBeNull();
     // Outcomes remain intact.
     expect(r.kpis.bookings).toBeGreaterThan(0);

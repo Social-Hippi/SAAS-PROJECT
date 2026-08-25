@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { csvResponse, slugForFile, toCsv } from "@/lib/csv";
 import { sanitizeAoa, sanitizeRows } from "@/lib/xlsx";
+import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,7 +29,7 @@ export async function GET(request: Request) {
   const format = (url.searchParams.get("format") ?? "xlsx").toLowerCase();
   const since = new Date(Date.now() - THIRTY_DAYS_MS);
 
-  const [hotels, grouped, spendAgg, agency] = await Promise.all([
+  const [hotels, grouped, spendAgg, googleSpendAgg, paidConversions, agency] = await Promise.all([
     agencyScoped(prisma.hotelClient).findMany({
       orderBy: { createdAt: "desc" },
       select: {
@@ -48,6 +49,18 @@ export async function GET(request: Request) {
     agencyScoped(prisma.adSnapshot).aggregate({
       where: { archived: false, date: { gte: since } },
       _sum: { spend: true },
+    }),
+    // Phase 0: Google Ads spend — previously missing from the export's "Total
+    // Ad Spend" and its ROAS denominator.
+    agencyScoped(prisma.googleAdsCampaignSnapshot).aggregate({
+      where: { date: { gte: since } },
+      _sum: { spend: true },
+    }),
+    // Phase 0: row-level conversions so ROAS uses PAID revenue. The groupBy
+    // above cannot classify by source.
+    agencyScoped(prisma.trackingEvent).findMany({
+      where: { eventType: "conversion", createdAt: { gte: since } },
+      select: { utmSource: true, utmMedium: true, utmContent: true, conversionValue: true, gclid: true, gbraid: true, wbraid: true, fbclid: true, },
     }),
     // Agency is the tenant root — findFirst is scoped to the caller's own id.
     agencyScoped(prisma.agency).findFirst({ select: { name: true } }),
@@ -73,8 +86,18 @@ export async function GET(request: Request) {
     }),
     { visits: 0, bookings: 0, revenue: 0 },
   );
-  const totalSpend = Number(spendAgg._sum.spend ?? 0);
-  const roas = totalSpend > 0 ? totals.revenue / totalSpend : null;
+  // Phase 0: combined paid spend, and PAID revenue ÷ paid spend (was all
+  // booking revenue ÷ Meta-only spend, exported to agencies as "ROAS").
+  const totalSpend = Number(spendAgg._sum.spend ?? 0) + Number(googleSpendAgg._sum.spend ?? 0);
+  const paidRevenue = paidConversions.reduce(
+    (sum, c) =>
+      sum +
+      (isPaidSourceType(classifySourceType(c)) && c.conversionValue != null
+        ? Number(c.conversionValue)
+        : 0),
+    0,
+  );
+  const roas = totalSpend > 0 ? paidRevenue / totalSpend : null;
 
   const hotelRows = hotels.map((h) => {
     const m = metrics.get(h.id) ?? { visits: 0, bookings: 0, revenue: 0 };

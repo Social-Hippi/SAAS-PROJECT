@@ -4,7 +4,9 @@ import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { aggregateRevenueBySource, type ConversionRow } from "@/lib/revenue-by-source";
 import { calculateSavings, DEFAULT_OTA_RATE } from "@/lib/savings";
-import { classifySourceType } from "@/lib/source-classifier";
+import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
+import { rowSourceType } from "@/lib/revenue-by-source";
+import { getSpendByPlatform, safeRoas } from "@/lib/ad-spend";
 import { formatCurrency, formatNumber } from "@/lib/format";
 import { templateFor, renderTemplate, type Pattern, type Period } from "@/lib/summary-templates";
 
@@ -101,14 +103,16 @@ export async function generateSummary(hotelClientId: string, period: Period): Pr
 
   const { start, end, prevStart, prevEnd } = periodWindows(period);
 
-  const [events, visitsCur, visitsPrev, adAgg, infGroups, socialSnaps] = await Promise.all([
+  const [events, visitsCur, visitsPrev, paidSpend, infGroups, socialSnaps, googleAdsConnections] = await Promise.all([
     agencyScoped(prisma.trackingEvent).findMany({
       where: { hotelClientId, eventType: "conversion", createdAt: { gte: prevStart, lte: end } },
-      select: { utmSource: true, utmMedium: true, utmCampaign: true, utmContent: true, conversionValue: true, couponCodeUsed: true, createdAt: true },
+      select: { utmSource: true, utmMedium: true, utmCampaign: true, utmContent: true, conversionValue: true, couponCodeUsed: true, createdAt: true, gclid: true, gbraid: true, wbraid: true, fbclid: true, },
     }),
     agencyScoped(prisma.trackingEvent).count({ where: { hotelClientId, eventType: "visit", createdAt: { gte: start, lte: end } } }),
     agencyScoped(prisma.trackingEvent).count({ where: { hotelClientId, eventType: "visit", createdAt: { gte: prevStart, lte: prevEnd } } }),
-    agencyScoped(prisma.adSnapshot).aggregate({ where: { hotelClientId, archived: false, date: { gte: start, lte: end } }, _sum: { spend: true } }),
+    // Phase 0: canonical paid spend (Meta + Google) instead of a Meta-only
+    // AdSnapshot sum — the narrative's "₹x back per ₹1 spent" divided by it.
+    getSpendByPlatform(hotelClientId, start, end),
     agencyScoped(prisma.influencerRedemption).groupBy({
       by: ["influencerId"],
       where: { hotelClientId, redeemedAt: { gte: start, lte: end } },
@@ -120,11 +124,17 @@ export async function generateSummary(hotelClientId: string, period: Period): Pr
       orderBy: { date: "asc" },
       select: { reach: true, views: true, followers: true },
     }),
+    // Phase 0: is Google Ads actually connected? The highlight bullet below used
+    // to say "coming soon" unconditionally, while Google Ads was syncing daily.
+    agencyScoped(prisma.googleAdsConnection).count({
+      where: { hotelClientId, customerId: { not: "" } },
+    }),
   ]);
 
   const toRow = (e: (typeof events)[number]): ConversionRow => ({
     utmSource: e.utmSource, utmMedium: e.utmMedium, utmCampaign: e.utmCampaign, utmContent: e.utmContent,
     value: e.conversionValue == null ? 0 : Number(e.conversionValue), occurredAt: e.createdAt, couponCode: e.couponCodeUsed,
+    gclid: e.gclid, gbraid: e.gbraid, wbraid: e.wbraid, fbclid: e.fbclid,
   });
   const curRows = events.filter((e) => e.createdAt >= start && e.createdAt <= end).map(toRow);
   const prevRows = events.filter((e) => e.createdAt >= prevStart && e.createdAt <= prevEnd).map(toRow);
@@ -158,8 +168,15 @@ export async function generateSummary(hotelClientId: string, period: Period): Pr
     }
   }
 
-  const adSpend = Number(adAgg._sum.spend ?? 0);
-  const roas = adSpend > 0 ? revenue / adSpend : null;
+  // Phase 0: ROAS is PAID revenue ÷ PAID spend. It used to be ALL booking
+  // revenue (direct, organic, influencer…) ÷ Meta-only spend, narrated to hotel
+  // owners as "₹x back for every ₹1 spent" — the most misleading form of the bug.
+  const adSpend = paidSpend.total ?? 0;
+  const paidRevenue = curRows.reduce(
+    (s, r) => s + (isPaidSourceType(rowSourceType(r)) ? r.value : 0),
+    0,
+  );
+  const roas = safeRoas(paidRevenue, paidSpend.total);
   const savings = calculateSavings(revenue, otaRate);
   const visitsChangePct = pct(visitsCur, visitsPrev);
 
@@ -195,14 +212,24 @@ export async function generateSummary(hotelClientId: string, period: Period): Pr
   const plural = (n: number) => (n === 1 ? "" : "s");
 
   const highlights: string[] = [];
-  // 1 — Meta Ads
+  // 1 — Meta Ads. Phase 0: this said "Meta Ads: spent <X> at <Y>x ROAS" using
+  // the COMBINED spend and the blended ROAS. Both are now Meta-specific.
+  const metaRoas = safeRoas(meta.revenue, paidSpend.meta);
   highlights.push(
-    adSpend > 0
-      ? `Meta Ads: spent ${fmt(adSpend)}${roas != null ? ` at ${roas.toFixed(1)}x ROAS` : ""}, driving ${meta.bookings} booking${plural(meta.bookings)} (${fmt(meta.revenue)}).`
+    paidSpend.meta > 0
+      ? `Meta Ads: spent ${fmt(paidSpend.meta)}${metaRoas != null ? ` at ${metaRoas.toFixed(1)}x ROAS` : ""}, driving ${meta.bookings} booking${plural(meta.bookings)} (${fmt(meta.revenue)}).`
       : `Meta Ads: not connected — connect a Meta ad account to track spend and ROAS.`,
   );
-  // 2 — Google Ads (not integrated yet)
-  highlights.push(`Google Ads: not connected yet — integration coming soon.`);
+  // 2 — Google Ads. Phase 0: this was a hardcoded "coming soon" string that
+  // shipped alongside a working Google Ads integration. Now it reflects reality.
+  const google = channelRev("google_ads");
+  highlights.push(
+    googleAdsConnections > 0
+      ? paidSpend.google > 0
+        ? `Google Ads: spent ${fmt(paidSpend.google)}, driving ${google.bookings} booking${plural(google.bookings)} (${fmt(google.revenue)}).`
+        : `Google Ads: connected, but no spend recorded in this period.`
+      : `Google Ads: not connected — connect a Google Ads account to track spend and ROAS.`,
+  );
   // 3 — Instagram reach
   highlights.push(
     igReach > 0 || igFollowers > 0

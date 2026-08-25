@@ -283,8 +283,26 @@ function PaidBody({ data, hotelId, ownerView }: { data: PaidChannelView; hotelId
             full ₹0.00 precision so small values aren't rounded to ₹0. CTR/CPC/CPM
             are recomputed from totals server-side (never averaged across rows). */}
         <Stat label="Total spend" value={formatCurrency(k.totalSpend, { compact: true })} sub={accounts.length > 1 ? `${accounts.length} accounts` : undefined} />
-        <Stat label="Revenue" value={formatCurrency(k.revenue, { compact: true })} sub={isGoogle ? `${formatNumber(k.bookings)} conversions` : `${formatNumber(k.bookings)} tracked bookings`} />
-        <Stat label="ROAS" value={formatMultiple(k.roas)} sub="Revenue ÷ spend" />
+        <Stat label="Revenue" value={formatCurrency(k.revenue, { compact: true })} sub={`${formatNumber(k.bookings)} tracked bookings`} />
+        <Stat label="ROAS" value={formatMultiple(k.roas)} sub="Tracked revenue ÷ spend" />
+        {/* Phase 0: Google's OWN conversion tracking, shown alongside — never
+            merged into — HotelTrack's tracked figures above. Before this, the
+            Google tab put these numbers in the Revenue/ROAS stats, where the
+            Meta tab shows tracked bookings: same label, different meaning. */}
+        {isGoogle && (
+          <Stat
+            label="Revenue (Google-reported)"
+            value={k.platformReportedRevenue == null ? "—" : formatCurrency(k.platformReportedRevenue, { compact: true })}
+            sub={`${formatNumber(k.platformReportedConversions ?? 0)} Google conversions`}
+          />
+        )}
+        {isGoogle && (
+          <Stat
+            label="ROAS (Google-reported)"
+            value={formatMultiple(k.platformReportedRoas ?? null)}
+            sub="Google's own conversion tracking"
+          />
+        )}
         <Stat label="Conversions" value={formatNumber(k.conversions)} sub={isGoogle ? "Google-reported" : "Meta-reported"} />
         <Stat label="Cost / conversion" value={k.costPerConversion == null ? "—" : formatCurrencyCents(k.costPerConversion)} />
         <Stat label="Impressions" value={formatNumber(k.impressions)} />
@@ -316,14 +334,18 @@ function PaidBody({ data, hotelId, ownerView }: { data: PaidChannelView; hotelId
         </Panel>
       )}
 
-      <Panel title="Spend vs revenue">
+      {/* Google's per-day and per-campaign revenue is still GOOGLE-REPORTED (its
+          own conversion tracking); only the KPI stats above are HotelTrack-
+          tracked. The titles say which, so the two are never read as one number.
+          Campaign-level tracked revenue needs GCLID (Phase 1). */}
+      <Panel title={isGoogle ? "Spend vs revenue (Google-reported)" : "Spend vs revenue"}>
         <TrendChart data={data.trend ?? []} series={[
           { key: "spend", label: "Spend", color: "#3b82f6", axis: "left", currency: true },
           { key: "revenue", label: "Revenue", color: "#22c55e", axis: "right", currency: true },
         ]} />
       </Panel>
 
-      <Panel title="Top campaigns">
+      <Panel title={isGoogle ? "Top campaigns (Google-reported revenue)" : "Top campaigns"}>
         {(data.topCampaigns ?? []).length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-ink-tertiary">No campaign data in this period.</p>
         ) : (
@@ -853,7 +875,10 @@ function InfluencerBody({ data, ownerView }: { data: InfluencerChannelView; owne
         <Stat label="Active influencers" value={formatNumber(k.activeInfluencers)} />
         <Stat label="Active coupon codes" value={formatNumber(k.activeCouponCodes)} />
         <Stat label="Redemptions" value={formatNumber(k.totalRedemptions)} sub={`${formatNumber(b.snippetAuto)} auto · ${formatNumber(b.manualEntry)} manual`} />
-        <Stat label="Revenue" value={formatCurrency(k.totalRevenue, { compact: true })} sub={`${formatCurrency(k.averageRevenuePerInfluencer, { compact: true })} avg / influencer`} />
+        {/* Track A: coupon revenue and tracked-link revenue are shown apart. A
+            booking that used a coupon is counted only once, as a redemption. */}
+        <Stat label="Coupon revenue" value={formatCurrency(k.totalRevenue, { compact: true })} sub={`${formatCurrency(k.averageRevenuePerInfluencer, { compact: true })} avg / influencer`} />
+        <Stat label="Tracked-link revenue" value={formatCurrency(k.linkAttributedRevenue, { compact: true })} sub={`${formatNumber(k.linkAttributedBookings)} booking${k.linkAttributedBookings === 1 ? "" : "s"}, no coupon used`} />
       </StatGrid>
       <Panel title="Redemptions & revenue">
         <TrendChart data={data.trend} series={[
@@ -863,9 +888,9 @@ function InfluencerBody({ data, ownerView }: { data: InfluencerChannelView; owne
       </Panel>
       <Panel title="Top influencers">
         {data.topInfluencers.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-ink-tertiary">No redemptions in this period.</p>
+          <p className="px-4 py-8 text-center text-sm text-ink-tertiary">No redemptions or tracked-link bookings in this period.</p>
         ) : (
-          <Table head={["Influencer", "Codes", "Redemptions", "Revenue", "Avg booking"]}>
+          <Table head={["Influencer", "Codes", "Redemptions", "Coupon revenue", "Link bookings", "Link revenue", "Total attributed"]}>
             {data.topInfluencers.map((i) => (
               <tr key={`${i.influencerName}-${i.instagramHandle}`} className="border-t border-line">
                 <td className={tdName}>
@@ -875,7 +900,9 @@ function InfluencerBody({ data, ownerView }: { data: InfluencerChannelView; owne
                 <td className={td}>{formatNumber(i.activeCodesCount)}</td>
                 <td className={td}>{formatNumber(i.redemptionsCount)}</td>
                 <td className={td}>{formatCurrency(i.revenue, { compact: true })}</td>
-                <td className={td}>{formatCurrency(i.avgBookingValue, { compact: true })}</td>
+                <td className={td}>{formatNumber(i.linkBookings)}</td>
+                <td className={td}>{formatCurrency(i.linkRevenue, { compact: true })}</td>
+                <td className={td}>{formatCurrency(i.attributedRevenue, { compact: true })}</td>
               </tr>
             ))}
           </Table>

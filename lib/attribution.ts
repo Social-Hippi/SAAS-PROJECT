@@ -11,6 +11,8 @@
 // events are exactly those whose utm_content === `ht-<contentPieceId>`.
 
 import { UTM_CONTENT_PREFIX } from "@/lib/utm";
+import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
+import type { ClickIds } from "@/lib/click-ids";
 
 const DAY_MS = 86_400_000;
 
@@ -80,8 +82,15 @@ export function resolveRange(sp: {
 // Inputs
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type EventInput = {
+export type EventInput = ClickIds & {
   eventType: "visit" | "conversion";
+  // utmSource + utmMedium are REQUIRED (Phase 0): computeKpis has to classify a
+  // conversion as paid or non-paid, and it can't do that from utm_content alone.
+  // Deliberately not optional — a call site that forgets to SELECT them would
+  // otherwise silently classify every booking as `direct` and report a paid ROAS
+  // of 0×. A compile error is the cheaper failure.
+  utmSource: string | null;
+  utmMedium: string | null;
   utmContent: string | null;
   utmCampaign: string | null;
   sessionId: string;
@@ -123,36 +132,99 @@ export function contentIdFromUtmContent(
 // Section 1 — KPIs
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Paid ad spend split by platform. Structurally identical to
+ * `SpendByPlatform` from lib/ad-spend.ts (which is server-only, so it cannot be
+ * imported into this pure module) — a `SpendByPlatform` satisfies this type.
+ *
+ * `total` is NULL when the platforms report in currencies that cannot be safely
+ * added; every figure derived from it is then null too, never a wrong number.
+ */
+export type PaidSpendInput = {
+  meta: number;
+  google: number;
+  total: number | null;
+};
+
 export type Kpis = {
   visits: number;
   bookings: number;
+  /** ALL tracked conversion revenue, every channel. Not a ROAS numerator. */
   revenue: number;
-  spend: number;
-  /** Ad spend / bookings. Null when there are no bookings. */
+  /** Revenue from conversions classified meta_ads or google_ads only. */
+  paidRevenue: number;
+  /** Bookings classified meta_ads or google_ads only. */
+  paidBookings: number;
+  /**
+   * Combined PAID ad spend (Meta + Google). Null when the currencies can't be
+   * safely combined — callers must render "—", never 0.
+   */
+  spend: number | null;
+  /** Paid spend split by platform, for per-platform display. */
+  spendByPlatform: PaidSpendInput;
+  /**
+   * Paid spend ÷ PAID bookings. Null when there's no paid spend or no paid
+   * booking. (Phase 0: the denominator is paid bookings, not all bookings —
+   * dividing paid spend by organic bookings understated the true cost.)
+   */
   costPerBooking: number | null;
-  /** Attributed revenue / ad spend. Null when there's no spend. */
+  /**
+   * THE ROAS. paidRevenue ÷ paid spend — both sides paid-only.
+   * Null when there's no paid spend to divide by.
+   */
   roas: number | null;
+  /**
+   * ALL revenue ÷ paid spend. This is what `roas` used to be. It is a real and
+   * sometimes useful figure ("every rupee of ad spend coincided with ₹X of total
+   * revenue"), but it is NOT return on ad spend and must never be labelled ROAS
+   * without the word "Blended".
+   */
+  blendedRoas: number | null;
 };
 
-export function computeKpis(events: EventInput[], spend: number): Kpis {
+/**
+ * Period KPIs.
+ *
+ * PHASE 0 CORRECTION: `roas` used to be `allRevenue / metaSpend` — direct,
+ * organic, influencer, email and WhatsApp revenue divided by Meta-only ad spend,
+ * displayed as "True ROAS". It is now paid revenue ÷ paid spend, with the old
+ * figure preserved (and honestly named) as `blendedRoas`.
+ */
+export function computeKpis(events: EventInput[], spend: PaidSpendInput): Kpis {
   let visits = 0;
   let bookings = 0;
   let revenue = 0;
+  let paidRevenue = 0;
+  let paidBookings = 0;
+
   for (const e of events) {
     if (e.eventType === "visit") {
       visits += 1;
-    } else {
-      bookings += 1;
-      revenue += e.conversionValue ?? 0;
+      continue;
+    }
+    const value = e.conversionValue ?? 0;
+    bookings += 1;
+    revenue += value;
+    if (isPaidSourceType(classifySourceType(e))) {
+      paidBookings += 1;
+      paidRevenue += value;
     }
   }
+
+  const paidSpend = spend.total;
+  const divisible = paidSpend != null && paidSpend > 0;
+
   return {
     visits,
     bookings,
     revenue,
-    spend,
-    costPerBooking: bookings > 0 ? spend / bookings : null,
-    roas: spend > 0 ? revenue / spend : null,
+    paidRevenue,
+    paidBookings,
+    spend: paidSpend,
+    spendByPlatform: { meta: spend.meta, google: spend.google, total: spend.total },
+    costPerBooking: divisible && paidBookings > 0 ? paidSpend / paidBookings : null,
+    roas: divisible ? paidRevenue / paidSpend : null,
+    blendedRoas: divisible ? revenue / paidSpend : null,
   };
 }
 

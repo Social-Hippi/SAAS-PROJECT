@@ -23,15 +23,42 @@ const PLATFORMS = [
 const inputCls =
   "w-full rounded-lg border border-line-strong bg-page px-3 py-2 text-sm text-ink placeholder:text-ink-disabled outline-none focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand";
 
+export type InfluencerOption = {
+  id: string;
+  name: string;
+  instagramHandle: string | null;
+  /** Non-null when the influencer is tied to a single hotel. */
+  hotelClientId: string | null;
+  couponCodes: { code: string; hotelClientId: string }[];
+};
+
 export function ContentForm({
   hotels,
+  influencers,
 }: {
   hotels: { id: string; name: string }[];
+  influencers: InfluencerOption[];
 }) {
   const [state, action, pending] = useActionState(createContentPiece, initialState);
   // Controlled so the influencer-only fields can appear/disappear live.
   const [contentType, setContentType] = useState<string>("organic");
   const isInfluencer = contentType === "influencer";
+
+  // Track A: picking a registered influencer is what makes the link resolvable
+  // by id. The hotel is controlled too, so we can offer only the coupon codes
+  // that actually belong to this influencer AT this hotel.
+  const [hotelClientId, setHotelClientId] = useState<string>("");
+  const [influencerId, setInfluencerId] = useState<string>("");
+  const selected = influencers.find((i) => i.id === influencerId) ?? null;
+
+  // An influencer scoped to one hotel shouldn't be offered for another.
+  const selectableInfluencers = hotelClientId
+    ? influencers.filter((i) => !i.hotelClientId || i.hotelClientId === hotelClientId)
+    : influencers;
+
+  const couponOptions = selected
+    ? selected.couponCodes.filter((c) => !hotelClientId || c.hotelClientId === hotelClientId)
+    : [];
 
   return (
     <div className="space-y-6">
@@ -64,7 +91,20 @@ export function ContentForm({
           <label htmlFor="hotelClientId" className="text-sm font-medium text-ink-secondary">
             Hotel client
           </label>
-          <select id="hotelClientId" name="hotelClientId" className={inputCls} defaultValue="">
+          <select
+            id="hotelClientId"
+            name="hotelClientId"
+            className={inputCls}
+            value={hotelClientId}
+            onChange={(e) => {
+              setHotelClientId(e.target.value);
+              // Drop a selection that the new hotel no longer permits.
+              const still = influencers.find((i) => i.id === influencerId);
+              if (still?.hotelClientId && still.hotelClientId !== e.target.value) {
+                setInfluencerId("");
+              }
+            }}
+          >
             <option value="" disabled>
               Select a hotel client…
             </option>
@@ -144,6 +184,32 @@ export function ContentForm({
         {isInfluencer && (
           <div className="space-y-4 rounded-lg border border-line p-4">
             <div className="space-y-1.5">
+              <label htmlFor="influencerId" className="text-sm font-medium text-ink-secondary">
+                Influencer
+              </label>
+              <select
+                id="influencerId"
+                name="influencerId"
+                className={inputCls}
+                value={influencerId}
+                onChange={(e) => setInfluencerId(e.target.value)}
+              >
+                <option value="">Not a registered influencer…</option>
+                {selectableInfluencers.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}
+                    {i.instagramHandle ? ` (${i.instagramHandle})` : ""}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-ink-tertiary">
+                {selected
+                  ? "This link and this influencer's coupon codes will both report against the same influencer."
+                  : "Pick a registered influencer so the link and their coupon codes report as one person. Without it we can only record the typed name."}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
               <label htmlFor="influencerName" className="text-sm font-medium text-ink-secondary">
                 Influencer name
               </label>
@@ -152,8 +218,15 @@ export function ContentForm({
                 name="influencerName"
                 className={inputCls}
                 placeholder="@traveljane"
+                // Kept for display and for collabs with someone not yet in the
+                // roster. When an influencer is picked, the server stores that
+                // influencer's own name instead of whatever is typed here.
+                value={selected ? selected.name : undefined}
+                readOnly={!!selected}
+                onChange={selected ? () => {} : undefined}
               />
             </div>
+
             <div className="space-y-1.5">
               <label htmlFor="couponCode" className="text-sm font-medium text-ink-secondary">
                 Coupon code
@@ -163,9 +236,20 @@ export function ContentForm({
                 name="couponCode"
                 className={inputCls}
                 placeholder="JANE10"
+                list={couponOptions.length ? "influencer-coupon-codes" : undefined}
               />
+              {couponOptions.length > 0 && (
+                <datalist id="influencer-coupon-codes">
+                  {couponOptions.map((c) => (
+                    <option key={c.code} value={c.code} />
+                  ))}
+                </datalist>
+              )}
               <p className="text-xs text-ink-tertiary">
                 Guests who redeem this code can be matched back to this collab.
+                {couponOptions.length > 0
+                  ? " Existing codes for this influencer at this hotel are suggested."
+                  : ""}
               </p>
             </div>
           </div>

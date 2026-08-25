@@ -39,7 +39,9 @@ beforeAll(() => {
 
   const internals = (window as unknown as { __htInternals?: { VERSION?: string } }).__htInternals;
   if (!internals) throw new Error("snippet did not expose __htInternals — bootstrap failed");
-  expect(internals.VERSION).toBe("2.3.0");
+  // v2.4 added ad click ids (Phase 1A). Everything asserted in this file is
+  // v2.2 behaviour and must keep working unchanged across that bump.
+  expect(internals.VERSION).toBe("2.4.0");
 });
 
 beforeEach(() => {

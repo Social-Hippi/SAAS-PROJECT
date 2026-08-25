@@ -3,6 +3,8 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { classifySourceType, type SourceType } from "@/lib/source-classifier";
+import { contentPieceIdFromUtmContent } from "@/lib/influencer-attribution";
+import type { ClickIds } from "@/lib/click-ids";
 import { loadInstagramReachSplit } from "@/lib/instagram-reach-split";
 import {
   CHANNEL_KEYS, isChannelKey, type ChannelKey, type PaidKpis,
@@ -71,7 +73,7 @@ const dayKey = (d: Date): string => d.toISOString().slice(0, 10);
 
 // ── Shared row selects ───────────────────────────────────────────────────────
 
-type ConvRow = {
+type ConvRow = ClickIds & {
   utmSource: string | null;
   utmMedium: string | null;
   utmContent: string | null;
@@ -94,6 +96,9 @@ function conversionsInRange(hotelClientId: string, start: Date, end: Date) {
     where: { hotelClientId, eventType: "conversion", createdAt: { gte: start, lte: end } },
     select: {
       utmSource: true, utmMedium: true, utmContent: true, utmCampaign: true,
+      // Phase 1A: click ids so a stored auto-tagged Google conversion classifies
+      // as google_ads here exactly as it does live.
+      gclid: true, gbraid: true, wbraid: true, fbclid: true,
       conversionValue: true, sessionId: true, createdAt: true,
     },
   }) as Promise<ConvRow[]>;
@@ -234,7 +239,10 @@ async function loadMetaAds(hotelClientId: string, start: Date, end: Date): Promi
 }
 
 async function loadGoogleAds(hotelClientId: string, start: Date, end: Date): Promise<PaidChannelView> {
-  const [conn, campSnaps] = await Promise.all([
+  // `trackedConversions` (HotelTrack TrackingEvents) is deliberately NOT called
+  // `conversions` — that name is taken below by the GOOGLE-reported conversion
+  // count, and keeping the two visibly distinct is the whole point of this step.
+  const [conn, campSnaps, trackedConversions] = await Promise.all([
     agencyScoped(prisma.googleAdsConnection).findFirst({
       where: { hotelClientId },
       select: { customerId: true },
@@ -246,6 +254,9 @@ async function loadGoogleAds(hotelClientId: string, start: Date, end: Date): Pro
         spend: true, impressions: true, clicks: true, conversions: true, conversionsValue: true,
       },
     }),
+    // Phase 0: HotelTrack-tracked bookings for this channel, the same way the
+    // Meta loader does it. Previously this loader read no TrackingEvent at all.
+    conversionsInRange(hotelClientId, start, end),
   ]);
 
   // No connection at all → "not connected". A connection with no rows in-range is
@@ -286,6 +297,13 @@ async function loadGoogleAds(hotelClientId: string, start: Date, end: Date): Pro
     byDay.set(dk, d);
   }
 
+  // ── HotelTrack-TRACKED Google bookings (Phase 0) ─────────────────────────
+  // Same rule the Meta loader uses, applied to the google_ads bucket. UTM-based
+  // today; GCLID-based matching lands in Phase 1.
+  const googleConv = trackedConversions.filter((c) => classifySourceType(c) === "google_ads");
+  const trackedRevenue = googleConv.reduce((sum, c) => sum + num(c.conversionValue), 0);
+  const trackedBookings = googleConv.length;
+
   const kpis: PaidKpis = {
     totalSpend, impressions,
     reach: 0, frequency: 0, // Google Ads reports no de-duplicated reach
@@ -295,11 +313,23 @@ async function loadGoogleAds(hotelClientId: string, start: Date, end: Date): Pro
     linkClicks: clicks,
     conversions: Math.round(conversions),
     costPerConversion: conversions > 0 ? totalSpend / conversions : null,
-    bookings: Math.round(conversions),
-    revenue,
-    roas: totalSpend > 0 ? revenue / totalSpend : null,
-    costPerBooking: conversions > 0 ? totalSpend / conversions : null,
-    conversionRate: clicks > 0 ? (conversions / clicks) * 100 : null,
+
+    // `bookings` / `revenue` / `roas` are the SHARED fields the UI renders for
+    // every paid channel — they now mean the same thing here as they do for
+    // Meta: HotelTrack-tracked. Google's own numbers moved to platformReported*.
+    bookings: trackedBookings,
+    revenue: trackedRevenue,
+    roas: totalSpend > 0 ? trackedRevenue / totalSpend : null,
+    costPerBooking: trackedBookings > 0 ? totalSpend / trackedBookings : null,
+    conversionRate: clicks > 0 ? (trackedBookings / clicks) * 100 : null,
+
+    // Google's OWN conversion tracking — unchanged numbers, explicit names.
+    platformReportedConversions: Math.round(conversions),
+    platformReportedRevenue: revenue,
+    platformReportedRoas: totalSpend > 0 ? revenue / totalSpend : null,
+    trackedBookings,
+    trackedRevenue,
+    trackedRoas: totalSpend > 0 ? trackedRevenue / totalSpend : null,
   };
 
   const accounts = [...acctAgg.values()].sort((a, b) => b.spend - a.spend);
@@ -503,15 +533,26 @@ async function loadFacebook(hotelClientId: string, start: Date, end: Date): Prom
 }
 
 async function loadInfluencer(hotelClientId: string, start: Date, end: Date): Promise<InfluencerChannelView> {
-  const [redemptions, activeCodes, influencers] = await Promise.all([
+  const [redemptions, activeCodes, influencers, linkPieces, linkConversions] = await Promise.all([
     agencyScoped(prisma.influencerRedemption).findMany({
       where: { hotelClientId, redeemedAt: { gte: start, lte: end } },
-      select: { influencerId: true, bookingValue: true, redemptionSource: true, redeemedAt: true },
+      select: { influencerId: true, bookingValue: true, redemptionSource: true, redeemedAt: true, trackingEventId: true },
     }),
     agencyScoped(prisma.couponCode).count({ where: { hotelClientId, status: "ACTIVE" } }),
     agencyScoped(prisma.influencer).findMany({
       where: { OR: [{ hotelClientId }, { hotelClientId: null }], archivedAt: null },
       select: { id: true, name: true, instagramHandle: true, couponCodes: { where: { hotelClientId, status: "ACTIVE" }, select: { id: true } } },
+    }),
+    // Track A, link route: the ContentPieces of this hotel that point at a real
+    // Influencer. utm_content carries `ht-<contentPieceId>`, so this map turns a
+    // stored conversion back into an influencer by FOREIGN KEY — never by name.
+    agencyScoped(prisma.contentPiece).findMany({
+      where: { hotelClientId, influencerId: { not: null } },
+      select: { id: true, influencerId: true },
+    }),
+    agencyScoped(prisma.trackingEvent).findMany({
+      where: { hotelClientId, eventType: "conversion", createdAt: { gte: start, lte: end } },
+      select: { id: true, utmContent: true, conversionValue: true, createdAt: true },
     }),
   ]);
 
@@ -529,8 +570,40 @@ async function loadInfluencer(hotelClientId: string, start: Date, end: Date): Pr
     else snippetAuto += 1;
   }
 
-  const topInfluencers = [...byInfluencer.entries()]
-    .map(([id, agg]) => {
+  // ── Link route ───────────────────────────────────────────────────────────
+  // A conversion that already produced a redemption is the SAME booking, so it
+  // is excluded here rather than added on top. What remains is the revenue an
+  // influencer drove through their link where no coupon was used — invisible in
+  // this report before Track A.
+  const pieceToInfluencer = new Map(
+    linkPieces.flatMap((p) => (p.influencerId ? [[p.id, p.influencerId] as const] : [])),
+  );
+  const redeemedEventIds = new Set(
+    redemptions.flatMap((r) => (r.trackingEventId ? [r.trackingEventId] : [])),
+  );
+  const byInfluencerLink = new Map<string, { revenue: number; bookings: number }>();
+  const linkByDay = new Map<string, number>();
+  let linkAttributedBookings = 0;
+  let linkAttributedRevenue = 0;
+  for (const c of linkConversions) {
+    if (redeemedEventIds.has(c.id)) continue; // already counted as a redemption
+    const pieceId = contentPieceIdFromUtmContent(c.utmContent);
+    const influencerId = pieceId ? pieceToInfluencer.get(pieceId) : undefined;
+    if (!influencerId) continue;
+    const v = num(c.conversionValue);
+    const row = byInfluencerLink.get(influencerId) ?? { revenue: 0, bookings: 0 };
+    row.revenue += v; row.bookings += 1;
+    byInfluencerLink.set(influencerId, row);
+    linkAttributedBookings += 1;
+    linkAttributedRevenue += v;
+    linkByDay.set(dayKey(c.createdAt), (linkByDay.get(dayKey(c.createdAt)) ?? 0) + v);
+  }
+
+  const allInfluencerIds = new Set([...byInfluencer.keys(), ...byInfluencerLink.keys()]);
+  const topInfluencers = [...allInfluencerIds]
+    .map((id) => {
+      const agg = byInfluencer.get(id) ?? { revenue: 0, redemptions: 0 };
+      const link = byInfluencerLink.get(id) ?? { revenue: 0, bookings: 0 };
       const meta = infMeta.get(id);
       return {
         influencerName: meta?.name ?? "(removed influencer)",
@@ -539,9 +612,12 @@ async function loadInfluencer(hotelClientId: string, start: Date, end: Date): Pr
         redemptionsCount: agg.redemptions,
         revenue: agg.revenue,
         avgBookingValue: agg.redemptions > 0 ? agg.revenue / agg.redemptions : 0,
+        linkBookings: link.bookings,
+        linkRevenue: link.revenue,
+        attributedRevenue: agg.revenue + link.revenue,
       };
     })
-    .sort((a, b) => b.revenue - a.revenue);
+    .sort((a, b) => b.attributedRevenue - a.attributedRevenue);
 
   const byDay = new Map<string, { redemptions: number; revenue: number }>();
   for (const r of redemptions) {
@@ -551,17 +627,25 @@ async function loadInfluencer(hotelClientId: string, start: Date, end: Date): Pr
     byDay.set(k, row);
   }
   const trend = dayKeys(start, end).map((date) => ({
-    date, redemptions: byDay.get(date)?.redemptions ?? 0, revenue: byDay.get(date)?.revenue ?? 0,
+    date,
+    redemptions: byDay.get(date)?.redemptions ?? 0,
+    // The trend line is the influencer's full attributable revenue: coupon
+    // redemptions plus link-only bookings, which are disjoint by construction.
+    revenue: (byDay.get(date)?.revenue ?? 0) + (linkByDay.get(date) ?? 0),
   }));
 
-  const activeInfluencers = byInfluencer.size; // influencers with activity this period
+  // "Active" now means activity by EITHER route, so an influencer who drove
+  // bookings through their link but had no code redeemed is no longer invisible.
+  const activeInfluencers = allInfluencerIds.size;
+  const attributableRevenue = totalRevenue + linkAttributedRevenue;
   return {
     channelType: "influencer", channelName: "Influencer",
-    hasData: redemptions.length > 0 || influencers.length > 0,
+    hasData: redemptions.length > 0 || influencers.length > 0 || linkAttributedBookings > 0,
     kpis: {
       activeInfluencers, activeCouponCodes: activeCodes,
       totalRedemptions: redemptions.length, totalRevenue,
-      averageRevenuePerInfluencer: activeInfluencers > 0 ? totalRevenue / activeInfluencers : 0,
+      averageRevenuePerInfluencer: activeInfluencers > 0 ? attributableRevenue / activeInfluencers : 0,
+      linkAttributedBookings, linkAttributedRevenue,
     },
     topInfluencers,
     redemptionSourceBreakdown: { snippetAuto, manualEntry },

@@ -97,6 +97,7 @@ async function fetchAgencyRevenueRows(
       select: {
         utmSource: true, utmMedium: true, utmCampaign: true, utmContent: true,
         conversionValue: true, couponCodeUsed: true, createdAt: true, hotelClientId: true,
+        gclid: true, gbraid: true, wbraid: true, fbclid: true,
       },
     }),
     agencyScopedFor(agencyId, prisma.influencerRedemption).findMany({
@@ -122,6 +123,7 @@ async function fetchAgencyRevenueRows(
       occurredAt: e.createdAt,
       couponCode: e.couponCodeUsed,
       hotelClientId: e.hotelClientId,
+      gclid: e.gclid, gbraid: e.gbraid, wbraid: e.wbraid, fbclid: e.fbclid,
     })),
     // Manual redemptions only — snippet_auto already counted via their TrackingEvent.
     ...manual.map((m) => ({

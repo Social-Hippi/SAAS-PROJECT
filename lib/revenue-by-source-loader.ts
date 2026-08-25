@@ -52,6 +52,8 @@ export async function computeRevenueBySource(args: {
       utmMedium: true,
       utmCampaign: true,
       utmContent: true,
+      // Phase 1A: click ids so stored conversions classify like live ones.
+      gclid: true, gbraid: true, wbraid: true, fbclid: true,
       conversionValue: true,
       couponCodeUsed: true,
       createdAt: true,
@@ -66,6 +68,7 @@ export async function computeRevenueBySource(args: {
     value: e.conversionValue == null ? 0 : Number(e.conversionValue), // NULL-safe
     occurredAt: e.createdAt,
     couponCode: e.couponCodeUsed,
+    gclid: e.gclid, gbraid: e.gbraid, wbraid: e.wbraid, fbclid: e.fbclid,
   }));
 
   // Manual redemptions (Path B) are bookings that happened OFF-snippet — they

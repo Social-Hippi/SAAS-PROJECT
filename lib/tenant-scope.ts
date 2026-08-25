@@ -186,4 +186,8 @@ export const MULTI_TENANT_MODELS = [
   "hotelInvite",
   "influencerInstagramPost",
   "unattributedMention",
+  "bookingConnection",
+  "booking",
+  "bookingStatusEvent",
+  "bookingJourneyMatch",
 ] as const;

@@ -4,6 +4,7 @@ import { checkRateLimit, clientIpFromHeaders } from "@/lib/rate-limit";
 import { rateLimit } from "@/lib/ratelimit";
 import { saltedHash } from "@/lib/pii";
 import { cleanCode, isCouponRedeemable, couponRejectReason } from "@/lib/coupon";
+import { CLICK_ID_KEYS, parseClickIds, type ClickIds } from "@/lib/click-ids";
 import {
   isFunnelStage,
   parseFunnelRules,
@@ -110,6 +111,22 @@ function pagePathOf(v: unknown): string | null {
   const s = str(v);
   if (!s || s[0] !== "/" || s.length > 500) return null;
   return s;
+}
+
+/**
+ * The click identifiers that are actually PRESENT, as a partial update object.
+ *
+ * Prisma treats an explicit `null` as "set this column to NULL", so spreading a
+ * fully-populated ClickIds into an UPDATE would erase the identifier the session
+ * landed with on the very next un-tagged pageview. Dropping the null keys makes
+ * the write add-only, which is the Phase 1A persistence contract.
+ */
+function presentClickIds(ids: ClickIds): ClickIds {
+  const out: ClickIds = {};
+  for (const key of CLICK_ID_KEYS) {
+    if (ids[key]) out[key] = ids[key];
+  }
+  return out;
 }
 
 // A non-negative int within a sane bound (viewport dims), else null.
@@ -514,14 +531,39 @@ async function handleVisitLike(
   // visit-based dashboard/metric). Only "conversion" is its own event type.
   const eventType = type === "conversion" ? "conversion" : "visit";
 
+  // Revenue guard (Phase 0). MAX_CONVERSION_VALUE was declared but never applied,
+  // so any caller holding a hotel's PUBLIC siteId could inject an arbitrary
+  // booking value straight into that hotel's revenue KPIs. The event is still
+  // recorded (we never lose the booking) — only the implausible amount is
+  // dropped, and the rejection is logged so it can be investigated.
   let conversionValue: string | null = null;
   if (type === "conversion" && body.value != null) {
     const n = Number(body.value);
-    if (Number.isFinite(n) && n >= 0) conversionValue = n.toFixed(2);
+    if (Number.isFinite(n) && n >= 0) {
+      if (n > MAX_CONVERSION_VALUE) {
+        console.log(
+          "[TRACK-VALUE-REJECTED]",
+          JSON.stringify({
+            hotelClientId: hotel.id,
+            sessionId: str(body.sessionId),
+            value: n,
+            max: MAX_CONVERSION_VALUE,
+            reason: "over_max_conversion_value",
+          }),
+        );
+      } else {
+        conversionValue = n.toFixed(2);
+      }
+    }
   }
 
   // Coupon code captured by the snippet (Phase R2) — only on conversions.
   const couponCodeUsed = type === "conversion" ? cleanCode(str(body.couponCodeUsed)) : null;
+
+  // Ad click identifiers (Phase 1A). parseClickIds re-applies the full contract
+  // server-side — trim, 255-char ceiling, URL-safe charset, DROP (never truncate)
+  // an invalid value, and null when absent. Raw values are never logged.
+  const eventClickIds: ClickIds = parseClickIds(body);
 
   const teData = {
     agencyId: hotel.agencyId,
@@ -538,6 +580,11 @@ async function handleVisitLike(
     sessionId: str(body.sessionId) ?? "",
     visitorId,
     deviceType: str(body.deviceType) ?? "unknown",
+    // Ad click identifiers in effect for this visitor/session (Phase 1A). The
+    // snippet sends the REMEMBERED ids, so a booking made pages after the ad
+    // click still names that click. Re-validated here: the payload is public
+    // input and the browser is never trusted blindly.
+    ...eventClickIds,
   } as const;
 
   // Multi-touch journey (conversion only) — same parsing as before.
@@ -548,9 +595,10 @@ async function handleVisitLike(
     utmMedium: string | null;
     utmCampaign: string | null;
     utmContent: string | null;
+    utmTerm: string | null;
     referrer: string | null;
     landingPage: string | null;
-  };
+  } & ClickIds;
   let touches: TouchRow[] = [];
   if (type === "conversion" && Array.isArray(body.journey)) {
     try {
@@ -564,8 +612,14 @@ async function handleVisitLike(
           utmMedium: str(tp.utm_medium),
           utmCampaign: str(tp.utm_campaign),
           utmContent: str(tp.utm_content),
+          utmTerm: str(tp.utm_term),
           referrer: str(tp.referrer),
           landingPage: str(tp.landing_page),
+          // CRITICAL: the ids the snippet stamped on THIS touch — i.e. the ones
+          // actually on the URL for that page load — never the remembered value.
+          // Copying the remembered id onto later touches would invent a second
+          // ad click that never happened.
+          ...parseClickIds(tp),
         };
       });
     } catch {
@@ -615,8 +669,19 @@ async function handleVisitLike(
             utmTerm: str(body.utmTerm),
             referrer: str(body.referrer),
             userAgent: str(body.userAgent),
+            // What this session LANDED with (Phase 1A).
+            ...eventClickIds,
           },
-          update: { pageViewCount: { increment: 1 }, exitPath: pagePath as string },
+          update: {
+            pageViewCount: { increment: 1 },
+            exitPath: pagePath as string,
+            // ADD-ONLY merge: `presentClickIds` contains ONLY the identifiers
+            // actually supplied on this request, so a later pageview without any
+            // (every internal navigation) can never null out what the session
+            // landed with, while a genuinely new ad click replaces that
+            // platform's value. Prisma omits absent keys from the UPDATE entirely.
+            ...presentClickIds(eventClickIds),
+          },
         });
 
         // Funnel stage for this page: the snippet's data-ht-stage (payload), else
@@ -656,6 +721,50 @@ async function handleVisitLike(
       }
     }
 
+    // Always refresh last activity; flip the snippet to "live" on the first event.
+    // Runs BEFORE the duplicate-conversion guard below so a repeat beacon still
+    // counts as "the snippet is alive", even though it records no second booking.
+    await tx.hotelClient.update({
+      where: { id: hotel.id },
+      data: {
+        lastEventAt: new Date(),
+        ...(hotel.snippetStatus !== "live" ? { snippetStatus: "live" } : {}),
+      },
+    });
+
+    // ── Conversion idempotency (Phase 0) ────────────────────────────────────
+    // One booking per session. The snippet already tries to fire a conversion at
+    // most once (`_ht_conv` cookie), but that guard is keyed to a sessionStorage
+    // session id, so a REOPENED TAB — or a replayed/retried beacon — produced a
+    // second TrackingEvent and double-counted both the booking and its revenue.
+    // The (hotelClientId, sessionId) pair is the natural key the snippet already
+    // supplies, and TrackingEvent has an index on sessionId, so this is a cheap
+    // lookup. No schema change.
+    //
+    // Guarded on a NON-EMPTY sessionId: legacy/malformed payloads store "" and
+    // collapsing every one of those into a single booking would lose real data.
+    if (type === "conversion" && teData.sessionId) {
+      const existing = await tx.trackingEvent.findFirst({
+        where: {
+          hotelClientId: hotel.id,
+          eventType: "conversion",
+          sessionId: teData.sessionId,
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        console.log(
+          "[TRACK-CONVERSION-DUPLICATE]",
+          JSON.stringify({
+            hotelClientId: hotel.id,
+            sessionId: teData.sessionId,
+            existingEventId: existing.id,
+          }),
+        );
+        return; // no second TrackingEvent, no second redemption, no touchpoints
+      }
+    }
+
     const ev = await tx.trackingEvent.create({ data: teData, select: { id: true } });
 
     // Path A (Phase R2): if the booking carried a coupon code, attribute it to the
@@ -668,6 +777,19 @@ async function handleVisitLike(
         where: { hotelClientId_code: { hotelClientId: hotel.id, code: couponCodeUsed } },
         select: { id: true, influencerId: true, status: true, validFrom: true, validUntil: true },
       });
+      // NOTE on redemption duplication: there is deliberately NO extra dedupe
+      // check here. A previous revision looked up an existing redemption by
+      // `trackingEventId: ev.id`, but `ev` is created two lines above with a
+      // fresh cuid — that predicate can never match, so it was dead code that
+      // read like a safeguard while providing none.
+      //
+      // The real guarantee is upstream: the conversion-idempotency guard means a
+      // repeat beacon for the same (hotel, session) never reaches this block, so
+      // one booking yields at most one snippet_auto redemption. That is an
+      // APPLICATION-level invariant, not a database one — there is no unique
+      // constraint on InfluencerRedemption, and adding one needs a migration
+      // (deferred to Phase 1). Under true write concurrency a duplicate remains
+      // possible.
       if (coupon && isCouponRedeemable(coupon, now)) {
         await tx.influencerRedemption.create({
           data: {
@@ -707,19 +829,16 @@ async function handleVisitLike(
           utmMedium: t.utmMedium,
           utmCampaign: t.utmCampaign,
           utmContent: t.utmContent,
+          utmTerm: t.utmTerm,
           referrer: t.referrer,
           landingPage: t.landingPage,
+          // Per-touch ids only — see the TouchRow mapping above.
+          gclid: t.gclid ?? null,
+          gbraid: t.gbraid ?? null,
+          wbraid: t.wbraid ?? null,
+          fbclid: t.fbclid ?? null,
         })),
       });
     }
-
-    // Always refresh last activity; flip the snippet to "live" on the first event.
-    await tx.hotelClient.update({
-      where: { id: hotel.id },
-      data: {
-        lastEventAt: new Date(),
-        ...(hotel.snippetStatus !== "live" ? { snippetStatus: "live" } : {}),
-      },
-    });
   });
 }

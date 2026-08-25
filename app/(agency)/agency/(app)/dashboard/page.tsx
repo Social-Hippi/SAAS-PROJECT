@@ -12,6 +12,8 @@ import { AgencyRevenueRollup } from "@/components/dashboard/AgencyRevenueRollup"
 import { AgencySavings } from "@/components/dashboard/AgencySavings";
 import { GlowCard } from "@/components/ui/spotlight-card";
 import { isPixelMode } from "@/lib/tracking-mode";
+import { getSpendByPlatformForHotels, safeRoas } from "@/lib/ad-spend";
+import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
 import {
   formatCurrency,
   formatMultiple,
@@ -141,7 +143,8 @@ export default async function AgencyDashboardPage({
   // Multi-tenant: everything scoped to this agency. In pixel mode we skip the
   // tracking-event queries entirely — those rows don't exist when the agency
   // uses FB Pixel instead of the HotelTrack snippet.
-  const [hotels, events, priorEvents, spendAgg, priorSpendAgg, hotelNameRows, recentJoins] = await Promise.all([
+  const [hotels, events, priorEvents, priorConversions, hotelNameRows, recentJoins] =
+    await Promise.all([
     agencyScoped(prisma.hotelClient).findMany({
       orderBy: { createdAt: "desc" },
       select: {
@@ -157,6 +160,9 @@ export default async function AgencyDashboardPage({
           createdAt: Date;
           eventType: string;
           utmSource: string | null;
+          utmMedium: string | null;
+          utmContent: string | null;
+          gclid: string | null; gbraid: string | null; wbraid: string | null; fbclid: string | null;
           conversionValue: import("@prisma/client").Prisma.Decimal | null;
           hotelClientId: string;
         }>)
@@ -166,6 +172,10 @@ export default async function AgencyDashboardPage({
             createdAt: true,
             eventType: true,
             utmSource: true,
+            // Phase 0: needed to classify paid vs non-paid revenue for ROAS.
+            utmMedium: true,
+            utmContent: true,
+            gclid: true, gbraid: true, wbraid: true, fbclid: true,
             conversionValue: true,
             hotelClientId: true,
           },
@@ -173,23 +183,41 @@ export default async function AgencyDashboardPage({
     pixelMode
       ? Promise.resolve([] as Array<{
           eventType: string;
+          hotelClientId: string;
           _count: { _all: number };
           _sum: { conversionValue: import("@prisma/client").Prisma.Decimal | null };
         }>)
       : agencyScoped(prisma.trackingEvent).groupBy({
-          by: ["eventType"],
+          // hotelClientId is in the grouping so soft-deleted hotels can be
+          // filtered out below — the same population the spend side uses.
+          by: ["eventType", "hotelClientId"],
           where: { createdAt: { gte: priorSince, lt: since } },
           _count: { _all: true },
           _sum: { conversionValue: true },
         }),
-    agencyScoped(prisma.adSnapshot).aggregate({
-      where: { archived: false, date: { gte: since } },
-      _sum: { spend: true },
-    }),
-    agencyScoped(prisma.adSnapshot).aggregate({
-      where: { archived: false, date: { gte: priorSince, lt: since } },
-      _sum: { spend: true },
-    }),
+    // Phase 0: prior-period conversions at ROW level, so the prior ROAS is
+    // computed paid-only exactly like the current one. Comparing a paid ROAS
+    // against a blended one makes the delta badge meaningless.
+    pixelMode
+      ? Promise.resolve([] as Array<{
+          utmSource: string | null;
+          utmMedium: string | null;
+          utmContent: string | null;
+          hotelClientId: string;
+          gclid: string | null; gbraid: string | null; wbraid: string | null; fbclid: string | null;
+          conversionValue: import("@prisma/client").Prisma.Decimal | null;
+        }>)
+      : agencyScoped(prisma.trackingEvent).findMany({
+          where: { eventType: "conversion", createdAt: { gte: priorSince, lt: since } },
+          select: {
+            utmSource: true,
+            utmMedium: true,
+            utmContent: true,
+            hotelClientId: true, // to exclude soft-deleted hotels, like the spend side
+            gclid: true, gbraid: true, wbraid: true, fbclid: true,
+            conversionValue: true,
+          },
+        }),
     agencyScoped(prisma.hotelClient).findMany({
       select: { id: true, name: true },
     }),
@@ -201,6 +229,27 @@ export default async function AgencyDashboardPage({
     }),
   ]);
 
+  // Phase 0: canonical PAID spend (Meta + Google) across this agency's hotels,
+  // replacing the two Meta-only AdSnapshot aggregates this page used to run.
+  // Needs `hotels`, so it follows the batch above rather than joining it.
+  const dashboardHotelIds = hotels.map((h) => h.id);
+  // The SAME hotel population must drive both sides of every ratio on this page.
+  // `hotels` is agencyScoped, which excludes soft-deleted hotels; the event
+  // queries above are agency-wide (TrackingEvent has no deletedAt), so their rows
+  // are filtered to this set before ANY aggregation. Without it the ROAS
+  // numerator counted a deleted hotel's bookings while the denominator no longer
+  // counted its spend.
+  const dashboardHotelIdSet = new Set(dashboardHotelIds);
+  const [paidSpend, priorPaidSpend] = await Promise.all([
+    getSpendByPlatformForHotels(member.agencyId, dashboardHotelIds, since, now),
+    getSpendByPlatformForHotels(
+      member.agencyId,
+      dashboardHotelIds,
+      priorSince,
+      new Date(since.getTime() - 1),
+    ),
+  ]);
+
   // ── Aggregate the event stream in JS (one pass) ──
   type Metric = { visits: number; bookings: number; revenue: number };
   const blank = (): Metric => ({ visits: 0, bookings: 0, revenue: 0 });
@@ -208,8 +257,14 @@ export default async function AgencyDashboardPage({
   const perHotel = new Map<string, Metric>();
   const perSource = new Map<string, number>(); // visits by source
   const perDay = new Map<string, { revenue: number; bookings: number }>();
+  // Phase 0: paid-attributed revenue is tracked alongside total revenue so the
+  // agency ROAS KPI stops dividing ALL revenue by Meta-only spend.
+  let paidRevenue = 0;
 
   for (const e of events) {
+    // Soft-deleted hotels are excluded from `hotels`, so their events must be
+    // excluded here too — see dashboardHotelIdSet above.
+    if (!dashboardHotelIdSet.has(e.hotelClientId)) continue;
     const m = perHotel.get(e.hotelClientId) ?? blank();
     const day = ymd(e.createdAt);
     const dayRow = perDay.get(day) ?? { revenue: 0, bookings: 0 };
@@ -223,6 +278,7 @@ export default async function AgencyDashboardPage({
       m.revenue += v;
       dayRow.bookings += 1;
       dayRow.revenue += v;
+      if (isPaidSourceType(classifySourceType(e))) paidRevenue += v;
     }
     perHotel.set(e.hotelClientId, m);
     perDay.set(day, dayRow);
@@ -236,22 +292,39 @@ export default async function AgencyDashboardPage({
     }),
     blank(),
   );
-  const totalSpend = Number(spendAgg._sum.spend ?? 0);
-  const priorTotalSpend = Number(priorSpendAgg._sum.spend ?? 0);
-  const roas = totalSpend > 0 ? totals.revenue / totalSpend : null;
-  const deltaSpend = pctChange(totalSpend, priorTotalSpend);
+  // Phase 0: combined paid spend, and PAID revenue ÷ paid spend. This KPI was
+  // totals.revenue (every channel) ÷ Meta-only spend.
+  //
+  // `total` is NULL when the ad accounts report in currencies that cannot be
+  // safely added. It is deliberately NOT coerced to 0 — "we can't combine these"
+  // must never render as "₹0 spent". Every consumer below handles null.
+  const totalSpend: number | null = paidSpend.total;
+  const priorTotalSpend: number | null = priorPaidSpend.total;
+  const roas = safeRoas(paidRevenue, totalSpend);
+  const deltaSpend =
+    totalSpend == null || priorTotalSpend == null ? null : pctChange(totalSpend, priorTotalSpend);
 
   // ── Prior period (for KPI deltas) ──
   const prior = blank();
   for (const g of priorEvents) {
-    if (g.eventType === "visit") prior.visits = g._count._all;
+    if (!dashboardHotelIdSet.has(g.hotelClientId)) continue; // same population as spend
+    if (g.eventType === "visit") prior.visits += g._count._all;
     else {
-      prior.bookings = g._count._all;
-      prior.revenue = Number(g._sum.conversionValue ?? 0);
+      prior.bookings += g._count._all;
+      prior.revenue += Number(g._sum.conversionValue ?? 0);
     }
   }
-  const priorSpend = Number(priorSpendAgg._sum.spend ?? 0);
-  const priorRoas = priorSpend > 0 ? prior.revenue / priorSpend : null;
+  const priorPaidRevenue = priorConversions.reduce(
+    (sum, c) =>
+      sum +
+      (dashboardHotelIdSet.has(c.hotelClientId) &&
+      isPaidSourceType(classifySourceType(c)) &&
+      c.conversionValue != null
+        ? Number(c.conversionValue)
+        : 0),
+    0,
+  );
+  const priorRoas = safeRoas(priorPaidRevenue, priorPaidSpend.total);
 
   const deltaVisits = pctChange(totals.visits, prior.visits);
   const deltaBookings = pctChange(totals.bookings, prior.bookings);
@@ -351,8 +424,8 @@ export default async function AgencyDashboardPage({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <KpiCard label="Hotels" value={formatNumber(hotels.length)} accent="zinc" />
           <KpiCard
-            label="Meta ad spend"
-            value={formatCurrency(totalSpend)}
+            label="Ad spend"
+            value={totalSpend == null ? "—" : formatCurrency(totalSpend)}
             delta={deltaSpend}
             accent="violet"
           />

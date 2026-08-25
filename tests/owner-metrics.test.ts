@@ -167,28 +167,42 @@ afterAll(async () => {
 });
 
 describe("calculators (HMain known fixtures)", () => {
-  test("marketing spend sums AdSnapshot; google null", async () => {
+  // PHASE 0: HMain has ₹10,000 Meta spend, ₹0 Google spend, and ₹35,000 revenue
+  // of which ₹30,000 is meta_ads and ₹5,000 is direct.
+  test("marketing spend = Meta + Google (Google present, zero here)", async () => {
     loginAs(fx.memberA);
     const r = await calculateMarketingSpend(fx.hMain, START, END);
     expect(r.total).toBe(10000);
     expect(r.meta).toBe(10000);
-    expect(r.google).toBeNull();
+    expect(r.google).toBe(0); // was `null` — Google Ads IS integrated
+    expect(r.mixedCurrency).toBe(false);
   });
 
-  test("cost per booking = spend / bookings", async () => {
+  test("cost per booking = paid spend / PAID bookings (not all bookings)", async () => {
     loginAs(fx.memberA);
     const r = await calculateCostPerBooking(fx.hMain, START, END);
-    expect(r.bookings).toBe(3);
+    expect(r.bookings).toBe(3); // all tracked bookings, kept for context
+    expect(r.paidBookings).toBe(2); // the 2 meta_ads ones — the real denominator
     expect(r.totalSpend).toBe(10000);
-    expect(r.costPerBooking).toBeCloseTo(10000 / 3, 4);
+    // Phase 0: 10000/2 = 5000. It used to be 10000/3 ≈ 3333, understating the
+    // real cost of a paid booking by counting the direct booking as ad-driven.
+    expect(r.costPerBooking).toBeCloseTo(5000, 4);
   });
 
-  test("ROAS overall + meta; google null", async () => {
+  test("ROAS is PAID-only: direct revenue never enters the numerator", async () => {
     loginAs(fx.memberA);
     const r = await calculateROAS(fx.hMain, START, END);
-    expect(r.overall).toBeCloseTo(3.5, 6); // 35000 / 10000
-    expect(r.meta).toBeCloseTo(3.0, 6); // 30000 / 10000
-    expect(r.google).toBeNull();
+    // overall = (meta 30000 + google 0) / (meta 10000 + google 0) = 3.0
+    // It used to be 3.5 — all 35,000 (including ₹5,000 direct) over Meta spend.
+    expect(r.overall).toBeCloseTo(3.0, 6);
+    expect(r.meta).toBeCloseTo(3.0, 6);
+    expect(r.google).toBeNull(); // no Google spend to divide by
+    expect(r.paidRevenue).toBe(30000);
+    expect(r.nonPaidRevenue).toBe(5000);
+    expect(r.totalRevenue).toBe(35000);
+    // The old number is preserved, honestly named, and DIFFERENT from roas.
+    expect(r.blended).toBeCloseTo(3.5, 6);
+    expect(r.blended).not.toBeCloseTo(r.overall!, 6);
   });
 
   test("conversion rate = bookings / sessions * 100", async () => {
@@ -269,6 +283,9 @@ describe("edge cases", () => {
     const roas = await calculateROAS(fx.hEmpty, START, END);
     expect(roas.overall).toBeNull();
     expect(roas.meta).toBeNull();
+    expect(roas.google).toBeNull();
+    expect(roas.blended).toBeNull();
+    expect(roas.paidRevenue).toBe(0);
     const cr = await calculateConversionRate(fx.hEmpty, START, END);
     expect(cr.conversionRate).toBe(0);
     expect(cr.sessions).toBe(0);
@@ -283,9 +300,12 @@ describe("edge cases", () => {
     loginAs(fx.memberA);
     const cpb = await calculateCostPerBooking(fx.hOne, START, END);
     expect(cpb.bookings).toBe(1);
+    expect(cpb.paidBookings).toBe(1); // the single booking IS facebook/cpc
     expect(cpb.costPerBooking).toBe(5000); // 5000 / 1
     const roas = await calculateROAS(fx.hOne, START, END);
-    expect(roas.overall).toBeCloseTo(3, 6); // 15000 / 5000
+    expect(roas.overall).toBeCloseTo(3, 6); // 15000 paid / 5000 paid spend
+    // With no non-paid revenue at all, blended and paid ROAS agree.
+    expect(roas.blended).toBeCloseTo(3, 6);
     const camp = (await calculateTopCampaigns(fx.hOne, START, END)).campaigns;
     expect(camp.length).toBe(1);
     expect(camp[0].roas).toBeCloseTo(3, 6);
@@ -317,11 +337,16 @@ describe("owner-metrics endpoint", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.marketingSpend.total).toBe(10000);
+    expect(body.marketingSpend.google).toBe(0);
     expect(body.conversionRate.bookings).toBe(3);
-    expect(body.roas.overall).toBeCloseTo(3.5, 6);
+    // Phase 0: the endpoint now serves the PAID ROAS (3.0), not the blended 3.5.
+    expect(body.roas.overall).toBeCloseTo(3.0, 6);
+    expect(body.roas.blended).toBeCloseTo(3.5, 6);
     expect(body.topCampaigns.campaigns[0].campaignName).toBe("Summer Sale");
     expect(body.bookingsBySource.totalBookings).toBe(3);
     expect(body.meta.metaConnected).toBe(true);
+    expect(body.meta.googleConnected).toBe(false);
+    expect(body.meta.paidConnected).toBe(true);
   });
 
   test("another agency's hotel returns 404", async () => {

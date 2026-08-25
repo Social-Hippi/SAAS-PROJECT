@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { agencyScopedFor } from "@/lib/tenant-scope";
+import { getSpendByPlatformFor } from "@/lib/ad-spend";
 import {
   computeAdsSummary,
   computeContentPerformance,
@@ -77,8 +78,12 @@ export async function loadHotelReport(args: {
       where: { hotelClientId: hotelId, createdAt: { gte: since, lte: until } },
       select: {
         eventType: true,
+        // Phase 0: source/medium are needed to classify paid vs non-paid revenue.
+        utmSource: true,
+        utmMedium: true,
         utmContent: true,
         utmCampaign: true,
+        gclid: true, gbraid: true, wbraid: true, fbclid: true,
         sessionId: true,
         conversionValue: true,
       },
@@ -110,10 +115,13 @@ export async function loadHotelReport(args: {
   const contentInputs: ContentInput[] = content;
   const eventInputs: EventInput[] = events.map((e) => ({
     eventType: e.eventType,
+    utmSource: e.utmSource,
+    utmMedium: e.utmMedium,
     utmContent: e.utmContent,
     utmCampaign: e.utmCampaign,
     sessionId: e.sessionId,
     conversionValue: e.conversionValue == null ? null : Number(e.conversionValue),
+    gclid: e.gclid, gbraid: e.gbraid, wbraid: e.wbraid, fbclid: e.fbclid,
   }));
   const snapshotInputs: AdSnapshotInput[] = snapshots.map((s) => ({
     date: s.date,
@@ -127,7 +135,11 @@ export async function loadHotelReport(args: {
   }));
 
   const ads = computeAdsSummary(snapshotInputs);
-  const kpis = computeKpis(eventInputs, ads.spend);
+  // Phase 0: KPIs divide by CANONICAL paid spend (Meta + Google), not the Meta
+  // AdSnapshot total that `ads.spend` represents. `ads` stays Meta-only — it is
+  // the Meta-reported block (metaRoas, the spend chart) and must not change.
+  const paidSpend = await getSpendByPlatformFor(agencyId, hotelId, since, until);
+  const kpis = computeKpis(eventInputs, paidSpend);
   const contentPerf = computeContentPerformance(contentInputs, eventInputs);
   const influencerRows = computeInfluencerImpact(contentInputs, redemptionInputs);
 
@@ -154,8 +166,12 @@ export async function loadHotelReport(args: {
   const showAdSpend = respectAdSpendFlag ? Boolean(hotelMeta?.showAdSpendToHotel) : true;
   if (!showAdSpend) {
     kpis.spend = 0;
+    kpis.spendByPlatform = { meta: 0, google: 0, total: 0 };
     kpis.costPerBooking = null;
     kpis.roas = null;
+    // blendedRoas is spend-DERIVED (all revenue ÷ paid spend) — it leaks the
+    // spend figure by division if left in. Strip it with the rest.
+    kpis.blendedRoas = null;
     ads.spend = 0;
     ads.metaReportedRevenue = 0;
     ads.metaRoas = null;

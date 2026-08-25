@@ -39,6 +39,9 @@ const SECRET_SOURCES = {
   // columns to the app_read_encrypted_secret() function too.
   google_ads_access: { table: "GoogleAdsConnection", column: "accessToken" },
   google_ads_refresh: { table: "GoogleAdsConnection", column: "refreshToken" },
+  // Booking provider shared secret / API key (Phase 1B). Read ONLY through
+  // getTokenForApiCall so every access is audited, like every other secret.
+  booking_provider: { table: "BookingConnection", column: "credentials" },
 } as const;
 
 export type SecretKind = keyof typeof SECRET_SOURCES;

@@ -116,7 +116,13 @@ export async function generateHotelReportPdf(meta: ReportMeta): Promise<Uint8Arr
     hotelName: meta.hotelName, rangeLabel: meta.rangeLabel,
     revenue: cur.kpis.revenue, bookings: cur.kpis.bookings,
     prevRevenue: prev.kpis.revenue, prevBookings: prev.kpis.bookings, hasPrevious: prev.kpis.bookings > 0,
-    adSpend: cur.ads.spend, roas: cur.kpis.roas, savings: cur.otaSavings.amount,
+    // Phase 0: the narrative's ROAS is PAID revenue ÷ PAID spend, so the spend
+    // it quotes must be the same combined paid spend — not `ads.spend`, which is
+    // Meta-only. (`kpis.spend` is null only when currencies can't be combined.)
+    // Null (currencies not safely combinable) is passed THROUGH, not coerced to
+    // 0 — buildReportNarrative suppresses every ads sentence rather than telling
+    // the owner they spent ₹0.
+    adSpend: cur.kpis.spend, roas: cur.kpis.roas, savings: cur.otaSavings.amount,
     visitsChangePct: pctDelta(curVisits, prevVisits), topSource, topInfluencer, biggestFunnelDrop,
   });
 
@@ -274,15 +280,19 @@ function render(meta: ReportMeta, d: RenderData): Uint8Array {
   {
     const revenue = d.cur.kpis.revenue, prevRevenue = d.prev.kpis.revenue;
     const bookings = d.cur.kpis.bookings, prevBookings = d.prev.kpis.bookings;
-    const spend = d.cur.ads.spend, prevSpend = d.prev.ads.spend;
+    // Phase 0: "Ad spend" is the COMBINED paid spend the ROAS tile divides by
+    // (Meta + Google). `ads.spend` is Meta-only and would contradict it.
+    const spend = d.cur.kpis.spend, prevSpend = d.prev.kpis.spend;
     const roas = d.cur.kpis.roas, prevRoas = d.prev.kpis.roas;
     const convRate = d.cur.kpis.visits > 0 ? bookings / d.cur.kpis.visits : null;
     const prevConvRate = d.prev.kpis.visits > 0 ? prevBookings / d.prev.kpis.visits : null;
     const tiles: { label: string; value: string; sub?: string; delta: number | null; inverse?: boolean }[] = [
       { label: "Revenue", value: money(revenue), delta: pctDelta(revenue, prevRevenue) },
       { label: "Bookings", value: formatNumber(bookings), delta: pctDelta(bookings, prevBookings) },
-      { label: "Ad spend", value: money(spend), delta: pctDelta(spend, prevSpend), inverse: true },
-      { label: "Return on ad spend", value: `₹${(roas ?? 0).toFixed(2)}`, sub: "back per ₹1 spent", delta: pctDelta(roas, prevRoas) },
+      // "—" when the ad accounts report in currencies that cannot be safely
+      // combined. Never ₹0 — an unavailable total is not "no spend".
+      { label: "Ad spend", value: spend == null ? "—" : money(spend), delta: pctDelta(spend, prevSpend), inverse: true },
+      { label: "Return on ad spend", value: `₹${(roas ?? 0).toFixed(2)}`, sub: "paid-channel revenue per ₹1 spent", delta: pctDelta(roas, prevRoas) },
       { label: "Website conversion rate", value: convRate == null ? "—" : formatPercent(convRate), sub: "visitors who booked", delta: pctDelta(convRate, prevConvRate) },
       { label: "Commission saved vs OTAs", value: money(d.cur.otaSavings.amount), delta: null },
     ];

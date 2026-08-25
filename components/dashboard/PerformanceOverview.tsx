@@ -86,8 +86,12 @@ function Sub({ children }: { children: React.ReactNode }) {
   return <p className="mt-0.5 text-xs text-ink-tertiary">{children}</p>;
 }
 
-function ConnectMetaNote() {
-  return <p className="mt-1 text-xs text-warning">Connect Meta Ads to see spend and ROAS</p>;
+function ConnectAdsNote() {
+  return (
+    <p className="mt-1 text-xs text-warning">
+      Connect Meta Ads or Google Ads to see spend and ROAS
+    </p>
+  );
 }
 
 function roasColor(roas: number | null): string {
@@ -174,56 +178,71 @@ function Loaded({ data, loading }: { data: OwnerMetrics; loading: boolean }) {
     bookingsBySource,
     meta,
   } = data;
-  const metaConnected = meta.metaConnected;
-
-  // "Revenue from ads" for the ROAS subtext — paid-channel booking revenue.
-  const adsRevenue = bookingsBySource.sources
-    .filter((s) => s.type === "meta_ads" || s.type === "google_ads")
-    .reduce((sum, s) => sum + s.revenue, 0);
+  // Phase 0: gate on EITHER paid platform. Gating on Meta alone hid spend, ROAS
+  // and cost/booking from hotels that run Google Ads only.
+  const paidConnected = meta.paidConnected;
 
   return (
     <div className={`space-y-4 ${loading ? "opacity-60" : ""}`}>
       {/* Row 1 — 4 KPI cards */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {/* 1. Marketing Spend */}
-        <Card label="Marketing Spend" info="Total ad spend across connected ad accounts in this period (Meta today; Google Ads coming soon).">
-          <BigValue value={formatCurrency(marketingSpend.total, { compact: true })} />
-          {metaConnected ? (
-            <Sub>
-              {formatCurrency(marketingSpend.meta, { compact: true })} Meta · Google Ads coming soon
-            </Sub>
+        {/* 1. Marketing Spend — Meta + Google. Phase 0: this card used to show a
+            Meta-only figure labelled as the total across connected accounts, and
+            said "Google Ads coming soon" while Google Ads was already syncing. */}
+        <Card label="Marketing Spend" info="Total paid ad spend across connected ad accounts in this period (Meta Ads + Google Ads).">
+          <BigValue
+            value={
+              marketingSpend.total == null ? "—" : formatCurrency(marketingSpend.total, { compact: true })
+            }
+          />
+          {paidConnected ? (
+            marketingSpend.mixedCurrency ? (
+              <Sub>
+                {formatCurrency(marketingSpend.meta, { compact: true })} Meta · {formatNumber(marketingSpend.google)} Google
+                {" "}— accounts report in different currencies, so no combined total is shown
+              </Sub>
+            ) : (
+              <Sub>
+                {formatCurrency(marketingSpend.meta, { compact: true })} Meta · {formatCurrency(marketingSpend.google, { compact: true })} Google
+              </Sub>
+            )
           ) : (
-            <ConnectMetaNote />
+            <ConnectAdsNote />
           )}
         </Card>
 
-        {/* 2. Cost per Booking */}
-        <Card label="Cost per Booking" info="Total ad spend divided by the number of tracked bookings in this period.">
+        {/* 2. Cost per Booking — paid spend ÷ PAID-attributed bookings. */}
+        <Card label="Cost per Booking" info="Paid ad spend divided by the bookings attributed to paid channels (Meta Ads / Google Ads) in this period.">
           <BigValue
             value={
-              metaConnected && costPerBooking.costPerBooking != null
+              paidConnected && costPerBooking.costPerBooking != null
                 ? formatCurrency(costPerBooking.costPerBooking, { compact: true })
                 : "—"
             }
           />
-          {metaConnected ? (
+          {paidConnected ? (
             <Sub>
-              {formatNumber(costPerBooking.bookings)} bookings · {formatCurrency(costPerBooking.totalSpend, { compact: true })} spend
+              {formatNumber(costPerBooking.paidBookings)} paid of {formatNumber(costPerBooking.bookings)} bookings
+              {costPerBooking.totalSpend != null
+                ? ` · ${formatCurrency(costPerBooking.totalSpend, { compact: true })} spend`
+                : ""}
             </Sub>
           ) : (
-            <ConnectMetaNote />
+            <ConnectAdsNote />
           )}
         </Card>
 
-        {/* 3. ROAS */}
-        <Card label="ROAS" info="Return on ad spend — booking revenue divided by ad spend. Shown as “—” when there's no ad spend to divide by.">
-          <BigValue value={metaConnected ? formatMultiple(roas.overall) : "—"} className={metaConnected ? roasColor(roas.overall) : undefined} />
-          {metaConnected ? (
+        {/* 3. ROAS — PAID revenue ÷ PAID spend. Phase 0: this was previously ALL
+            booking revenue (direct, organic, influencer…) ÷ Meta-only spend. */}
+        <Card label="ROAS" info="Return on ad spend — paid-channel revenue ÷ paid ad spend. Only revenue attributed to Meta Ads or Google Ads counts. Shown as “—” when there's no paid ad spend to divide by.">
+          <BigValue value={paidConnected ? formatMultiple(roas.overall) : "—"} className={paidConnected ? roasColor(roas.overall) : undefined} />
+          {paidConnected ? (
             <Sub>
-              Meta: {formatMultiple(roas.meta)} · {formatCurrency(adsRevenue, { compact: true })} from ads
+              Meta: {formatMultiple(roas.meta)} · Google: {formatMultiple(roas.google)} ·{" "}
+              {formatCurrency(roas.paidRevenue, { compact: true })} from ads
             </Sub>
           ) : (
-            <ConnectMetaNote />
+            <ConnectAdsNote />
           )}
         </Card>
 

@@ -32,8 +32,13 @@ export type NarrativeInput = {
   prevRevenue: number;
   prevBookings: number;
   hasPrevious: boolean;
-  adSpend: number;
-  roas: number | null; // revenue ÷ spend (a ratio); shown to owners as "₹x back per ₹1 spent"
+  /**
+   * Combined PAID ad spend, or NULL when the ad accounts report in currencies
+   * that cannot be safely added. Null is NOT zero: every ads sentence below is
+   * suppressed rather than asserting "₹0 spent on ads".
+   */
+  adSpend: number | null;
+  roas: number | null; // PAID revenue ÷ PAID spend; shown to owners as "₹x back per ₹1 spent"
   savings: number;
   visitsChangePct: number | null;
   topSource: { name: string; revenue: number; bookings: number } | null;
@@ -65,7 +70,10 @@ export function buildReportNarrative(m: NarrativeInput): Narrative {
   // roas is a ratio (revenue ÷ spend); show it to owners as rupees-back-per-rupee
   // with 2 decimals, e.g. "₹2.40" or "₹0.00".
   const returnStr = `₹${(m.roas ?? 0).toFixed(2)}`;
-  const adSpendNoReturn = m.adSpend >= AD_SPEND_FLOOR && (m.roas == null || m.roas < 0.5);
+  // A known, non-null spend figure is required before ANY ads claim is made.
+  const knownAdSpend: number | null = m.adSpend != null && m.adSpend > 0 ? m.adSpend : null;
+  const adSpendNoReturn =
+    knownAdSpend != null && knownAdSpend >= AD_SPEND_FLOOR && (m.roas == null || m.roas < 0.5);
 
   // ── Verdict / pattern ── (guardrail first, then the owner-summary logic) ──
   let verdict: Verdict;
@@ -84,7 +92,7 @@ export function buildReportNarrative(m: NarrativeInput): Narrative {
     previousRevenue: fmt(m.prevRevenue),
     revenueChangePct: revenueChangePct == null ? "" : Math.round(Math.abs(revenueChangePct)),
     topSource: m.topSource?.name ?? "direct visits",
-    adSpend: fmt(m.adSpend),
+    adSpend: knownAdSpend == null ? "" : fmt(knownAdSpend),
     returnPerRupee: returnStr,
     savings: fmt(m.savings),
     influencerName: m.topInfluencer?.name ?? "",
@@ -92,7 +100,7 @@ export function buildReportNarrative(m: NarrativeInput): Narrative {
   };
   const flags: Record<string, boolean> = {
     comparison: m.hasPrevious && revenueChangePct != null,
-    adSpend: m.adSpend > 0 && m.roas != null,
+    adSpend: knownAdSpend != null && m.roas != null,
     savings: m.savings > 0,
     influencerActive: m.topInfluencer != null,
     topSourceStillStrong: !!m.topSource && m.topSource.revenue > 0,
@@ -113,11 +121,11 @@ export function buildReportNarrative(m: NarrativeInput): Narrative {
       ? `${fmt(m.revenue)} in bookings from ${m.bookings} booking${m.bookings === 1 ? "" : "s"}${revenueChangePct != null ? ` (${revenueChangePct >= 0 ? "+" : ""}${Math.round(revenueChangePct)}% vs the period before)` : ""}.`
       : `No bookings were tracked this period.`,
   );
-  if (m.adSpend > 0) {
+  if (knownAdSpend != null) {
     keyPoints.push(
       adSpendNoReturn
-        ? `Ads: ${fmt(m.adSpend)} spent, but almost no bookings have been tracked back to it — needs attention.`
-        : `Ads: ${fmt(m.adSpend)} spent, bringing back about ${returnStr} for every ₹1 spent.`,
+        ? `Ads: ${fmt(knownAdSpend)} spent, but almost no bookings have been tracked back to it — needs attention.`
+        : `Ads: ${fmt(knownAdSpend)} spent, bringing back about ${returnStr} for every ₹1 spent.`,
     );
   }
   if (m.topSource && m.topSource.revenue > 0) {

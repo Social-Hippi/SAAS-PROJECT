@@ -2,7 +2,9 @@ import { getCurrentMember } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScopedFor } from "@/lib/tenant";
 import { loadAgencyRevenueRows, parseAgencyWindow, parseHotelFilter } from "@/lib/agency-revenue";
-import { aggregateRevenueBySource, rowSourceKey, type ConversionRow } from "@/lib/revenue-by-source";
+import { aggregateRevenueBySource, rowSourceKey, rowSourceType, type ConversionRow } from "@/lib/revenue-by-source";
+import { getSpendByPlatformForHotels, safeRoas } from "@/lib/ad-spend";
+import { isPaidSourceType } from "@/lib/source-classifier";
 
 // GET /api/agency/overview — the "first thing you see" agency KPIs for the period:
 // total revenue/bookings, ad spend + ROAS, active vs total hotels, top
@@ -44,26 +46,43 @@ export async function GET(request: Request) {
   }
 
   const inScope = cur.hotelIds;
-  const [spendAgg, topInfGroups] = await Promise.all([
-    inScope.length
-      ? agencyScopedFor(agencyId, prisma.adSnapshot).aggregate({
-          where: { archived: false, date: { gte: start, lte: end }, hotelClientId: { in: inScope } },
-          _sum: { spend: true },
-        })
-      : Promise.resolve({ _sum: { spend: null } }),
+  const [paidSpend, topInfGroups] = await Promise.all([
+    // Phase 0: canonical paid spend across BOTH platforms for the hotels in
+    // scope. This used to be a Meta-only AdSnapshot sum called "totalAdSpend".
+    getSpendByPlatformForHotels(agencyId, inScope, start, end),
     inScope.length
       ? agencyScopedFor(agencyId, prisma.influencerRedemption).groupBy({
           by: ["influencerId"],
-          where: { hotelClientId: { in: inScope }, redeemedAt: { gte: start, lte: end } },
+          where: {
+            hotelClientId: { in: inScope },
+            // Phase 0: match the basis of totalRevenue. loadAgencyRevenueRows
+            // UNIONs ONLY manual_entry redemptions (snippet_auto ones are already
+            // counted through their TrackingEvent), so grouping every redemption
+            // here made topInfluencer.revenue irreconcilable with totalRevenue.
+            redemptionSource: "manual_entry",
+            redeemedAt: { gte: start, lte: end },
+          },
           _sum: { bookingValue: true },
         })
       : Promise.resolve([] as { influencerId: string; _sum: { bookingValue: unknown } }[]),
   ]);
 
+  // totalRevenue keeps its meaning EXACTLY as before: all tracked booking
+  // revenue across the agency's hotels. It is a revenue figure, not a ROAS
+  // numerator — that was the bug.
   const totalRevenue = sumRevenue(cur.rows);
   const totalBookings = cur.rows.length;
-  const totalAdSpend = Number(spendAgg._sum.spend ?? 0);
-  const roas = totalAdSpend > 0 ? totalRevenue / totalAdSpend : null;
+  const totalAdSpend = paidSpend.total;
+
+  // Paid-attributed revenue: the only revenue an ad spend denominator may see.
+  let paidRevenue = 0;
+  for (const r of cur.rows) {
+    if (!Number.isFinite(r.value) || r.value <= 0) continue;
+    if (isPaidSourceType(rowSourceType(r))) paidRevenue += r.value;
+  }
+
+  const roas = safeRoas(paidRevenue, totalAdSpend);
+  const blendedRoas = safeRoas(totalRevenue, totalAdSpend);
 
   const activeHotels = new Set(cur.rows.map((r) => r.hotelClientId).filter(Boolean));
   const prevRevenue = sumRevenue(prev.rows);
@@ -134,7 +153,12 @@ export async function GET(request: Request) {
     totalRevenue,
     totalBookings,
     totalAdSpend,
+    adSpendByPlatform: { meta: paidSpend.meta, google: paidSpend.google },
+    mixedCurrency: paidSpend.mixedCurrency,
+    paidRevenue,
+    nonPaidRevenue: totalRevenue - paidRevenue,
     roas,
+    blendedRoas,
     activeHotelsCount: activeHotels.size,
     totalHotelsCount,
     topSource,

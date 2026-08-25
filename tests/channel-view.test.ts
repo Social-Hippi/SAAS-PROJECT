@@ -45,7 +45,7 @@ describe("channel keys", () => {
 // ── DB-backed ──
 describe("DB-backed", () => {
   let agencyA: string;
-  let hMain: string, hEmpty: string, hB: string;
+  let hMain: string, hEmpty: string, hB: string, hGoogle: string;
   let memberA: Record<string, unknown>, memberB: Record<string, unknown>;
 
   function conv(a: string, hotel: string, value: number, o: { source?: string; medium?: string; campaign?: string; session?: string; when?: Date } = {}) {
@@ -119,6 +119,26 @@ describe("DB-backed", () => {
     await prisma.influencerRedemption.create({ data: { agencyId: A.id, hotelClientId: hMain, couponCodeId: code.id, influencerId: inf.id, bookingValue: "9000.00", redemptionSource: "snippet_auto", redeemedAt: IN } });
     await prisma.influencerRedemption.create({ data: { agencyId: A.id, hotelClientId: hMain, couponCodeId: code.id, influencerId: inf.id, bookingValue: "6000.00", redemptionSource: "manual_entry", redeemedAt: IN } });
 
+    // ── Google Ads fixture (Phase 0) on its OWN hotel, so the Meta assertions
+    // above stay untouched. Google REPORTS ₹50,000 of conversion value from
+    // ₹10,000 spend (5×). HotelTrack TRACKS one google/cpc booking worth
+    // ₹20,000 (2×) plus a direct booking that must not count. The two figures
+    // must be reported separately and must not be equal.
+    hGoogle = (await mk(A.id, "Google")).id;
+    await prisma.googleAdsConnection.create({ data: {
+      agencyId: A.id, hotelClientId: hGoogle, customerId: "1234567890", customerName: "Test Ads",
+      currencyCode: "INR", accessToken: "enc", refreshToken: "enc",
+      tokenExpiresAt: new Date(Date.now() + 3_600_000), scope: "https://www.googleapis.com/auth/adwords",
+    } });
+    await prisma.googleAdsCampaignSnapshot.create({ data: {
+      agencyId: A.id, hotelClientId: hGoogle, customerId: "1234567890",
+      campaignId: "gc1", campaignName: "Brand Search", status: "ENABLED", date: IN,
+      spend: "10000.00", impressions: 50000, clicks: 2500,
+      conversions: 25, conversionsValue: "50000.00",
+    } });
+    await conv(A.id, hGoogle, 20000, { source: "google", medium: "cpc", campaign: "Brand Search" });
+    await conv(A.id, hGoogle, 80000, {}); // direct — must never enter Google's tracked revenue
+
     // Agency B isolation row.
     await conv(B.id, hB, 99000, { source: "facebook", medium: "cpc", campaign: "Other" });
   });
@@ -161,6 +181,52 @@ describe("DB-backed", () => {
     expect(d.hasData).toBe(false);
     expect(d.integrationStatus).toBe("not_connected");
     expect(d.channelName).toBe("Google Ads");
+  });
+
+  // Phase 0: Google-REPORTED and HotelTrack-TRACKED are two different numbers.
+  // They used to occupy the SAME fields (`revenue`/`bookings`/`roas`) that the
+  // Meta tab fills with tracked bookings — one label, two meanings.
+  test("google_ads: platform-reported and tracked figures are separate", async () => {
+    loginAs(memberA);
+    const d = (await loadChannelView(hGoogle, "google_ads", START, END)) as PaidChannelView;
+    expect(d.hasData).toBe(true);
+    const k = d.kpis!;
+
+    // Spend/impressions/clicks are Google's, unchanged.
+    expect(k.totalSpend).toBe(10000);
+    expect(k.impressions).toBe(50000);
+    expect(k.linkClicks).toBe(2500);
+
+    // Google's OWN conversion tracking, preserved under explicit names.
+    expect(k.platformReportedConversions).toBe(25);
+    expect(k.platformReportedRevenue).toBe(50000);
+    expect(k.platformReportedRoas).toBeCloseTo(5, 6); // 50,000 / 10,000
+
+    // HotelTrack-tracked: only the google/cpc booking. The ₹80,000 direct
+    // booking on the same hotel must NOT be credited to Google.
+    expect(k.trackedBookings).toBe(1);
+    expect(k.trackedRevenue).toBe(20000);
+    expect(k.trackedRoas).toBeCloseTo(2, 6); // 20,000 / 10,000
+
+    // The shared fields now mean the same thing as they do on the Meta tab.
+    expect(k.revenue).toBe(k.trackedRevenue);
+    expect(k.bookings).toBe(k.trackedBookings);
+    expect(k.roas).toBeCloseTo(k.trackedRoas!, 6);
+
+    // 12: the two definitions must remain distinguishable.
+    expect(k.trackedRoas).not.toBeCloseTo(k.platformReportedRoas!, 6);
+    expect(k.trackedRevenue).not.toBe(k.platformReportedRevenue);
+  });
+
+  // 13: the Meta loader was already correct — it must stay correct.
+  test("meta_ads reference behaviour is unchanged (paid revenue ÷ Meta spend)", async () => {
+    loginAs(memberA);
+    const d = (await loadChannelView(hMain, "meta_ads", START, END)) as PaidChannelView;
+    expect(d.kpis!.revenue).toBe(30000); // meta_ads conversions only
+    expect(d.kpis!.totalSpend).toBe(10000);
+    expect(d.kpis!.roas).toBeCloseTo(3, 6);
+    // Meta has no platform-reported block here (it lives in Meta-vs-Reality).
+    expect(d.kpis!.platformReportedRevenue).toBeUndefined();
   });
 
   test("instagram_organic: KPIs + top posts", async () => {

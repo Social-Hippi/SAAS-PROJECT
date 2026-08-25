@@ -12,6 +12,7 @@ import {
   esc,
 } from "@/lib/email";
 import { formatCurrency, formatNumber, formatPercent, formatMultiple } from "@/lib/format";
+import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
 
 // Email alerts engine. Detects four conditions across every agency (each query
 // scoped by agencyId per the multi-tenancy rule), writes an Alert row for each,
@@ -492,7 +493,8 @@ async function checkWeeklySummary(
   const weekAgo = new Date(now.getTime() - WEEK_MS);
   const twoWeeksAgo = new Date(now.getTime() - 2 * WEEK_MS);
 
-  const [hotels, eventsThis, bookingsPrior, spendThis] = await Promise.all([
+  const [hotels, eventsThis, bookingsPrior, spendThis, googleSpendThis, conversionRows] =
+    await Promise.all([
     prisma.hotelClient.findMany({
       where: { agencyId: agency.id, deletedAt: null },
       orderBy: { createdAt: "asc" },
@@ -518,6 +520,27 @@ async function checkWeeklySummary(
       where: { agencyId: agency.id, archived: false, date: { gte: weekAgo } },
       _sum: { spend: true },
     }),
+    // Phase 0: Google Ads spend, previously missing entirely from this email.
+    prisma.googleAdsCampaignSnapshot.groupBy({
+      by: ["hotelClientId"],
+      where: { agencyId: agency.id, date: { gte: weekAgo } },
+      _sum: { spend: true },
+    }),
+    // Phase 0: row-level conversions so the summary's ROAS can use PAID revenue.
+    // The groupBy above can't classify by source, and the email previously
+    // divided ALL booking revenue by Meta-only spend and called it ROAS.
+    prisma.trackingEvent.findMany({
+      where: { agencyId: agency.id, eventType: "conversion", createdAt: { gte: weekAgo } },
+      // hotelClientId so soft-deleted hotels can be excluded, matching `rows`.
+      select: {
+        hotelClientId: true,
+        utmSource: true,
+        utmMedium: true,
+        utmContent: true,
+        gclid: true, gbraid: true, wbraid: true, fbclid: true,
+        conversionValue: true,
+      },
+    }),
   ]);
 
   if (hotels.length === 0) return 0;
@@ -541,7 +564,17 @@ async function checkWeeklySummary(
     const r = rows.get(g.hotelClientId);
     if (r) r.priorBookings = g._count._all;
   }
-  const spendMap = new Map(spendThis.map((g) => [g.hotelClientId, Number(g._sum.spend ?? 0)]));
+  // Combined paid spend per hotel: Meta + Google — restricted to the SAME hotel
+  // population as `rows` (agency, non-soft-deleted). `hotels` is already filtered
+  // on deletedAt: null, but the spend groupBys are agency-wide, so a soft-deleted
+  // hotel's spend would otherwise land in totalSpend while its bookings never
+  // reach totals.revenue (they're dropped by the `if (!r) continue` above).
+  const activeHotelIds = new Set(hotels.map((h) => h.id));
+  const spendMap = new Map<string, number>();
+  for (const g of [...spendThis, ...googleSpendThis]) {
+    if (!activeHotelIds.has(g.hotelClientId)) continue;
+    spendMap.set(g.hotelClientId, (spendMap.get(g.hotelClientId) ?? 0) + Number(g._sum.spend ?? 0));
+  }
 
   const list = [...rows.values()];
   const totals = list.reduce(
@@ -553,7 +586,19 @@ async function checkWeeklySummary(
     { visits: 0, bookings: 0, revenue: 0 },
   );
   const totalSpend = [...spendMap.values()].reduce((a, b) => a + b, 0);
-  const roas = totalSpend > 0 ? totals.revenue / totalSpend : null;
+  // Phase 0: PAID revenue ÷ paid spend. Was totals.revenue (every channel,
+  // including direct and organic) ÷ Meta-only spend — emailed weekly as "ROAS".
+  const paidRevenue = conversionRows.reduce(
+    (sum, c) =>
+      sum +
+      (activeHotelIds.has(c.hotelClientId) &&
+      isPaidSourceType(classifySourceType(c)) &&
+      c.conversionValue != null
+        ? Number(c.conversionValue)
+        : 0),
+    0,
+  );
+  const roas = totalSpend > 0 ? paidRevenue / totalSpend : null;
 
   const hotelRowsHtml = list
     .map((r) => {

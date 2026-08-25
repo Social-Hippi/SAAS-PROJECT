@@ -30,6 +30,26 @@ export type PaidKpis = {
   // Tracked bookings/revenue (from TrackingEvent classified meta_ads) drive ROAS.
   bookings: number; revenue: number; roas: number | null;
   costPerBooking: number | null; conversionRate: number | null;
+
+  // ── Phase 0: PLATFORM-REPORTED vs HOTELTRACK-TRACKED ─────────────────────
+  // The Google channel used to put Google's OWN conversions/value into
+  // `bookings`/`revenue`/`roas` — the same fields the Meta channel fills with
+  // HotelTrack-tracked bookings — and the UI rendered both identically. Two
+  // incompatible definitions, one label. These fields make the distinction
+  // explicit; both are populated for Google, and `platformReported*` is left
+  // undefined for Meta (whose platform-reported figures live in the separate
+  // Meta-vs-Reality block).
+  //
+  // NOTE: tracked Google revenue is UTM/classification-based today
+  // (classifySourceType === "google_ads"). It is NOT GCLID-based — auto-tagged
+  // Google clicks carry no UTMs and are classified `direct`. GCLID arrives in
+  // Phase 1; until then this figure understates true Google-driven revenue.
+  platformReportedConversions?: number;
+  platformReportedRevenue?: number;
+  platformReportedRoas?: number | null;
+  trackedBookings?: number;
+  trackedRevenue?: number;
+  trackedRoas?: number | null;
 };
 // Per-ad-account spend breakdown (a hotel can have >1 Meta account).
 export type PaidAccount = { accountId: string; spend: number; impressions: number; clicks: number };
@@ -135,8 +155,22 @@ export type InfluencerChannelView = {
   channelType: "influencer";
   channelName: "Influencer";
   hasData: boolean;
-  kpis: { activeInfluencers: number; activeCouponCodes: number; totalRedemptions: number; totalRevenue: number; averageRevenuePerInfluencer: number };
-  topInfluencers: { influencerName: string; instagramHandle: string; activeCodesCount: number; redemptionsCount: number; revenue: number; avgBookingValue: number }[];
+  kpis: {
+    activeInfluencers: number; activeCouponCodes: number; totalRedemptions: number; totalRevenue: number; averageRevenuePerInfluencer: number;
+    // Track A: revenue that arrived through an influencer's TRACKED LINK
+    // (utm_content -> ContentPiece -> Influencer) rather than through a coupon.
+    // Counted only where no redemption already covers the same conversion, so
+    // `totalRevenue + linkAttributedRevenue` never double-counts one booking.
+    linkAttributedBookings: number; linkAttributedRevenue: number;
+  };
+  topInfluencers: {
+    influencerName: string; instagramHandle: string; activeCodesCount: number;
+    redemptionsCount: number; revenue: number; avgBookingValue: number;
+    /** Link-route conversions not already counted as a coupon redemption. */
+    linkBookings: number; linkRevenue: number;
+    /** revenue + linkRevenue — the influencer's full attributable total. */
+    attributedRevenue: number;
+  }[];
   redemptionSourceBreakdown: { snippetAuto: number; manualEntry: number };
   trend: { date: string; redemptions: number; revenue: number }[];
 };

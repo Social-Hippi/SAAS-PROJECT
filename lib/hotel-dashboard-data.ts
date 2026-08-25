@@ -10,6 +10,7 @@ import {
   type EventInput,
 } from "@/lib/attribution";
 import { DEFAULT_OTA_RATE, calculateSavings } from "@/lib/savings";
+import { getSpendByPlatformFor } from "@/lib/ad-spend";
 
 // Loads everything the PUBLIC, read-only hotel dashboard (/h/<shareToken>) shows,
 // computed server-side into a plain, serialisable shape. ALWAYS scoped by BOTH
@@ -116,7 +117,13 @@ export async function loadHotelPublicDashboard(args: {
   const [conversions, visitGroups, snapshots, hotelMeta] = await Promise.all([
     pixelMode
       ? Promise.resolve(
-          [] as { utmSource: string | null; sessionId: string; conversionValue: import("@prisma/client").Prisma.Decimal | null }[],
+          [] as {
+            utmSource: string | null;
+            utmMedium: string | null;
+            sessionId: string;
+            conversionValue: import("@prisma/client").Prisma.Decimal | null;
+            gclid: string | null; gbraid: string | null; wbraid: string | null; fbclid: string | null;
+          }[],
         )
       : scoped(prisma.trackingEvent).findMany({
           where: {
@@ -124,7 +131,8 @@ export async function loadHotelPublicDashboard(args: {
             eventType: "conversion",
             createdAt: { gte: since, lte: until },
           },
-          select: { utmSource: true, sessionId: true, conversionValue: true },
+          // utmMedium is needed (with utmSource) to classify paid vs non-paid.
+          select: { utmSource: true, utmMedium: true, sessionId: true, conversionValue: true, gclid: true, gbraid: true, wbraid: true, fbclid: true, },
         }),
     pixelMode
       ? Promise.resolve([] as { utmSource: string | null; sessionId: string }[])
@@ -157,12 +165,18 @@ export async function loadHotelPublicDashboard(args: {
   const ads = computeAdsSummary(snapshotInputs);
   const eventInputs: EventInput[] = conversions.map((c) => ({
     eventType: "conversion",
+    utmSource: c.utmSource,
+    utmMedium: c.utmMedium,
     utmContent: null,
     utmCampaign: null,
     sessionId: c.sessionId,
     conversionValue: c.conversionValue == null ? null : Number(c.conversionValue),
+    gclid: c.gclid, gbraid: c.gbraid, wbraid: c.wbraid, fbclid: c.fbclid,
   }));
-  const kpis = computeKpis(eventInputs, ads.spend);
+  // Phase 0: divide by CANONICAL paid spend (Meta + Google), not `ads.spend`
+  // (Meta only). `ads` remains the Meta-reported block and is unchanged.
+  const paidSpend = await getSpendByPlatformFor(agencyId, hotelId, since, until);
+  const kpis = computeKpis(eventInputs, paidSpend);
   const adr = kpis.bookings > 0 ? kpis.revenue / kpis.bookings : null;
 
   // OTA commission saved by direct (snippet-tracked) bookings — booking revenue ×
@@ -342,7 +356,10 @@ export async function loadHotelPublicDashboard(args: {
       topChannel,
       followers: currentFollowers,
       engagementRate,
-      adSpend: showAdSpend ? ads.spend : null,
+      // Combined paid spend (Meta + Google) so the figure shown matches the
+      // denominator `trueRoas` actually used. Null when hidden from the hotel,
+      // and also null when currencies can't be safely combined.
+      adSpend: showAdSpend ? paidSpend.total : null,
       trueRoas: showAdSpend ? kpis.roas : null,
     },
     channels,
