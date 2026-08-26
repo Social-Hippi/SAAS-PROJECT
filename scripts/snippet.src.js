@@ -23,7 +23,7 @@
     var base = src.origin;
     var DEBUG = src.searchParams.get("debug") === "1";
 
-    var VERSION = "2.4.0"; // v2.4 adds ad click ids; v2.3 = coupon capture; v2.2 = click/form/identify; v2.1 = funnel stages; v2.0 = journeys; v1 = visit.
+    var VERSION = "2.5.0"; // v2.5 adds cross-domain journey handoff; v2.4 adds ad click ids; v2.3 = coupon capture; v2.2 = click/form/identify; v2.1 = funnel stages; v2.0 = journeys; v1 = visit.
     var converted = false, observer = null, cfg = null, pending = false;
     var UTM = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"];
     // Ad-platform CLICK IDENTIFIERS (v2.4). Stronger evidence than a UTM: the
@@ -71,6 +71,48 @@
     }
 
     // 3 + 4. First-touch attribution: store the FIRST UTM set seen for 30 days.
+    // ── Cross-domain journey handoff, receiving half (v2.5) ────────────────
+    // A hotel's booking journey often continues on a DIFFERENT host (booking
+    // engine, payment page). sessionStorage and our visitor cookie are
+    // origin-scoped, so that visit would otherwise begin as a brand-new visitor
+    // with no UTMs and the original click would be lost.
+    //
+    // When the hotel's own site decorated the outbound link, this page arrives
+    // carrying `_ht_j`. We decode it here — before attribution, click ids and
+    // the visitor id are resolved — so the continuation adopts the ORIGINAL
+    // session's evidence instead of inventing new evidence.
+    //
+    // Adoption is deliberately conservative; see adoptable() below.
+    var JOURNEY_PARAM = "_ht_j", JOURNEY_TTL_MS = 30 * 60 * 1000, JOURNEY_MAX = 1024;
+    var JOURNEY_VERSION = 1;
+    function b64urlDecode(v) {
+      try { return decodeURIComponent(escape(atob(String(v).replace(/-/g, "+").replace(/_/g, "/")))); }
+      catch (e) { return null; }
+    }
+    function b64urlEncode(raw) {
+      try { return btoa(unescape(encodeURIComponent(raw))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+      catch (e) { return null; }
+    }
+    function readJourneyToken() {
+      var t;
+      try { t = new URLSearchParams(location.search).get(JOURNEY_PARAM); } catch (e) { return null; }
+      if (!t || t.length > JOURNEY_MAX) return null;
+      var json = b64urlDecode(t);
+      if (!json) return null;
+      var p = parse(json);
+      if (!p || typeof p !== "object") return null;
+      if (p.v !== JOURNEY_VERSION) return null;
+      if (typeof p.s !== "string" || !p.s || typeof p.i !== "string" || !p.i) return null;
+      if (typeof p.t !== "number") return null;
+      var age = Date.now() - p.t;
+      // Expired, or minted in the future — reject both. The TTL matches the
+      // session idle window: past it the origin session is gone anyway, so
+      // stitching would join two genuinely separate visits.
+      if (age < 0 || age > JOURNEY_TTL_MS) return null;
+      return p;
+    }
+    var handoff = readJourneyToken();
+
     function urlUtms() {
       var q = new URLSearchParams(location.search), o = {}, has = false;
       UTM.forEach(function (k) { var v = q.get(k); if (v) { o[k] = v; has = true; } });
@@ -80,6 +122,16 @@
     if (!attr) {
       var cur = urlUtms();
       if (cur) { attr = cur; setCookie("_ht_attr", JSON.stringify(cur), 30); } // don't overwrite if cookie exists
+    }
+    // Handoff adoption. ONLY when this origin has no attribution of its own —
+    // no cookie and no UTMs on the URL — so a token can never overwrite
+    // stronger, first-hand evidence. That also bounds the link-sharing risk: a
+    // shared decorated URL cannot displace the recipient's real source.
+    var adoptedHandoff = false;
+    if (!attr && handoff && handoff.u && typeof handoff.u === "object") {
+      var carried = null;
+      UTM.forEach(function (k) { if (typeof handoff.u[k] === "string" && handoff.u[k]) { (carried = carried || {})[k] = handoff.u[k]; } });
+      if (carried) { attr = carried; setCookie("_ht_attr", JSON.stringify(carried), 30); adoptedHandoff = true; }
     }
     attr = attr || {};
 
@@ -119,6 +171,13 @@
     if (landedClicks) {
       CLICK_IDS.forEach(function (k) { if (landedClicks[k]) clicks[k] = landedClicks[k]; });
     }
+    // Handoff click ids are ADD-ONLY and never displace an id already held or
+    // present on this URL — weaker, second-hand evidence must not beat direct.
+    if (handoff && handoff.c && typeof handoff.c === "object") {
+      CLICK_IDS.forEach(function (k) {
+        if (!clicks[k] && normClickId(handoff.c[k])) clicks[k] = normClickId(handoff.c[k]);
+      });
+    }
     // Re-stamp on every load so the 90-day window slides for an active visitor.
     var hasClicks = false;
     CLICK_IDS.forEach(function (k) { if (clicks[k]) hasClicks = true; });
@@ -148,7 +207,17 @@
       var last = parseInt(ssGet("ht_session_last") || "0", 10);
       var cur = ssGet("ht_session_id");
       if (!cur || !(last > 0) || (Date.now() - last) > IDLE_MS) {
-        cur = newSid();
+        // Cross-domain continuation: when this origin has no live session of its
+        // own and we arrived carrying a fresh journey token, CONTINUE the
+        // originating session rather than minting a new one. The server's
+        // session upsert increments pageViewCount and moves exitPath but never
+        // rewrites utmSource/landingPath, so the original acquisition survives —
+        // and its `foreign` guard drops the write outright if the id belongs to
+        // another hotel, so a token can never write across tenants.
+        //
+        // The token's TTL equals IDLE_MS, so a continuation can never resurrect
+        // a session that would already have expired on its own origin.
+        cur = (handoff && typeof handoff.s === "string" && handoff.s) ? handoff.s : newSid();
         ssSet("ht_max_stage", "0"); // new session → reset funnel progress
         ssSet("ht_click_n", "0");   // new session → reset click/form client caps
         ssSet("ht_form_n", "0");
@@ -163,6 +232,9 @@
     // from the legacy _ht_vid cookie when present so returning visitors keep their
     // identity. Format: "vis_" + (legacy id | uuid).
     var vid = getCookie("ht_visitor_id");
+    // Handoff: only when this origin has never seen this browser. An existing
+    // visitor cookie is first-hand identity and always wins over a token.
+    if (!vid && handoff && typeof handoff.i === "string" && handoff.i) vid = handoff.i;
     if (!vid) { var legacyVid = getCookie("_ht_vid"); vid = "vis_" + (legacyVid || uuid()); }
     setCookie("ht_visitor_id", vid, 365);
 
@@ -520,8 +592,83 @@
     }
     function scheduleSame() { if (pending) return; pending = true; setTimeout(function () { pending = false; checkSame(); }, 150); }
 
+    // ── Cross-domain journey handoff, sending half (v2.5) ──────────────────
+    // Outbound links to the hotel's OWN booking-engine / payment hosts (from
+    // HotelClient.bookingDomains, server-side config — never client-guessable)
+    // are decorated with a short-lived, non-PII journey token so the visit that
+    // continues there stitches to this session.
+    //
+    // Capture-phase click listener rather than a one-off DOM sweep: booking
+    // widgets inject their links late, and this also covers middle-click and
+    // "open in new tab", which never fire navigation on this page.
+    function hostMatchesBookingDomain(host, domains) {
+      var h = String(host || "").toLowerCase().replace(/\.$/, "");
+      if (!h || !domains || !domains.length) return false;
+      for (var i = 0; i < domains.length; i++) {
+        var t = String(domains[i] || "").toLowerCase().replace(/^\*\./, "").replace(/\.$/, "");
+        // Exact host or a true subdomain — never a bare suffix, so
+        // "evil-example.com" can never satisfy an entry for "example.com".
+        if (t && (h === t || h.slice(-(t.length + 1)) === "." + t)) return true;
+      }
+      return false;
+    }
+    function buildJourneyToken() {
+      var u = {};
+      UTM.forEach(function (k) { if (attr[k]) u[k] = String(attr[k]).slice(0, 255); });
+      var c = {};
+      CLICK_IDS.forEach(function (k) { if (clicks[k]) c[k] = String(clicks[k]).slice(0, 255); });
+      if (!sid || !vid) return null;
+      var tok = b64urlEncode(JSON.stringify({ s: sid, i: vid, u: u, c: c, t: Date.now(), v: JOURNEY_VERSION }));
+      return tok && tok.length <= JOURNEY_MAX ? tok : null;
+    }
+    function decorateBookingLinks() {
+      if (!document.documentElement) return;
+      // Attach EXACTLY ONE decorator per page. A site that includes t.js twice
+      // (common when a theme and a tag manager both add it) would otherwise run
+      // two listeners; the first would stamp its token and the second would see
+      // the param already set and bail — silently pinning the link to whichever
+      // copy booted first. Replacing any prior listener keeps the newest, live
+      // session as the one that gets carried across.
+      //
+      // Detach FIRST, unconditionally: if this boot has no booking domains the
+      // correct outcome is "no decoration at all", which a stale listener from a
+      // previous boot would otherwise override.
+      try {
+        if (window.__htDecorator) {
+          document.documentElement.removeEventListener("click", window.__htDecorator, true);
+          window.__htDecorator = null;
+        }
+      } catch (e) {}
+      var domains = (cfg && cfg.bookingDomains) || [];
+      if (!domains.length) return;
+      var onDecorate = function (ev) {
+        try {
+          var el = ev.target;
+          while (el && el !== document.documentElement && String(el.tagName || "").toLowerCase() !== "a") el = el.parentNode;
+          if (!el || String(el.tagName || "").toLowerCase() !== "a") return;
+          var href = el.getAttribute("href");
+          if (!href) return;
+          var u = new URL(href, location.href);
+          if (u.protocol !== "http:" && u.protocol !== "https:") return;
+          if (u.host === location.host) return;             // same-origin needs no token
+          if (!hostMatchesBookingDomain(u.host, domains)) return;
+          if (u.searchParams.get(JOURNEY_PARAM)) return;     // already decorated
+          var tok = buildJourneyToken();
+          if (!tok) return;
+          u.searchParams.set(JOURNEY_PARAM, tok);
+          el.setAttribute("href", u.toString());
+          log("handoff:decorated", { host: u.host });
+        } catch (e) {}
+      };
+      window.__htDecorator = onDecorate;
+      document.documentElement.addEventListener("click", onDecorate, true);
+    }
+
     function setup(c) {
       cfg = c;
+      // Decoration needs the server-side booking-domain list, so it starts only
+      // once config has arrived.
+      try { decorateBookingLinks(); } catch (e) {}
       // url_change (and "both"): check now + watch SPA navigations. History is
       // already wrapped once at init — reuse the shared dispatcher (no double-wrap).
       if (c.method === "url_change" || c.method === "both") {

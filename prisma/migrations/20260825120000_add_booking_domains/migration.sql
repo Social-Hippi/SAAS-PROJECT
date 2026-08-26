@@ -1,0 +1,24 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Cross-domain journey handoff — HotelClient.bookingDomains
+--
+-- WHY: a real influencer journey on Aster Holidays ended after one pageview.
+-- The booking CTA leaves the tracked site for an external booking engine
+-- (bookings.coffeeberryhills.in) and then a payment host
+-- (asterhospitality.hotelpay.co.in). sessionStorage and the visitor cookie are
+-- origin-scoped, so the visit that continues there starts as a brand-new
+-- visitor with no UTMs — the influencer, campaign and content are all lost at
+-- the handoff, and no conversion can ever be joined back to the click.
+--
+-- This column lists the hosts a hotel's booking journey continues on. The
+-- snippet decorates outbound links to those hosts with a short-lived,
+-- non-PII journey token so the downstream visit adopts the original session's
+-- first-touch attribution instead of inventing a new one.
+--
+-- SAFETY: additive only. One nullable-by-default array column with an empty
+-- default, so every existing hotel keeps today's behaviour exactly (empty list
+-- = no decoration, no adoption). No DROP, DELETE, TRUNCATE, UPDATE, no
+-- backfill, and no NOT NULL constraint applied to existing rows.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- AlterTable
+ALTER TABLE "HotelClient" ADD COLUMN     "bookingDomains" TEXT[] DEFAULT ARRAY[]::TEXT[];

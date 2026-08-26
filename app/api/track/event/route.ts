@@ -2,13 +2,14 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { checkRateLimit, clientIpFromHeaders } from "@/lib/rate-limit";
 import { rateLimit } from "@/lib/ratelimit";
+import { logSnippetRejection } from "@/lib/install-health";
 import { saltedHash } from "@/lib/pii";
 import { cleanCode, isCouponRedeemable, couponRejectReason } from "@/lib/coupon";
 import { CLICK_ID_KEYS, parseClickIds, type ClickIds } from "@/lib/click-ids";
 import {
   isFunnelStage,
   parseFunnelRules,
-  resolveStageFromRules,
+  resolvePageStage,
   stageRank,
   type FunnelStage,
 } from "@/lib/funnel";
@@ -152,6 +153,8 @@ type Hotel = {
   snippetStatus: string;
   deletedAt: Date | null;
   funnelStageRules: Prisma.JsonValue;
+  /** Hosts the booking journey continues on (cross-domain handoff + intent evidence). */
+  bookingDomains: string[];
 };
 
 // The interactive-transaction client type for our EXTENDED Prisma client (the
@@ -220,12 +223,24 @@ export async function POST(request: Request) {
   try {
     hotel = await prisma.hotelClient.findUnique({
       where: { siteId },
-      select: { id: true, agencyId: true, snippetStatus: true, deletedAt: true, funnelStageRules: true },
+      select: { id: true, agencyId: true, snippetStatus: true, deletedAt: true, funnelStageRules: true, bookingDomains: true },
     });
   } catch {
     return reply(503, { error: "Temporarily unavailable" });
   }
-  if (!hotel) return reply(403, { error: "Unknown site id" });
+  if (!hotel) {
+    // A rejection here is almost always a BROKEN INSTALL, not an attack — a
+    // mistyped siteId silently discards 100% of a site's traffic. Diagnose it
+    // (structured log only; see lib/install-health.ts for why nothing is
+    // persisted from this public, unauthenticated path).
+    await logSnippetRejection({
+      siteId,
+      headers: request.headers,
+      reason: "unknown_site_id",
+      endpoint: "track/event",
+    });
+    return reply(403, { error: "Unknown site id" });
+  }
 
   // Soft-deleted hotels do NOT accept new journey events (Part 7) — drop silently.
   // Legacy visit/conversion are still accepted (so a reactivation loses nothing).
@@ -687,10 +702,16 @@ async function handleVisitLike(
         // Funnel stage for this page: the snippet's data-ht-stage (payload), else
         // the hotel's server-side URL rules. Stored on the PageView and recorded
         // as a StageReached when it's a new highest stage for the session.
-        const payloadStage = isFunnelStage(body.funnelStage) ? body.funnelStage : null;
-        const stage =
-          payloadStage ??
-          resolveStageFromRules(parseFunnelRules(hotel.funnelStageRules), pagePath as string);
+        // Precedence: declared > booking-domain evidence > hotel path rules.
+        // The middle term is what makes stages work for hotels that never
+        // authored rules: landing on their own booking engine IS intent.
+        const stage = resolvePageStage({
+          declaredStage: body.funnelStage,
+          pageUrl: str(body.pageUrl),
+          bookingDomains: hotel.bookingDomains,
+          rules: parseFunnelRules(hotel.funnelStageRules),
+          path: pagePath as string,
+        });
 
         await tx.pageView.create({
           data: {

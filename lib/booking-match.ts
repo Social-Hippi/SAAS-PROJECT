@@ -30,6 +30,9 @@ export type MatchableBooking = {
   guestEmailHash: string | null;
   guestPhoneHash: string | null;
   externalGuestId: string | null;
+  /** HotelTrack journey ids echoed back by the provider. Strongest evidence. */
+  journeySessionId?: string | null;
+  journeyVisitorId?: string | null;
 };
 
 export type MatchOutcome = {
@@ -49,6 +52,47 @@ export type MatchOutcome = {
  */
 export async function matchBookingToJourney(booking: MatchableBooking): Promise<MatchOutcome> {
   const scoped = <D>(model: D) => agencyScopedFor(booking.agencyId, model);
+
+  // ── Journey identifiers first ─────────────────────────────────────────────
+  // These beat every contact identifier because HotelTrack MINTED them and they
+  // belong to exactly ONE visit. An email hash identifies a person, who may have
+  // visited many times or shared an address with a partner; a session id
+  // identifies the visit that produced this booking.
+  //
+  // Both lookups are hotel-scoped. A session id echoed from another hotel's
+  // booking engine must never resolve here — the same guard the tracking ingest
+  // applies when a client-supplied session id belongs to a different hotel.
+  const journeyAttempts: { method: MatchMethod; visitorIds: string[] }[] = [];
+
+  if (booking.journeySessionId) {
+    const sessions = await scoped(prisma.session).findMany({
+      where: { id: booking.journeySessionId, hotelClientId: booking.hotelClientId },
+      select: { visitorId: true },
+    });
+    if (sessions.length) {
+      journeyAttempts.push({ method: "session_id", visitorIds: sessions.map((x) => x.visitorId) });
+    }
+  }
+
+  if (booking.journeyVisitorId) {
+    const seen = await scoped(prisma.session).findFirst({
+      where: { visitorId: booking.journeyVisitorId, hotelClientId: booking.hotelClientId },
+      select: { visitorId: true },
+    });
+    // Only credit a visitor we have actually SEEN at this hotel. An id we have
+    // no session for proves nothing, however well-formed it looks.
+    if (seen) journeyAttempts.push({ method: "visitor_id", visitorIds: [seen.visitorId] });
+  }
+
+  for (const attempt of journeyAttempts) {
+    const unique = [...new Set(attempt.visitorIds)];
+    const confidence = gradeMatch({ method: attempt.method, candidateCount: unique.length });
+    const created = await recordMatches(booking, unique, attempt.method, confidence, {
+      matchedOn: attempt.method,
+      candidateCount: unique.length,
+    });
+    return { created, method: attempt.method, confidence, candidateCount: unique.length };
+  }
 
   // Strongest identifier first. customerId is an id the hotel itself issued;
   // email/phone identify the person.
@@ -95,7 +139,8 @@ export async function matchBookingToJourney(booking: MatchableBooking): Promise<
   const created = await recordMatches(booking, [null], "unknown", "UNKNOWN", {
     matchedOn: "none",
     candidateCount: 0,
-    reason: booking.guestEmailHash || booking.guestPhoneHash || booking.externalGuestId
+    reason: booking.guestEmailHash || booking.guestPhoneHash || booking.externalGuestId ||
+      booking.journeySessionId || booking.journeyVisitorId
       ? "identifiers present but no visitor matched"
       : "booking carried no usable identifier",
   });

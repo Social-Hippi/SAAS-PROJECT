@@ -27,6 +27,34 @@ export function formatCurrency(
   return options?.compact ? compactINR(value) : INR.format(value);
 }
 
+/**
+ * Currency-aware money formatting. Use this wherever the amount's currency comes
+ * from stored data (booking revenue) rather than from HotelTrack's own reporting
+ * currency — `formatCurrency` above hardcodes INR and would mislabel a booking
+ * a provider recorded in USD or AED.
+ *
+ * A null currency renders the bare number: we do not know the unit, and guessing
+ * one would be worse than omitting it.
+ */
+export function formatMoney(
+  value: number,
+  currency: string | null | undefined,
+  options?: { compact?: boolean },
+): string {
+  if (!currency) return formatNumber(Math.round(value));
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 0,
+      notation: options?.compact ? "compact" : "standard",
+    }).format(value);
+  } catch {
+    // Unknown ISO code — show the code beside the number rather than throw.
+    return `${currency} ${formatNumber(Math.round(value))}`;
+  }
+}
+
 /** "₹1,234.56" — paise precision, for per-unit figures like cost/booking. */
 export function formatCurrencyCents(value: number): string {
   return INR_PAISE.format(value);

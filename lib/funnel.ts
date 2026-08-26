@@ -86,6 +86,63 @@ export function resolveStageFromRules(
   return null;
 }
 
+// ── Evidence-based stage resolution ──────────────────────────────────────────
+//
+// Path rules require a hotel to describe its own site, and most never do —
+// every Aster PageView has funnelStage NULL because funnelStageRules is unset.
+// Rather than guess from page names, derive the one stage we hold HARD evidence
+// for: a visitor who has landed on the hotel's own booking engine has, by
+// definition, reached booking INTENT. The host list is server-side
+// configuration (HotelClient.bookingDomains), never client-guessable, so this
+// is evidence rather than inference.
+//
+// Deliberately NOT inferred: `consideration`. There is no reliable signal for
+// it — "viewed 2+ pages" is a guess, so it stays rule-driven.
+
+/**
+ * Stage implied by WHERE the pageview happened. Returns "intent" when the URL's
+ * host is one of the hotel's configured booking domains, else null.
+ *
+ * Takes precedence over path rules because the host is stronger evidence than
+ * the path: a booking engine's landing page is often "/", which a hotel rule
+ * mapping "/" to awareness would otherwise mislabel.
+ */
+export function resolveStageFromBookingDomain(
+  pageUrl: string | null | undefined,
+  bookingDomains: readonly string[] | null | undefined,
+): FunnelStage | null {
+  if (!pageUrl || !bookingDomains?.length) return null;
+  let host = "";
+  try { host = new URL(pageUrl).host.toLowerCase().replace(/\.$/, ""); } catch { return null; }
+  if (!host) return null;
+  for (const d of bookingDomains) {
+    const t = String(d ?? "").trim().toLowerCase().replace(/^\*\./, "").replace(/\.$/, "");
+    // Exact host or a true subdomain — never a bare suffix.
+    if (t && (host === t || host.endsWith("." + t))) return "intent";
+  }
+  return null;
+}
+
+/**
+ * Full precedence for a pageview's stage:
+ *   1. what the page declared   (data-ht-stage — the hotel said so explicitly)
+ *   2. booking-domain evidence  (we observed them ON the booking engine)
+ *   3. the hotel's path rules   (hotel-authored, but weaker than 1 and 2)
+ * Null when nothing applies — never a guess.
+ */
+export function resolvePageStage(opts: {
+  declaredStage?: unknown;
+  pageUrl?: string | null;
+  bookingDomains?: readonly string[] | null;
+  rules?: FunnelRule[];
+  path: string;
+}): FunnelStage | null {
+  if (isFunnelStage(opts.declaredStage)) return opts.declaredStage;
+  const byHost = resolveStageFromBookingDomain(opts.pageUrl, opts.bookingDomains);
+  if (byHost) return byHost;
+  return resolveStageFromRules(opts.rules ?? [], opts.path);
+}
+
 // ── Aggregate funnel (pure) ───────────────────────────────────────────────────
 
 export type FunnelStageStat = {

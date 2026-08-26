@@ -103,10 +103,10 @@ beforeEach(() => {
 // ── Version ────────────────────────────────────────────────────────────────
 
 describe("snippet version", () => {
-  it("reports v2.4.0 on every event", () => {
+  it("reports v2.5.0 on every event", () => {
     boot("/?gclid=" + GCLID);
-    expect(internals().VERSION).toBe("2.4.0");
-    expect(lastOfType("pageview")!.v).toBe("2.4.0");
+    expect(internals().VERSION).toBe("2.5.0");
+    expect(lastOfType("pageview")!.v).toBe("2.5.0");
   });
 });
 

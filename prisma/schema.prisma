@@ -248,6 +248,13 @@ model HotelClient {
   // Optional [{ urlPattern, stage }] used to tag PageViews server-side when a
   // hotel can't add data-ht-stage attributes to its pages. See lib/funnel.ts.
   funnelStageRules        Json?
+  // Cross-domain journey handoff (Loop Engineering). Hosts of the hotel's
+  // booking engine / payment pages, e.g. ["bookings.coffeeberryhills.in"].
+  // The snippet decorates outbound links to these hosts with a short-lived
+  // journey token so the visit that continues there is stitched to the session
+  // that started on the hotel's own site instead of appearing as a new visitor.
+  // Empty = no handoff (behaviour identical to before).
+  bookingDomains          String[]         @default([])
   // ── Soft delete (admin-only; reversible via restoreHotel) ──
   // deletedAt null = active. When set, the hotel is hidden everywhere and all
   // syncing stops, but every row (tokens, events, attribution, snapshots) is
@@ -1778,6 +1785,18 @@ model Booking {
   /// The provider's own guest/customer id, when it supplies one.
   externalGuestId String?
 
+  /// ── Journey linkage (Simplotel Booking Push) ─────────────────────────────
+  /// The STRONGEST deterministic booking<->journey evidence available:
+  /// identifiers HotelTrack itself minted, carried to the booking engine by the
+  /// cross-domain journey token and echoed back on the booking. Unlike an email
+  /// or phone hash these are unique to ONE visit, so they cannot collide
+  /// between two guests who happen to share a contact detail.
+  ///
+  /// Null whenever the provider does not echo them — matching then falls back
+  /// to customerId / emailHash / phoneHash, and finally to UNKNOWN.
+  journeySessionId String?
+  journeyVisitorId String?
+
   /// Revenue AS SUPPLIED. Nullable throughout: store only what the source sent.
   grossAmount      Decimal? @db.Decimal(12, 2)
   netAmount        Decimal? @db.Decimal(12, 2)
@@ -1807,6 +1826,8 @@ model Booking {
   @@index([hotelClientId, status])
   @@index([hotelClientId, guestEmailHash]) // deterministic identity match
   @@index([hotelClientId, guestPhoneHash])
+  @@index([hotelClientId, journeySessionId])
+  @@index([hotelClientId, journeyVisitorId])
   @@index([connectionId])
 }
 

@@ -86,6 +86,13 @@ export type CanonicalBookingEvent = {
   checkIn?: unknown;
   checkOut?: unknown;
   guest?: CanonicalGuest;
+  /**
+   * Journey identifiers HotelTrack itself minted, echoed back by the provider.
+   * The strongest deterministic booking<->journey evidence there is: unique to
+   * ONE visit, so unlike a shared email they can never collide between guests.
+   * Absent whenever the provider does not carry them — never inferred.
+   */
+  journey?: { sessionId?: unknown; visitorId?: unknown };
   amounts?: CanonicalAmounts;
   rawPayload?: unknown;
 };
@@ -109,6 +116,9 @@ export type ValidatedBookingEvent = {
   guestEmailRaw: string | null;
   guestPhoneRaw: string | null;
   externalGuestId: string | null;
+  /** Echoed HotelTrack journey ids, or null when the provider carried none. */
+  journeySessionId: string | null;
+  journeyVisitorId: string | null;
   amounts: {
     gross: string | null;
     net: string | null;
@@ -273,6 +283,7 @@ export function validateBookingEvent(input: CanonicalBookingEvent): ValidationRe
   }
 
   const g = input.guest ?? {};
+  const j = input.journey ?? {};
   return {
     ok: true,
     event: {
@@ -291,6 +302,8 @@ export function validateBookingEvent(input: CanonicalBookingEvent): ValidationRe
       guestEmailRaw: cleanString(g.email, 320),
       guestPhoneRaw: cleanString(g.phone, 64),
       externalGuestId: cleanString(g.externalGuestId, 128),
+      journeySessionId: cleanString(j.sessionId, 128),
+      journeyVisitorId: cleanString(j.visitorId, 128),
       amounts,
       rawPayload: input.rawPayload ?? null,
       warnings,

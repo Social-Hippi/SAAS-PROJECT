@@ -170,6 +170,8 @@ export async function ingestBookingEvent(
       guestEmailHash,
       guestPhoneHash,
       externalGuestId: event.externalGuestId,
+      journeySessionId: event.journeySessionId,
+      journeyVisitorId: event.journeyVisitorId,
     });
     match = { method: outcome.method, confidence: outcome.confidence, created: outcome.created };
   }
@@ -222,6 +224,8 @@ function presentFields(
   put("guestEmailHash", guestEmailHash);
   put("guestPhoneHash", guestPhoneHash);
   put("externalGuestId", event.externalGuestId);
+  put("journeySessionId", event.journeySessionId);
+  put("journeyVisitorId", event.journeyVisitorId);
   put("grossAmount", event.amounts.gross);
   put("netAmount", event.amounts.net);
   put("roomRevenue", event.amounts.roomRevenue);

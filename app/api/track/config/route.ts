@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { rateLimit, clientIpFromHeaders } from "@/lib/ratelimit";
+import { logSnippetRejection } from "@/lib/install-health";
 
 // Public endpoint hit cross-origin by the tracking snippet (t.js) on hotel
 // websites. Returns ONLY the conversion config for the one hotel identified by
@@ -41,6 +42,10 @@ export async function GET(request: Request) {
         thankYouUrlPattern: true,
         successPhrase: true,
         successSelector: true,
+        // Cross-domain handoff: hosts the snippet may decorate outbound links
+        // to, and may accept an inbound journey token from. Public by design —
+        // these are the hotel's own booking-engine hostnames, not secrets.
+        bookingDomains: true,
       },
     });
   } catch {
@@ -48,7 +53,26 @@ export async function GET(request: Request) {
   }
 
   // Reject unknown Hotel Site IDs.
+  //
+  // A rejection here is almost always a BROKEN INSTALL, not an attack: a siteId
+  // mistyped into a site's template silently drops 100% of that site's traffic,
+  // and nothing else in the product surfaces it. (Aster Holidays shipped
+  // `cmru6bnm00010416vl4yiwa6` on its booking engine — the real id with `o`
+  // read as `0` and `l` as `1` — and every event from that host was discarded
+  // for weeks with no signal to the agency.)
+  //
+  // So we log it, with the Origin, so a misconfigured install is greppable.
+  // The id is redacted to head/tail: enough to recognise a near-miss of a real
+  // siteId, not enough to publish a working one from logs. We deliberately do
+  // NOT write a row here — this endpoint is public and unauthenticated, so
+  // persisting per-rejection records would let anyone amplify writes at will.
   if (!hotel) {
+    await logSnippetRejection({
+      siteId,
+      headers: request.headers,
+      reason: "unknown_site_id",
+      endpoint: "track/config",
+    });
     return Response.json({ error: "Unknown site id" }, { status: 403, headers: CORS });
   }
 
@@ -61,6 +85,7 @@ export async function GET(request: Request) {
       // Reserved for a future "value pattern" config field; the snippet also
       // falls back to a [data-ht-value] element when this is null.
       valueSelector: null,
+      bookingDomains: hotel.bookingDomains ?? [],
     },
     {
       status: 200,
