@@ -96,6 +96,20 @@ afterAll(async () => {
 
 // ── Transport + authentication ───────────────────────────────────────────
 
+describe("route is reachable server-to-server", () => {
+  test("the receiver is declared PUBLIC in the proxy", async () => {
+    // A booking provider has no Clerk session. Without this the middleware
+    // redirects the push to sign-in (307) and it never reaches the handler —
+    // which is exactly what production smoke testing caught.
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const proxy = readFileSync(join(__dirname, "..", "proxy.ts"), "utf8");
+    expect(proxy).toContain("/api/integrations/booking(.*)");
+    const publicBlock = proxy.slice(proxy.indexOf("isPublicRoute"), proxy.indexOf("isAgencyRoute"));
+    expect(publicBlock).toContain("/api/integrations/booking(.*)");
+  });
+});
+
 describe("transport and authentication", () => {
   test("GET is rejected — POST only", async () => {
     expect((await pushGET()).status).toBe(405);

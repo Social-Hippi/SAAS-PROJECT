@@ -66,6 +66,11 @@ const isPublicRoute = createRouteMatcher([
   // Razorpay posts webhooks with no Clerk session; the route verifies the
   // Razorpay HMAC-SHA256 signature instead.
   "/api/webhooks/razorpay(.*)",
+  // Booking Push receiver. Called server-to-server by a booking provider, which
+  // has no Clerk session — it authenticates with a per-connection bearer secret
+  // checked inside the route BEFORE the body is read, and derives its tenant
+  // from that secret rather than from anything in the request.
+  "/api/integrations/booking(.*)",
   // Renewal-reminder cron, gated by CRON_SECRET inside the route.
   "/api/billing/renewal-reminders(.*)",
   // Daily budget-threshold alert cron, gated by CRON_SECRET inside the route.
