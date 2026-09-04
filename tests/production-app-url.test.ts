@@ -22,6 +22,11 @@ const BASE_ENV: Record<string, string> = {
   ENCRYPTION_KEY: "a".repeat(64),
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_test_x",
   CLERK_SECRET_KEY: "sk_test_x",
+  // These are deliberately DEV-instance keys (they only need to be non-empty to
+  // clear the Clerk presence gate). Opt out of the separate Clerk instance-TIER
+  // gate so these cases exercise the app-URL check and nothing else — that gate
+  // has its own coverage in tests/clerk-instance-tier.test.ts.
+  ALLOW_CLERK_DEV_INSTANCE: "1",
 };
 
 /** Runs validatePlatformEnv() with a fresh module registry under `env`. */

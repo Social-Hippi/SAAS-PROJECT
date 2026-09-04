@@ -186,6 +186,65 @@ export function validatePlatformEnv(): void {
     }
   }
 
+  // ── Clerk INSTANCE TIER — a dev instance must never serve real customers ────
+  //
+  // A Clerk DEVELOPMENT instance (pk_test_ / sk_test_) is not just a different
+  // key. clerk-js renders a persistent "Development mode" badge on every
+  // <SignIn/>, <SignUp/> and <UserButton/> — so the first screen a hotel owner
+  // sees announces that the product is unfinished — and the instance carries
+  // dev-tier rate limits, which this app is already sensitive to (see the
+  // role-lookup cache in proxy.ts: "on a dev instance the limit makes the whole
+  // app hang").
+  //
+  // Deliberately NOT a blanket production throw. Vercel PREVIEW builds also run
+  // with NODE_ENV=production and legitimately point at the dev Clerk instance;
+  // failing them would block every PR deploy. So: throw on a real production
+  // deploy, warn loudly everywhere else, and allow an explicit opt-out for a
+  // staging environment that intends to run the dev instance.
+  {
+    const devKeys = (
+      [
+        ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "pk_test_"],
+        ["CLERK_SECRET_KEY", "sk_test_"],
+      ] as const
+    )
+      .filter(([name, prefix]) => (process.env[name] ?? "").trim().startsWith(prefix))
+      .map(([name]) => name);
+
+    if (devKeys.length > 0) {
+      // VERCEL_ENV is "production" only for a deploy to the production domain;
+      // "preview" and "development" are the other two values. It is UNSET
+      // outside Vercel and can be an EMPTY STRING in some runners, so this
+      // fails CLOSED: anything that is not explicitly a non-production Vercel
+      // environment is treated as production. (`??` alone would not do this —
+      // an empty string is neither null nor undefined, so it would slip past
+      // the check and silently disable the gate on a real deploy.)
+      const vercelEnv = (process.env.VERCEL_ENV ?? "").trim().toLowerCase();
+      const isNonProductionDeploy = vercelEnv === "preview" || vercelEnv === "development";
+      const isProductionDeploy =
+        process.env.NODE_ENV === "production" && !isNonProductionDeploy;
+      const optedOut =
+        process.env.ALLOW_CLERK_DEV_INSTANCE === "1" ||
+        process.env.ALLOW_CLERK_DEV_INSTANCE === "true";
+
+      const detail =
+        `${devKeys.join(", ")} ${devKeys.length === 1 ? "is a" : "are"} Clerk DEVELOPMENT ` +
+        `instance key${devKeys.length === 1 ? "" : "s"}. Clerk renders a "Development mode" badge on ` +
+        `every sign-in / sign-up / account screen, and the instance is dev-rate-limited. ` +
+        `Create a PRODUCTION instance in the Clerk dashboard, set its pk_live_ / sk_live_ pair in the ` +
+        `deployment env (Vercel: Production scope), and REDEPLOY — NEXT_PUBLIC_ vars are inlined at ` +
+        `build time, so swapping them without a rebuild does nothing.`;
+
+      if (isProductionDeploy && !optedOut) {
+        throw new Error(
+          `FATAL ENV MISCONFIGURATION: ${detail} Set ALLOW_CLERK_DEV_INSTANCE=1 only if this ` +
+            `environment is deliberately running the development instance.`,
+        );
+      }
+      console.warn(`[ENV] WARNING: ${detail}`);
+    }
+  }
+
   // ── Public app URL — required for any PRODUCTION build ──────────────────────
   // Every tracking snippet handed to a hotel is built from this value (the
   // welcome email in lib/hotel-invite.ts, plus the install + integrations

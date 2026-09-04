@@ -1,9 +1,16 @@
+import type { Metadata } from "next";
 import { SignUp } from "@clerk/nextjs";
+import { AuthShell, authAppearance } from "../../AuthShell";
+
+export const metadata: Metadata = {
+  title: "Create an account · HotelTrack",
+  description: "Create your HotelTrack account — marketing attribution for hotels.",
+};
 
 export default function SignUpPage() {
   return (
-    <main className="flex flex-1 items-center justify-center bg-gradient-to-b from-page to-card px-4 py-12">
-      <SignUp />
-    </main>
+    <AuthShell title="Create your account" subtitle="Get started with HotelTrack.">
+      <SignUp appearance={authAppearance} />
+    </AuthShell>
   );
 }
