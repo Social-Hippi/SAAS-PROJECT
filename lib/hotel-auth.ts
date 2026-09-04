@@ -3,15 +3,25 @@ import "server-only";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { SHARE_TOKEN_HEADER, isShareTokenShape } from "@/lib/share-token";
+import { resolveHotelAccess } from "@/lib/hotel-access";
 
-// ACCESS LOCKDOWN: the entire hotel-login + hotel-owner-share surface is disabled.
-// Hotels no longer log in and no longer use the /h/<shareToken> dashboard; they
-// receive outcomes only through the public /share/<uuid> report link. All three
-// gates below deny unconditionally, which closes the logged-in hotel dashboard
-// (/hotel/[id]), the passwordless /h/ dashboard, and every /api/hotel/[id]/* data
-// route in ONE place. Kept as a flag function (not `const true`) so the original
-// logic stays reachable to the compiler and can be restored by flipping it.
-function hotelAccessNeutralized(): boolean {
+// The blanket hotel-access lockdown has been LIFTED for logged-in hotel users.
+//
+// It existed because there was no user->hotel grant model: the only link was
+// HotelClient.createdByUserId, a single nullable column that could not express a
+// second person, carry a role, or be revoked. Access was therefore
+// all-or-nothing, and "nothing" was the only safe setting.
+//
+// HotelMember + lib/hotel-access.ts now provide that model, so the two
+// session-based gates below delegate to it: a hotel user reaches a hotel only
+// via a grant on THAT hotel, with a role that decides what they can do.
+//
+// The PASSWORDLESS /h/<shareToken> dashboard stays retired — that is a product
+// decision, not a missing model. It exposed journeys, funnel data and ad spend
+// to anyone holding a URL, regardless of showAdSpendToHotel. Hotels receive
+// results either by logging in (now possible) or through the /share/<uuid>
+// report link, which is spend-gated server-side.
+function shareTokenDashboardRetired(): boolean {
   return true;
 }
 
@@ -51,7 +61,12 @@ export type HotelViewerHotel = {
 export type HotelViewer = { hotel: HotelViewerHotel; userId: string; isOwner: boolean; canEdit: boolean };
 
 export async function resolveHotelForViewer(hotelClientId: string): Promise<HotelViewer | null> {
-  if (hotelAccessNeutralized()) return null; // hotel logins disabled (access lockdown)
+  // Authorization is delegated to the single gate (lib/hotel-access.ts) so this
+  // loader cannot drift from it. hotelClientId is never trusted for tenancy
+  // there: the hotel row is resolved first and agencyId read off it, then the
+  // membership is looked up by the composite (hotelClientId, clerkId) key.
+  const access = await resolveHotelAccess(hotelClientId);
+  if (!access) return null;
   const { userId } = await auth();
   if (!userId) return null;
 
@@ -69,15 +84,16 @@ export async function resolveHotelForViewer(hotelClientId: string): Promise<Hote
   });
   if (!hotel || hotel.agency.suspendedAt) return null;
 
-  const isOwner = hotel.createdByUserId === userId;
-  let allowed = isOwner;
-  if (!allowed) {
-    const member = await prisma.agencyMember.findUnique({ where: { clerkId: userId }, select: { agencyId: true } });
-    allowed = member?.agencyId === hotel.agencyId;
-  }
-  if (!allowed) return null;
-
-  return { hotel: hotel as unknown as HotelViewerHotel, userId, isOwner, canEdit: isOwner };
+  // "Owner" now means the hotel-side owner ROLE, not "the row that happens to
+  // record who signed up". Edit rights follow the capability, so the rule lives
+  // in one table rather than being re-derived here.
+  const isOwner = access.principal.kind === "hotel" && access.principal.role === "hotel_owner";
+  return {
+    hotel: hotel as unknown as HotelViewerHotel,
+    userId,
+    isOwner,
+    canEdit: access.can("manageHotelSettings"),
+  };
 }
 
 export type HotelOwnerAccess = {
@@ -103,26 +119,17 @@ export type HotelOwnerAccess = {
  * the same agency) resolves to a row they don't own, so access is denied.
  */
 export async function requireHotelOwnerAccess(hotelClientId: string): Promise<HotelOwnerAccess | null> {
-  if (hotelAccessNeutralized()) return null; // hotel logins disabled (access lockdown)
-  const { userId } = await auth();
-  if (!userId) return null;
-
-  const hotel = await prisma.hotelClient.findFirst({
-    where: { id: hotelClientId, deletedAt: null },
-    select: { id: true, agencyId: true, createdByUserId: true, agency: { select: { suspendedAt: true } } },
-  });
-  if (!hotel || hotel.agency.suspendedAt) return null;
-
-  const isOwner = hotel.createdByUserId === userId;
-  if (isOwner) {
-    return { agencyId: hotel.agencyId, hotelId: hotel.id, isOwner: true, isAgencyMember: false };
-  }
-
-  const member = await prisma.agencyMember.findUnique({ where: { clerkId: userId }, select: { agencyId: true } });
-  if (member?.agencyId === hotel.agencyId) {
-    return { agencyId: hotel.agencyId, hotelId: hotel.id, isOwner: false, isAgencyMember: true };
-  }
-  return null;
+  // Delegates to the single gate. Returns the owning agencyId so the caller can
+  // run the existing agency-scoped loaders via runWithAgencyScope — hotel
+  // surfaces reuse the SAME tenancy layer rather than introducing a second one.
+  const access = await resolveHotelAccess(hotelClientId);
+  if (!access) return null;
+  return {
+    agencyId: access.agencyId,
+    hotelId: access.hotelClientId,
+    isOwner: access.principal.kind === "hotel" && access.principal.role === "hotel_owner",
+    isAgencyMember: access.principal.kind === "agency",
+  };
 }
 
 /**
@@ -146,7 +153,7 @@ export async function requireShareTokenAccess(
   token: string | null | undefined,
   hotelClientId: string,
 ): Promise<HotelOwnerAccess | null> {
-  if (hotelAccessNeutralized()) return null; // /h share dashboard disabled (access lockdown)
+  if (shareTokenDashboardRetired()) return null; // /h dashboard retired by product decision
   const t = (token ?? "").trim();
   // Cheap shape guard avoids a DB round-trip on obviously-bogus tokens.
   if (!isShareTokenShape(t)) return null;

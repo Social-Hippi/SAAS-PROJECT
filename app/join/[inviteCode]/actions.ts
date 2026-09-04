@@ -158,6 +158,23 @@ export async function completeHotelSignup(input: HotelSignupInput): Promise<Hote
     select: { id: true, siteId: true },
   });
 
+  // Grant the person who signed the hotel up OWNER access to it.
+  //
+  // Without this the self-signup flow created a HotelClient and a Clerk account
+  // and then granted nothing, so the person who had just entered all their own
+  // details could not open the hotel they had created. createdByUserId above is
+  // provenance — it records who signed up; HotelMember is the access.
+  await agencyScopedFor(agency.id, prisma.hotelMember).create({
+    data: {
+      agencyId: agency.id,
+      hotelClientId: hotel.id,
+      clerkId: targetUserId!,
+      email: ownerEmail,
+      name: contactName,
+      role: "hotel_owner",
+    },
+  });
+
   await agencyScopedFor(agency.id, prisma.hotelInvite).create({
     data: {
       agencyId: agency.id, inviteCode: input.inviteCode, hotelClientId: hotel.id,

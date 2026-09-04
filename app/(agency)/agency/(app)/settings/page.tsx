@@ -164,8 +164,9 @@ export default async function SettingsPage() {
           re-keying it.
         </p>
         <p className="mt-2 text-sm text-ink-tertiary">
-          Hotels do not get a login. You share results with them using the report link
-          on each hotel&apos;s page.
+          Whoever signs up becomes the hotel&apos;s owner and can see their own dashboard.
+          To give other people at the hotel access, use <strong>Hotel access</strong> on
+          that hotel&apos;s page.
         </p>
         <div className="mt-5 max-w-xl">
           <InviteCodeManager

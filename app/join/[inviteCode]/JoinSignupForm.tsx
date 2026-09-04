@@ -73,7 +73,7 @@ export function JoinSignupForm({
           <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-ink-tertiary">
             <li>{agencyName} installs a small tracking snippet on your website.</li>
             <li>They connect your ad and analytics accounts.</li>
-            <li>You receive a report link by email — no login needed.</li>
+            <li>Sign in any time to see your results.</li>
           </ol>
         </div>
         <p className="mt-5 text-xs text-ink-disabled">

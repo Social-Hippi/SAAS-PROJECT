@@ -5,37 +5,27 @@ import { readCode } from "./helpers/read-code";
 import { hotelWelcomeEmail, newHotelJoinedEmail } from "@/lib/hotel-invite";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HOTEL INVITE — the product must not promise a door it keeps locked.
+// HOTEL INVITE — the promise and the access must move together.
 //
-// Hotel logins are currently disabled at the authorization layer
-// (hotelAccessNeutralized in lib/hotel-auth.ts returns true unconditionally, so
-// resolveHotelForViewer / requireHotelOwnerAccess / requireShareTokenAccess all
-// deny), and proxy.ts redirects any non-agency_admin away from /hotel/*.
+// This file originally guarded the OPPOSITE invariant. Hotel logins were
+// disabled at the authorization layer while the invite flow stayed live and told
+// hotels their dashboard was ready: they signed up, clicked "Open my dashboard",
+// and landed on the marketing homepage with no message. The fix then was to
+// remove the promise.
 //
-// The invite flow around it stayed fully live and told the hotel otherwise:
+// The promise is back, because the gap it described is closed: signup now
+// creates a HotelMember grant (hotel_owner) alongside the HotelClient, and
+// resolveHotelAccess honours it. So the guard inverts — it now asserts that the
+// dashboard link is only made because the GRANT is created in the same flow.
 //
-//   • the welcome email was headed "Your hotel dashboard is ready" with an
-//     "Open my dashboard" button pointing at /hotel/<id>/dashboard,
-//   • the signup form redirected there on success,
-//   • the agency was emailed "They can already see their dashboard",
-//   • and Settings said hotels would be "automatically added" with no mention
-//     that they get no login.
-//
-// So a hotel signed up, was told their dashboard was ready, clicked, and landed
-// on the marketing homepage with no message.
-//
-// The invite itself is genuinely useful — it captures the hotel's own contact,
-// room count, channel manager and OTA rate, which the agency would otherwise
-// re-key — so the feature is kept and only the false promise removed.
-//
-// These tests fail if a dashboard link, redirect, or "you can log in" claim is
-// reintroduced before a hotel-facing product actually exists.
+// If the grant is ever removed while the link stays, these fail. That pairing is
+// the whole point: a promise and the access behind it must ship together.
 // ─────────────────────────────────────────────────────────────────────────────
-
 
 const JOIN_FORM = readCode("app/join/[inviteCode]/JoinSignupForm.tsx");
 const SETTINGS_PAGE = readCode("app/(agency)/agency/(app)/settings/page.tsx");
 const HOTEL_AUTH = readCode("lib/hotel-auth.ts");
+const JOIN_ACTIONS = readCode("app/join/[inviteCode]/actions.ts");
 
 const welcome = hotelWelcomeEmail({
   agencyName: "Social Hippi",
@@ -45,36 +35,37 @@ const welcome = hotelWelcomeEmail({
   agencyContact: { email: "hello@socialhippi.com", mobile: "+919876543210" },
 });
 
-// ── 0. The precondition these tests exist for ───────────────────────────────
+// ── 0. The access this promise depends on ──────────────────────────────────
 
-describe("0. hotel access is in fact disabled", () => {
-  test("the gate still denies unconditionally", () => {
-    // If this ever changes, the assertions below should be revisited — a real
-    // hotel product MAY legitimately link to a dashboard again.
-    expect(HOTEL_AUTH).toMatch(/function hotelAccessNeutralized\(\)[\s\S]{0,80}return true/);
+describe("0. hotel access genuinely exists", () => {
+  test("the blanket lockdown is gone", () => {
+    expect(HOTEL_AUTH).not.toContain("hotelAccessNeutralized");
+  });
+
+  test("self-signup creates the GRANT, not just the hotel record", () => {
+    // Without this the email below would promise a dashboard the person cannot
+    // open — the exact dead end this file was created to prevent.
+    expect(JOIN_ACTIONS).toContain("prisma.hotelMember");
+    expect(JOIN_ACTIONS).toMatch(/role:\s*"hotel_owner"/);
+  });
+
+  test("the grant is written under the inviting agency's scope", () => {
+    expect(JOIN_ACTIONS).toMatch(/agencyScopedFor\(agency\.id, prisma\.hotelMember\)/);
   });
 });
 
 // ── 1. The welcome email promises only what the product delivers ────────────
 
 describe("1. hotel welcome email", () => {
-  test("contains NO link to the hotel dashboard route", () => {
-    expect(welcome.html).not.toContain("/hotel/hotel_abc123/dashboard");
-    expect(welcome.html).not.toMatch(/\/hotel\/[^"'\s]+\/dashboard/);
+  test("links to the dashboard the signup just granted access to", () => {
+    expect(welcome.html).toContain("/hotel/hotel_abc123/dashboard");
   });
 
-  test("has no 'open my dashboard' call to action", () => {
-    expect(welcome.html.toLowerCase()).not.toContain("open my dashboard");
-  });
-
-  test("does not claim a dashboard is ready, or invite them to log in", () => {
-    const text = welcome.html.toLowerCase();
-    expect(text).not.toContain("dashboard is ready");
-    expect(text).not.toContain("log in");
+  test("the call to action is present and unambiguous", () => {
+    expect(welcome.html.toLowerCase()).toContain("open my dashboard");
   });
 
   test("still delivers the one thing the hotel must act on — the snippet", () => {
-    // Removing the false promise must not remove the real instruction.
     expect(welcome.html).toContain("site_xyz789");
     expect(welcome.html).toContain("/t.js?id=");
   });
@@ -84,8 +75,12 @@ describe("1. hotel welcome email", () => {
     expect(welcome.html).toContain("hello@socialhippi.com");
   });
 
-  test("sets an accurate subject", () => {
-    expect(welcome.subject).toBe("Coffeeberry Hills is set up on HotelTrack");
+  test("the link points at THIS hotel, not a generic route", () => {
+    // A generic /hotel link would work for a single-property owner and silently
+    // land a multi-property owner on a picker instead of the hotel they joined.
+    const links = welcome.html.match(/\/hotel\/[^"'\s]+\/dashboard/g) ?? [];
+    expect(links.length).toBeGreaterThan(0);
+    for (const l of links) expect(l).toContain("hotel_abc123");
   });
 });
 
@@ -99,12 +94,8 @@ describe("2. agency notification email", () => {
     hotelClientId: "hotel_abc123",
   });
 
-  test("does not tell the agency the hotel can already see a dashboard", () => {
-    expect(joined.html.toLowerCase()).not.toContain("already see their dashboard");
-  });
-
-  test("points the agency at the action that actually surfaces results", () => {
-    expect(joined.html).toMatch(/report link/i);
+  test("tells the agency the hotel has owner access — which is now true", () => {
+    expect(joined.html).toMatch(/owner access/i);
   });
 
   test("still links the agency to the hotel's integrations page", () => {
@@ -112,37 +103,34 @@ describe("2. agency notification email", () => {
   });
 });
 
-// ── 3. Signup resolves on-page, never into the dead route ───────────────────
+// ── 3. Signup still resolves on-page ───────────────────────────────────────
 
-describe("3. the signup form does not redirect into a 404", () => {
-  test("no navigation to /hotel/<id>/dashboard remains", () => {
-    expect(JOIN_FORM).not.toMatch(/\/hotel\/\$\{[^}]*\}\/dashboard/);
+describe("3. the signup form confirms in place", () => {
+  test("it does not redirect straight into the dashboard", () => {
+    // The account is created server-side and has no browser session yet, so an
+    // immediate redirect would bounce through sign-in. The confirmation states
+    // what happened; the emailed link is the way in.
     expect(JOIN_FORM).not.toContain("router.push");
-  });
-
-  test("success renders an in-page confirmation instead", () => {
     expect(JOIN_FORM).toMatch(/setDone\(true\)/);
-    expect(JOIN_FORM).toMatch(/if \(done\)/);
   });
 
-  test("the confirmation explains what happens next, without promising a login", () => {
-    expect(JOIN_FORM).toContain("What happens next");
-    expect(JOIN_FORM).toMatch(/no login needed/i);
+  test("the confirmation tells them they can sign in", () => {
+    expect(JOIN_FORM).toMatch(/Sign in any time/i);
   });
 });
 
-// ── 4. Settings tells the agency the truth before they send the code ────────
+// ── 4. Settings describes what the code actually does ──────────────────────
 
 describe("4. settings invite copy", () => {
-  test("states plainly that hotels do not get a login", () => {
-    expect(SETTINGS_PAGE).toMatch(/Hotels do not get a login/);
+  test("says the signer-up becomes the owner", () => {
+    expect(SETTINGS_PAGE).toMatch(/becomes the hotel&apos;s owner/);
   });
 
-  test("describes the real benefit — the hotel enters its own details", () => {
-    expect(SETTINGS_PAGE).toMatch(/enter their own details/);
+  test("points at Hotel access for additional people", () => {
+    expect(SETTINGS_PAGE).toMatch(/Hotel access/);
   });
 
-  test("no longer implies the hotel gains access by signing up", () => {
-    expect(SETTINGS_PAGE).not.toMatch(/automatically added to your agency/);
+  test("no longer claims hotels get no login", () => {
+    expect(SETTINGS_PAGE).not.toMatch(/Hotels do not get a login/);
   });
 });

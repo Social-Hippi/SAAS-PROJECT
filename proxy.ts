@@ -34,6 +34,13 @@ const isPublicRoute = createRouteMatcher([
   // Public hotel self-signup page (/join/<inviteCode>). No login to view; the
   // route resolves the agency from the code and the signup uses Clerk directly.
   "/join(.*)",
+  // Per-person hotel invitation acceptance (/hotel-invite/<token>). Public so
+  // the page itself can send a signed-out recipient to Clerk and back with the
+  // token intact; the single-use token is the credential, verified in-route
+  // against its stored SHA-256. Listing it here also keeps it OUT of the
+  // /hotel(.*) matcher below, which would otherwise require a session before
+  // the invitation could ever be accepted.
+  "/hotel-invite(.*)",
   // The tracking endpoints are called cross-origin by the snippet on hotel
   // websites with no auth — they must stay public (scoped by the public siteId).
   "/api/track(.*)",
@@ -176,10 +183,18 @@ export default clerkMiddleware(async (auth, req) => {
   }
 
   if (isHotelRoute(req)) {
-    // ACCESS LOCKDOWN: hotels no longer log in. The /hotel owner dashboard is
-    // retired — the route itself now 404s via lib/hotel-auth. Only agency staff
-    // may resolve here at all; any other role (incl. a legacy hotel_client) → home.
-    if (role !== "agency_admin") return NextResponse.redirect(home);
+    // Hotel users log in again, so this no longer gates on the platform role.
+    //
+    // It cannot: a hotel person's authority comes from a HotelMember grant on a
+    // SPECIFIC hotel, and middleware has no database access to check one. Any
+    // role check here would be either too permissive (wrong hotel) or too strict
+    // (a legitimate member with an unexpected role claim). The real gate is
+    // resolveHotelAccess, called server-side by every /hotel page and
+    // /api/hotel route, which resolves the hotel row and then requires a grant
+    // on that exact hotel — so an unauthorized user gets a 404, not a redirect.
+    //
+    // Middleware's job here is only "is this request authenticated at all",
+    // which the !userId check above already did.
     return NextResponse.next();
   }
 

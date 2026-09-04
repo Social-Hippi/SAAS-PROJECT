@@ -1293,6 +1293,12 @@ export default async function HotelDashboardPage({
               <span className="mt-1 text-xs text-ink-disabled">vs previous period</span>
             </div>
             <Link
+              href={`/agency/hotel/${hotel.id}/team`}
+              className="rounded-button border border-line-strong bg-elevated px-3 py-2 text-sm font-medium text-ink-secondary hover:bg-line-strong"
+            >
+              Hotel access
+            </Link>
+            <Link
               href={`/agency/hotel/${hotel.id}/integrations`}
               className="rounded-button border border-line-strong bg-elevated px-3 py-2 text-sm font-medium text-ink-secondary hover:bg-line-strong"
             >
