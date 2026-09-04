@@ -30,13 +30,33 @@ export function OwnerSummaryCard({
   hotelId,
   apiBase = "/api/agency/hotels",
   shareToken,
+  pageRangeKey,
 }: {
   hotelId: string;
   apiBase?: string;
+  /**
+   * The dashboard's selected range key ("7" | "30" | "90" | "custom").
+   *
+   * This card cannot simply follow an arbitrary range: the summary is generated
+   * from a FIXED set of periods (1d/7d/30d — see the summary route), because the
+   * narrative wording depends on the window. So instead of silently showing a
+   * different period from the selector above it — which is exactly what it used
+   * to do, defaulting to 7 days while the page said 30 — it:
+   *
+   *   • starts on the page's period when that period is one it supports, and
+   *   • always states which period it is showing, so any remaining mismatch is
+   *     visible rather than silent.
+   */
+  pageRangeKey?: string;
   /** When set, the request is a public share-link read (sends the token header). */
   shareToken?: string;
 }) {
-  const [period, setPeriod] = useState<Period>("7d");
+  // Start aligned with the page selector where the summary supports that period.
+  // "90" and "custom" have no summary equivalent, so those fall back to 30 days
+  // — and the period label below says so.
+  const [period, setPeriod] = useState<Period>(
+    pageRangeKey === "7" ? "7d" : pageRangeKey === "30" || pageRangeKey === "90" || pageRangeKey === "custom" ? "30d" : "7d",
+  );
   const [data, setData] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
   const [shown, setShown] = useState(false);
@@ -65,7 +85,17 @@ export function OwnerSummaryCard({
   return (
     <section className="rounded-card border border-brand/30 bg-brand/5 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-brand">Performance summary</p>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wide text-brand">Performance summary</p>
+          {/* State the window explicitly. This card cannot follow an arbitrary
+              page range (the summary is generated from a fixed set of periods),
+              so it must never leave the reader to assume it matches the selector
+              above — which is precisely how it showed 7 days while the page said
+              30, with nothing on screen to reveal the difference. */}
+          <p className="mt-0.5 truncate text-xs text-ink-tertiary">
+            {TABS.find((t) => t.key === period)?.label ?? "Last 7 days"}
+          </p>
+        </div>
         <div className="inline-flex overflow-hidden rounded-lg border border-line-strong bg-page/60">
           {TABS.map((t) => (
             <button

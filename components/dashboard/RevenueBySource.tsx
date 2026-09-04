@@ -100,12 +100,22 @@ export function RevenueBySource({
   hotelId,
   apiBase = "/api/agency/hotels",
   shareToken,
+  from,
+  to,
 }: {
   hotelId: string;
   apiBase?: string;
+  /**
+   * The page's selected range (YYYY-MM-DD). When supplied this panel FOLLOWS it
+   * and hides its own toggle, so the dashboard has one date context. Omitted →
+   * the panel keeps its own control (standalone use).
+   */
+  from?: string;
+  to?: string;
   /** When set, the request is a public share-link read (sends the token header). */
   shareToken?: string;
 }) {
+  const controlled = Boolean(from && to);
   const [granularity, setGranularity] = useState<Granularity>("source");
   const [rangeKey, setRangeKey] = useState("30");
   const [selectedTypes, setSelectedTypes] = useState<Set<SourceType>>(new Set());
@@ -115,10 +125,11 @@ export function RevenueBySource({
   const abortRef = useRef<AbortController | null>(null);
 
   const { startDate, endDate } = useMemo(() => {
+    if (from && to) return { startDate: from, endDate: to };
     const end = new Date();
     const start = new Date(end.getTime() - Number(rangeKey) * 86_400_000);
     return { startDate: isoDay(start), endDate: isoDay(end) };
-  }, [rangeKey]);
+  }, [rangeKey, from, to]);
 
   const load = useCallback(async () => {
     abortRef.current?.abort();
@@ -210,21 +221,27 @@ export function RevenueBySource({
             </button>
           ))}
         </div>
-        {/* Date range */}
-        <div className="inline-flex overflow-hidden rounded-lg border border-line-strong">
-          {RANGES.map((r) => (
-            <button
-              key={r.key}
-              type="button"
-              onClick={() => setRangeKey(r.key)}
-              className={`px-3 py-1.5 text-sm font-medium ${
-                rangeKey === r.key ? "bg-brand text-white" : "bg-page text-ink-secondary hover:bg-elevated"
-              }`}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
+        {/* Date range — hidden when the page selector is authoritative. */}
+        {controlled ? (
+          <p className="text-xs text-ink-tertiary">
+            {startDate} → {endDate}
+          </p>
+        ) : (
+          <div className="inline-flex overflow-hidden rounded-lg border border-line-strong">
+            {RANGES.map((r) => (
+              <button
+                key={r.key}
+                type="button"
+                onClick={() => setRangeKey(r.key)}
+                className={`px-3 py-1.5 text-sm font-medium ${
+                  rangeKey === r.key ? "bg-brand text-white" : "bg-page text-ink-secondary hover:bg-elevated"
+                }`}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Source-type chips */}

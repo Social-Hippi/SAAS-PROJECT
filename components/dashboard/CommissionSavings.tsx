@@ -32,21 +32,34 @@ export function CommissionSavings({
   hotelId,
   apiBase = "/api/agency/hotels",
   shareToken,
+  from,
+  to,
 }: {
   hotelId: string;
   apiBase?: string;
+  /**
+   * The page's selected range (YYYY-MM-DD). When supplied this panel FOLLOWS it
+   * and hides its own toggle — the dashboard has one date context, and a panel
+   * silently showing a different window than the selector above it is how a
+   * reader ends up comparing two periods without knowing.
+   * Omitted (e.g. a standalone embed) → the panel keeps its own control.
+   */
+  from?: string;
+  to?: string;
   /** When set, the request is a public share-link read (sends the token header). */
   shareToken?: string;
 }) {
+  const controlled = Boolean(from && to);
   const [rangeKey, setRangeKey] = useState("30");
   const [data, setData] = useState<Data | null>(null);
   const [loading, setLoading] = useState(true);
   const abort = useRef<AbortController | null>(null);
 
   const { startDate, endDate } = useMemo(() => {
+    if (from && to) return { startDate: from, endDate: to };
     const end = new Date();
     return { startDate: isoDay(new Date(end.getTime() - Number(rangeKey) * 86_400_000)), endDate: isoDay(end) };
-  }, [rangeKey]);
+  }, [rangeKey, from, to]);
 
   useEffect(() => {
     abort.current?.abort();
@@ -75,12 +88,20 @@ export function CommissionSavings({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="inline-flex overflow-hidden rounded-lg border border-line-strong">
-          {RANGES.map((r) => (
-            <button key={r.key} type="button" onClick={() => setRangeKey(r.key)}
-              className={`px-3 py-1.5 text-sm font-medium ${rangeKey === r.key ? "bg-brand text-white" : "bg-page text-ink-secondary hover:bg-elevated"}`}>{r.label}</button>
-          ))}
-        </div>
+        {controlled ? (
+          // Following the dashboard's range selector — no competing control, and
+          // the window is stated so the number is never undated.
+          <p className="text-xs text-ink-tertiary">
+            {startDate} → {endDate}
+          </p>
+        ) : (
+          <div className="inline-flex overflow-hidden rounded-lg border border-line-strong">
+            {RANGES.map((r) => (
+              <button key={r.key} type="button" onClick={() => setRangeKey(r.key)}
+                className={`px-3 py-1.5 text-sm font-medium ${rangeKey === r.key ? "bg-brand text-white" : "bg-page text-ink-secondary hover:bg-elevated"}`}>{r.label}</button>
+            ))}
+          </div>
+        )}
         <span className="group relative text-ink-tertiary" tabIndex={0} aria-label="How this is calculated">
           ⓘ
           <span className="pointer-events-none absolute right-0 top-6 z-10 hidden w-72 rounded-lg border border-line bg-elevated p-3 text-xs text-ink-secondary shadow-float group-hover:block group-focus:block">

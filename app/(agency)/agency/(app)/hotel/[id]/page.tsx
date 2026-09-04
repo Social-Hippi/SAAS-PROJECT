@@ -1326,7 +1326,7 @@ export default async function HotelDashboardPage({
 
       {/* Owner Summary — glanceable plain-English read of recent performance,
           at the very top of the dashboard (above all sections). */}
-      <OwnerSummaryCard hotelId={hotel.id} />
+      <OwnerSummaryCard hotelId={hotel.id} pageRangeKey={range.key} />
 
       {/* Performance Overview (Tier A) — 10 owner-overview metrics over the same
           date range as the page. Read-only on existing data; sits between the
@@ -1702,7 +1702,7 @@ export default async function HotelDashboardPage({
         subtitle="How much your direct (snippet-tracked) bookings saved vs paying OTA commission. Set the rate on the Integrations page."
       >
         <div className="p-4">
-          <CommissionSavings hotelId={hotel.id} />
+          <CommissionSavings hotelId={hotel.id} from={range.fromInput} to={range.toInput} />
         </div>
       </SectionCard>
 
@@ -1713,7 +1713,7 @@ export default async function HotelDashboardPage({
         subtitle="Booking revenue and counts per marketing source, with source / medium / campaign drill-down."
       >
         <div className="p-4">
-          <RevenueBySource hotelId={hotel.id} />
+          <RevenueBySource hotelId={hotel.id} from={range.fromInput} to={range.toInput} />
         </div>
       </SectionCard>
 

@@ -198,3 +198,45 @@ describe("5. the agency dashboard does not show two bare 'ROAS' cards", () => {
     expect(DASHBOARD).toContain("Tracked page views · last 30 days");
   });
 });
+
+// ── 6. One date context per dashboard ───────────────────────────────────────
+
+describe("6. the hotel dashboard has a single date context", () => {
+  const HOTEL_PAGE = readCode("app/(agency)/agency/(app)/hotel/[id]/page.tsx");
+  const SAVINGS = readCode("components/dashboard/CommissionSavings.tsx");
+  const RBS = readCode("components/dashboard/RevenueBySource.tsx");
+  const SUMMARY = readCode("components/dashboard/OwnerSummaryCard.tsx");
+
+  test("the page selector is propagated to the panels that used to ignore it", () => {
+    // CommissionSavings and RevenueBySource each owned a 7/30/90 toggle
+    // defaulting to 30, so setting the page to 90 days left them on 30 with
+    // nothing on screen revealing it.
+    expect(HOTEL_PAGE).toMatch(/<CommissionSavings[^>]*from=\{range\.fromInput\}[^>]*to=\{range\.toInput\}/);
+    expect(HOTEL_PAGE).toMatch(/<RevenueBySource[^>]*from=\{range\.fromInput\}[^>]*to=\{range\.toInput\}/);
+  });
+
+  test("a controlled panel uses the supplied range, not its own", () => {
+    for (const [name, src] of [["CommissionSavings", SAVINGS], ["RevenueBySource", RBS]] as const) {
+      expect(src, name).toMatch(/if \(from && to\) return \{ startDate: from, endDate: to \}/);
+      expect(src, name).toContain("const controlled = Boolean(from && to);");
+    }
+  });
+
+  test("a controlled panel hides its competing toggle and states the window", () => {
+    for (const [name, src] of [["CommissionSavings", SAVINGS], ["RevenueBySource", RBS]] as const) {
+      expect(src, name).toMatch(/controlled \?[\s\S]{0,300}\{startDate\} → \{endDate\}/);
+    }
+  });
+
+  test("OwnerSummaryCard starts on the page's period where it can", () => {
+    // Its API supports a FIXED set of periods, so it cannot follow an arbitrary
+    // range — but it must not silently default to 7 days while the page says 30.
+    expect(HOTEL_PAGE).toMatch(/<OwnerSummaryCard[^>]*pageRangeKey=\{range\.key\}/);
+    expect(SUMMARY).toMatch(/pageRangeKey === "7" \? "7d"/);
+  });
+
+  test("OwnerSummaryCard always states which period it is showing", () => {
+    // The remaining mismatch (90 / custom -> 30d) is then visible, not silent.
+    expect(SUMMARY).toMatch(/TABS\.find\(\(t\) => t\.key === period\)\?\.label/);
+  });
+});
