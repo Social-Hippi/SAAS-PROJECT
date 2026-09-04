@@ -31,6 +31,30 @@ enum MemberRole {
   analyst
 }
 
+/// A hotel-side user's role WITHIN one hotel. Deliberately separate from
+/// MemberRole (which is agency-side): an agency analyst and a hotel manager are
+/// different principals with different data, not two values of one scale.
+///
+///   hotel_owner     — full read of their hotel + can manage their hotel's team
+///   hotel_manager   — full read of their hotel; no team management
+///   hotel_marketing — marketing surfaces only (channels, campaigns, attribution)
+///
+/// Lowercase to match MemberRole's existing convention in this schema.
+enum HotelRole {
+  hotel_owner
+  hotel_manager
+  hotel_marketing
+}
+
+/// Lifecycle of a per-person hotel invitation. Closed set → enum, uppercase to
+/// match the other status enums (BookingStatus, GA4Status, GoogleAdsStatus).
+enum HotelInviteState {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
 enum ConversionMethod {
   url_change
   same_page
@@ -173,6 +197,8 @@ model Agency {
   bookings                   Booking[]
   bookingStatusEvents        BookingStatusEvent[]
   bookingJourneyMatches      BookingJourneyMatch[]
+  hotelMembers               HotelMember[]
+  hotelUserInvites           HotelUserInvite[]
 }
 
 model AgencyMember {
@@ -316,9 +342,102 @@ model HotelClient {
   unattributedMentions       UnattributedMention[]
   bookingConnection          BookingConnection?
   bookings                   Booking[]
+  members                    HotelMember[]
+  userInvites                HotelUserInvite[]
 
   @@index([agencyId])
   @@index([createdByUserId]) // hotel-owner → their hotel lookup
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOTEL-SIDE USERS.
+//
+// Until now the ONLY user↔hotel link in the schema was HotelClient.createdByUserId
+// — a single nullable column recording who self-signed-up. That is a provenance
+// note, not an access model: it cannot express a second person at the same hotel,
+// cannot carry a role, and cannot be revoked. So hotel access was necessarily
+// all-or-nothing, which is why it was switched off wholesale in lib/hotel-auth.ts.
+//
+// HotelMember is the grant. It deliberately MIRRORS AgencyMember (clerkId → a
+// membership row carrying a role) so there is ONE tenancy architecture, not two:
+// every row still carries agencyId, is indexed on it, and is reachable through
+// the existing agencyScoped* helpers. The hotel dimension is an ADDITIONAL
+// filter, never a replacement for the agency one.
+//
+// One difference from AgencyMember, and it is intentional: clerkId is NOT
+// globally unique here. AgencyMember.clerkId is @unique because a person belongs
+// to exactly one agency. A hotel person may legitimately hold several properties
+// (a group owner with three hotels), so uniqueness is per (hotel, user).
+// ─────────────────────────────────────────────────────────────────────────────
+
+model HotelMember {
+  id                      String    @id @default(cuid())
+  /// Denormalised from HotelClient at write time, exactly like every other
+  /// multi-tenant table, so tenant filtering stays a direct index hit and the
+  /// existing agencyScoped() wrapper works unchanged.
+  agencyId                String
+  hotelClientId           String
+  /// The Clerk user this grant belongs to.
+  clerkId                 String
+  /// Captured at accept time for display + audit. Not an identity — clerkId is.
+  email                   String
+  name                    String
+  role                    HotelRole
+  /// Which agency member issued the grant (audit trail). SetNull-free by design:
+  /// it is a plain id, so removing a member never erases who granted access.
+  invitedByAgencyMemberId String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  /// One membership per (hotel, user) — re-accepting an invite updates the role
+  /// rather than stacking a second grant.
+  @@unique([hotelClientId, clerkId])
+  @@index([agencyId])
+  @@index([hotelClientId])
+  /// "Which hotels does this signed-in user belong to?" — the hot path for every
+  /// hotel-side request.
+  @@index([clerkId])
+}
+
+/// A per-person invitation to ONE hotel, issued by an agency admin.
+///
+/// Distinct from HotelInvite above, which is the agency-wide self-signup CODE a
+/// hotel uses to create its own HotelClient record. That one onboards a
+/// PROPERTY; this one grants a PERSON access to a property that already exists.
+///
+/// The emailed token is never stored — only its SHA-256, the same discipline the
+/// rest of the codebase applies to share passwords (scrypt), visitor PII and
+/// share-access IPs. A leaked database therefore cannot be used to accept an
+/// outstanding invitation.
+model HotelUserInvite {
+  id                      String           @id @default(cuid())
+  agencyId                String
+  hotelClientId           String
+  /// Lowercased at write time so the accept path can compare deterministically.
+  email                   String
+  role                    HotelRole
+  /// SHA-256 of the token that went out in the email. Unique so a token maps to
+  /// at most one invitation, and so re-issuing produces a genuinely new row.
+  tokenHash               String           @unique
+  status                  HotelInviteState @default(PENDING)
+  expiresAt               DateTime
+  invitedByAgencyMemberId String?
+  acceptedByClerkId       String?
+  acceptedAt              DateTime?
+  revokedAt               DateTime?
+  createdAt               DateTime         @default(now())
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId])
+  /// "Outstanding invitations for this hotel" — the agency-side management view.
+  @@index([hotelClientId, status])
+  /// "Has this person already been invited here?" — the duplicate-invite guard.
+  @@index([hotelClientId, email])
 }
 
 // Audit trail for hotel self-signups. One row per started signup; status moves
