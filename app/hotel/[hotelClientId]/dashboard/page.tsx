@@ -23,6 +23,10 @@ import { HotelDetailsForm } from "./HotelDetailsForm";
 //   • Ad spend is ALWAYS shown to the signed-in owner for their own hotel.
 //   • Only the owner's own contact details are editable. The OTA commission rate
 //     is agency-managed (read-only here).
+//   • What the viewer sees depends on their ROLE, not just on reaching the page:
+//     viewGuestDetails decides whether the visitor-journey rows are fetched at
+//     all, so a marketing user gets the performance picture without individual
+//     visitors. The predicate is the same one the guards use.
 
 export const dynamic = "force-dynamic";
 const HOTEL_API = "/api/hotel";
@@ -82,6 +86,7 @@ export default async function HotelOwnerDashboard({
       channelParam={one(sp.channel)}
       showRestrictedNotice={one(sp.notice) === "agency-restricted"}
       channelBackLabel="← My Dashboard"
+      canViewGuestDetails={viewer.can("viewGuestDetails")}
       editSlot={editSlot}
     />
   );

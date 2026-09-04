@@ -28,6 +28,9 @@ const HOTEL_LAYOUT = readCode("app/hotel/layout.tsx");
 const HOTEL_INDEX = readCode("app/hotel/page.tsx");
 const ACCEPT_PAGE = readCode("app/hotel-invite/[token]/page.tsx");
 const HOTEL_PAGE = readCode("app/(agency)/agency/(app)/hotel/[id]/page.tsx");
+const DASH_BODY = readCode("components/dashboard/HotelDashboardBody.tsx");
+const HOTEL_DASH = readCode("app/hotel/[hotelClientId]/dashboard/page.tsx");
+const CAPABILITIES = readCode("lib/hotel-capabilities.ts");
 
 // ── 1. The lockdown is lifted only where a grant model now exists ───────────
 
@@ -179,5 +182,92 @@ describe("5. invitation acceptance", () => {
 
   test("the page is not indexable", () => {
     expect(ACCEPT_PAGE).toMatch(/robots:\s*\{\s*index:\s*false/);
+  });
+});
+
+// ── 6. Role differentiation actually reaches the dashboard ─────────────────
+//
+// A capability that exists in the model and is enforced nowhere is worse than no
+// capability: the invite form tells an agency admin what each level can see, so
+// an unenforced one turns that screen into a false statement.
+
+describe("6. viewGuestDetails is enforced, not just declared", () => {
+  test("the dashboard asks the shared predicate for it", () => {
+    expect(HOTEL_DASH).toContain('canViewGuestDetails={viewer.can("viewGuestDetails")}');
+  });
+
+  test("the predicate travels with the viewer rather than being re-derived", () => {
+    // Re-deriving it from the role at each call site is how the agency side
+    // ended up with twelve scattered role checks and a nav unaware of all of them.
+    expect(HOTEL_AUTH).toContain("can: access.can");
+    expect(HOTEL_DASH).not.toMatch(/role === "hotel_marketing"/);
+  });
+
+  test("the prop is required, so a caller cannot omit it into 'visible'", () => {
+    expect(DASH_BODY).toMatch(/canViewGuestDetails: boolean;/);
+    expect(DASH_BODY).not.toMatch(/canViewGuestDetails\?: boolean/);
+    expect(DASH_BODY).not.toMatch(/canViewGuestDetails = true/);
+  });
+
+  test("visitor rows are not FETCHED without the capability", () => {
+    // Rendering them conditionally would still ship them in the HTML payload.
+    const loader = DASH_BODY.slice(
+      DASH_BODY.indexOf("async function loadJourneyPreview"),
+      DASH_BODY.indexOf("export type HotelDashboardBodyProps"),
+    );
+    expect(loader).toContain("includeVisitorRows");
+    expect(loader).toMatch(/includeVisitorRows\s*\?[\s\S]{0,400}:\s*\[\]/);
+  });
+
+  test("the funnel still renders — it is aggregate, not guest-level", () => {
+    // Withholding it too would leave a marketing user unable to do their job,
+    // which is friction rather than privacy. So the groupBy that feeds the
+    // funnel must be unconditional: the gate applies to the findMany after it.
+    const groupByAt = DASH_BODY.indexOf("groupBy");
+    const findManyAt = DASH_BODY.indexOf("includeVisitorRows", groupByAt);
+    expect(groupByAt).toBeGreaterThan(-1);
+    expect(findManyAt).toBeGreaterThan(groupByAt);
+    expect(DASH_BODY.slice(groupByAt, findManyAt)).not.toContain("includeVisitorRows");
+  });
+
+  test("a withheld list is never dressed up as an empty one", () => {
+    // "No visitor journeys yet" would be false for someone whose role excludes
+    // them — there may be thousands.
+    const at = DASH_BODY.indexOf("!canViewGuestDetails ?");
+    expect(at).toBeGreaterThan(-1);
+    // Bounded by the NEXT branch, so the genuine empty state below is not swept in.
+    const end = DASH_BODY.indexOf("journey.recentSessions.length === 0", at);
+    expect(end).toBeGreaterThan(at);
+    const branch = DASH_BODY.slice(at, end);
+    expect(branch).not.toContain("No visitor journeys yet");
+    expect(branch).toMatch(/aren&apos;t part of your access level/);
+  });
+
+  test("a share token carries no capability at all", () => {
+    const shareGate = HOTEL_AUTH.slice(HOTEL_AUTH.indexOf("export async function requireShareTokenAccess"));
+    expect(shareGate).toMatch(/can: \(\) => false/);
+  });
+});
+
+// ── 7. What the agency admin is told matches what they get ─────────────────
+
+describe("7. role descriptions are not promises", () => {
+  test("Marketing is not sold an integrations surface that does not exist", () => {
+    expect(CAPABILITIES).toMatch(/hotel_marketing:\s*\n?\s*"[^"]*"/);
+    const desc = CAPABILITIES.slice(CAPABILITIES.indexOf("HOTEL_ROLE_DESCRIPTION"));
+    const marketing = desc.slice(desc.indexOf("hotel_marketing:"), desc.indexOf("};"));
+    expect(marketing.toLowerCase()).not.toContain("integrations");
+  });
+
+  test("Manager is not sold a bookings list that does not exist hotel-side", () => {
+    const desc = CAPABILITIES.slice(CAPABILITIES.indexOf("HOTEL_ROLE_DESCRIPTION"));
+    const manager = desc.slice(desc.indexOf("hotel_manager:"), desc.indexOf("hotel_marketing:"));
+    expect(manager.toLowerCase()).not.toContain("booking");
+  });
+
+  test("the difference between the levels is stated, not implied", () => {
+    const desc = CAPABILITIES.slice(CAPABILITIES.indexOf("HOTEL_ROLE_DESCRIPTION"), CAPABILITIES.indexOf("HotelCapability"));
+    expect(desc).toMatch(/No individual visitor journeys/);
+    expect(desc).toMatch(/inviting other people/);
   });
 });

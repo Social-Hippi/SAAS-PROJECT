@@ -16,10 +16,13 @@
 // WHAT THE ROLES ACTUALLY DIFFER ON — and it is deliberately narrow, because
 // differentiation that is not justified is just friction:
 //
-//   • GUEST PII       — the booking list carries guest names. An owner and a
-//                       manager run the property and see it; a marketing user
-//                       does not need it to evaluate a campaign.
+//   • GUEST PII       — visitor-level and guest-level rows. An owner and a
+//                       manager run the property and see them; a marketing user
+//                       does not need them to evaluate a campaign, and gets the
+//                       same visitors as an aggregate funnel instead.
 //   • CONFIGURATION   — who may connect an ad account or change hotel settings.
+//                       (manageIntegrations is carried but has no hotel-side
+//                       surface yet; integrations are still agency-operated.)
 //   • TEAM            — who may grant another person access to this hotel.
 //
 // Everything else (performance, revenue, channels, campaigns, attribution,
@@ -44,17 +47,28 @@ export const HOTEL_ROLE_LABEL: Record<HotelRole, string> = {
   hotel_marketing: "Marketing",
 };
 
+// Shown to the agency admin at the moment they choose an access level, so these
+// must describe what the person will ACTUALLY be able to do today — not what the
+// capability set anticipates. manageIntegrations, for instance, has no hotel-side
+// surface yet, so Marketing's description does not claim one.
 export const HOTEL_ROLE_DESCRIPTION: Record<HotelRole, string> = {
-  hotel_owner: "Full access, and can invite other people to this hotel.",
-  hotel_manager: "Full access to performance, revenue and bookings.",
-  hotel_marketing: "Marketing performance and integrations. No guest details.",
+  hotel_owner:
+    "Everything below, plus editing hotel details and inviting other people to this hotel.",
+  hotel_manager:
+    "Performance, revenue and individual visitor journeys.",
+  hotel_marketing:
+    "Performance and revenue, so they can judge campaigns. No individual visitor journeys.",
 };
 
 /** Everything a principal can be permitted to do with ONE hotel. */
 export type HotelCapability =
   /** Overview, channels, campaigns, attribution, revenue and ROAS. */
   | "viewPerformance"
-  /** The booking LIST, which carries guest names (PII). */
+  /**
+   * Visitor- and guest-level rows rather than aggregates: today the recent
+   * visitor-journey list on the hotel dashboard, and the booking list carrying
+   * guest names once that reaches the hotel side.
+   */
   | "viewGuestDetails"
   /** Whether tracking/integrations are healthy — everyone needs to trust data. */
   | "viewDataHealth"

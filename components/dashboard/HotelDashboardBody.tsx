@@ -43,7 +43,13 @@ function relTime(d: Date | null): string {
 
 // Compact funnel + last-5 visitor journeys, server-rendered, scoped to this hotel
 // via runWithAgencyScope. (Mirrors the agency dashboard's preview.)
-async function loadJourneyPreview(agencyId: string, hotelId: string, since: Date, until: Date) {
+async function loadJourneyPreview(
+  agencyId: string,
+  hotelId: string,
+  since: Date,
+  until: Date,
+  includeVisitorRows: boolean,
+) {
   return runWithAgencyScope(agencyId, async () => {
     const [funnelStageGroups, recentSessions] = await Promise.all([
       agencyScoped(prisma.session).groupBy({
@@ -51,15 +57,19 @@ async function loadJourneyPreview(agencyId: string, hotelId: string, since: Date
         where: { hotelClientId: hotelId, startedAt: { gte: since, lte: until } },
         _count: { _all: true },
       }),
-      agencyScoped(prisma.session).findMany({
-        where: { hotelClientId: hotelId },
-        orderBy: { startedAt: "desc" },
-        take: 5,
-        select: {
-          id: true, visitorId: true, startedAt: true, totalTimeMs: true,
-          pageViewCount: true, landingPath: true, exitPath: true,
-        },
-      }),
+      // Skipped entirely without viewGuestDetails — the funnel below is derived
+      // from the aggregate groupBy, so it is unaffected.
+      includeVisitorRows
+        ? agencyScoped(prisma.session).findMany({
+            where: { hotelClientId: hotelId },
+            orderBy: { startedAt: "desc" },
+            take: 5,
+            select: {
+              id: true, visitorId: true, startedAt: true, totalTimeMs: true,
+              pageViewCount: true, landingPath: true, exitPath: true,
+            },
+          })
+        : [],
     ]);
 
     const reachedByRank: Record<number, number> = {};
@@ -108,6 +118,15 @@ export type HotelDashboardBodyProps = {
   showRestrictedNotice?: boolean;
   /** Label for the back link from a channel deep-dive. */
   channelBackLabel?: string;
+  /**
+   * Whether this viewer holds the viewGuestDetails capability.
+   *
+   * Required, not defaulted: a default of `true` would silently show
+   * visitor-level rows to any future caller that forgot the prop, which is the
+   * failure mode worth making impossible. The funnel above the list stays
+   * visible either way — it is aggregate counts, not individual visitors.
+   */
+  canViewGuestDetails: boolean;
   /** Owner-only editable section (hotel details). Never passed on the share link. */
   editSlot?: React.ReactNode;
 };
@@ -129,6 +148,7 @@ export async function HotelDashboardBody({
   channelParam,
   showRestrictedNotice = false,
   channelBackLabel = "← Dashboard",
+  canViewGuestDetails,
   editSlot,
 }: HotelDashboardBodyProps) {
   const range = resolveRange({ range: rangeParam, from: fromParam, to: toParam });
@@ -159,7 +179,11 @@ export async function HotelDashboardBody({
     );
   }
 
-  const journey = await loadJourneyPreview(agencyId, hotelId, range.since, range.until);
+  // The capability decides what is FETCHED, not just what is painted. Loading
+  // visitor rows and then hiding them would still put them in the HTML payload.
+  const journey = await loadJourneyPreview(
+    agencyId, hotelId, range.since, range.until, canViewGuestDetails,
+  );
 
   function rangeHref(key: string): string {
     return key === "30" ? basePath : `${basePath}?range=${key}`;
@@ -252,13 +276,17 @@ export async function HotelDashboardBody({
       {/* Recent Visitor Journeys + funnel — page-by-page paths and drop-off. */}
       <section className="overflow-hidden rounded-card border border-line bg-card">
         <div className="border-b border-line px-4 py-3 sm:px-5">
-          <h2 className="font-medium text-ink">Recent Visitor Journeys</h2>
+          <h2 className="font-medium text-ink">
+            {canViewGuestDetails ? "Recent Visitor Journeys" : "Visitor funnel"}
+          </h2>
           <p className="mt-0.5 text-sm text-ink-tertiary">
-            The page-by-page path recent visitors took, with time on site and drop-off.
+            {canViewGuestDetails
+              ? "The page-by-page path recent visitors took, with time on site and drop-off."
+              : "How visitors move through your site, and where they drop off."}
           </p>
         </div>
         {journey.funnelHasData && (
-          <div className="border-b border-line px-4 py-4">
+          <div className={canViewGuestDetails ? "border-b border-line px-4 py-4" : "px-4 py-4"}>
             <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-tertiary">
               Funnel · {range.label.toLowerCase()}
             </p>
@@ -275,7 +303,15 @@ export async function HotelDashboardBody({
             </div>
           </div>
         )}
-        {journey.recentSessions.length === 0 ? (
+        {!canViewGuestDetails ? (
+          // NOT the empty state. "No visitor journeys yet" would be a false
+          // statement to someone whose role simply excludes them — there may be
+          // thousands. Say which it is.
+          <p className="px-4 py-6 text-sm text-ink-tertiary">
+            Individual visitor journeys aren&apos;t part of your access level. The funnel above
+            covers the same visitors in aggregate.
+          </p>
+        ) : journey.recentSessions.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-ink-tertiary">
             No visitor journeys yet. They appear once your website is tracking visits.
           </p>

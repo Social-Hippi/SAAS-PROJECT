@@ -4,6 +4,7 @@ import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { SHARE_TOKEN_HEADER, isShareTokenShape } from "@/lib/share-token";
 import { resolveHotelAccess } from "@/lib/hotel-access";
+import type { HotelCapability } from "@/lib/hotel-capabilities";
 
 // The blanket hotel-access lockdown has been LIFTED for logged-in hotel users.
 //
@@ -25,10 +26,15 @@ function shareTokenDashboardRetired(): boolean {
   return true;
 }
 
-// Authorization for the hotel-owner dashboard (/hotel/[hotelClientId]). A user may
-// view a hotel only if they are its creator (hotel_client whose Clerk id matches
-// HotelClient.createdByUserId) OR an agency member of the agency that owns it.
-// Edits are limited to the owner. Returns null when not allowed (route → 404).
+// Authorization for the hotel dashboard (/hotel/[hotelClientId]). A user reaches a
+// hotel only via a HotelMember grant on THAT hotel, or as an agency member of the
+// agency that owns it. Returns null when not allowed (route → 404).
+//
+// What they can then SEE is not uniform, which is why `can` travels with the
+// viewer: a marketing user has no viewGuestDetails, so the visitor-journey list
+// must not render for them. Handing surfaces the same predicate the guards use
+// keeps the invite form's promise ("Marketing: can't see guest details") and the
+// dashboard from drifting apart.
 
 export type HotelViewerHotel = {
   id: string;
@@ -58,7 +64,14 @@ export type HotelViewerHotel = {
   };
 };
 
-export type HotelViewer = { hotel: HotelViewerHotel; userId: string; isOwner: boolean; canEdit: boolean };
+export type HotelViewer = {
+  hotel: HotelViewerHotel;
+  userId: string;
+  isOwner: boolean;
+  canEdit: boolean;
+  /** The shared capability predicate — the same one the guards call. */
+  can: (capability: HotelCapability) => boolean;
+};
 
 export async function resolveHotelForViewer(hotelClientId: string): Promise<HotelViewer | null> {
   // Authorization is delegated to the single gate (lib/hotel-access.ts) so this
@@ -93,6 +106,7 @@ export async function resolveHotelForViewer(hotelClientId: string): Promise<Hote
     userId,
     isOwner,
     canEdit: access.can("manageHotelSettings"),
+    can: access.can,
   };
 }
 
@@ -102,14 +116,16 @@ export type HotelOwnerAccess = {
   isOwner: boolean;
   /** True when the viewer is an agency member of the owning agency (not the hotel owner). */
   isAgencyMember: boolean;
+  /** The shared capability predicate, so a data route can gate on what it returns. */
+  can: (capability: HotelCapability) => boolean;
 };
 
 /**
  * Authorization gate for the hotel-owner DATA routes (/api/hotel/[hotelClientId]/*).
  *
- * A request is authorized only when the signed-in Clerk user is EITHER the hotel's
- * own owner (HotelClient.createdByUserId, i.e. they signed up via an invite code)
- * OR an agency member of the agency that owns the hotel. Returns the owning
+ * A request is authorized only when the signed-in Clerk user holds a HotelMember
+ * grant on THIS hotel, or is an agency member of the agency that owns it. Returns
+ * the owning
  * agencyId so the caller can scope reads via runWithAgencyScope(agencyId, …);
  * returns null when the user has no access (the route then answers 403/404).
  *
@@ -129,6 +145,7 @@ export async function requireHotelOwnerAccess(hotelClientId: string): Promise<Ho
     hotelId: access.hotelClientId,
     isOwner: access.principal.kind === "hotel" && access.principal.role === "hotel_owner",
     isAgencyMember: access.principal.kind === "agency",
+    can: access.can,
   };
 }
 
@@ -172,7 +189,17 @@ export async function requireShareTokenAccess(
   // The token must address THIS hotel — never a sibling, even in the same agency.
   if (hotel.id !== hotelClientId) return null;
 
-  return { agencyId: hotel.agencyId, hotelId: hotel.id, isOwner: false, isAgencyMember: false };
+  // A share-token holder is an anonymous stranger, so it holds NO capability —
+  // not even viewPerformance. The /h/ dashboard is retired above; any future
+  // token surface must therefore opt into each capability deliberately rather
+  // than inherit a hotel user's.
+  return {
+    agencyId: hotel.agencyId,
+    hotelId: hotel.id,
+    isOwner: false,
+    isAgencyMember: false,
+    can: () => false,
+  };
 }
 
 /**
