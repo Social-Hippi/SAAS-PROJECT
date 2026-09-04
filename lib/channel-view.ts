@@ -73,7 +73,7 @@ const dayKey = (d: Date): string => d.toISOString().slice(0, 10);
 
 // ── Shared row selects ───────────────────────────────────────────────────────
 
-type ConvRow = ClickIds & {
+type ConvRow = Required<ClickIds> & {
   utmSource: string | null;
   utmMedium: string | null;
   utmContent: string | null;
@@ -82,7 +82,7 @@ type ConvRow = ClickIds & {
   sessionId: string;
   createdAt: Date;
 };
-type SessionRow = {
+type SessionRow = Required<ClickIds> & {
   id: string;
   landingPath: string;
   utmSource: string | null;
@@ -106,7 +106,12 @@ function conversionsInRange(hotelClientId: string, start: Date, end: Date) {
 function sessionsInRange(hotelClientId: string, start: Date, end: Date) {
   return agencyScoped(prisma.session).findMany({
     where: { hotelClientId, startedAt: { gte: start, lte: end } },
-    select: { id: true, landingPath: true, utmSource: true, utmMedium: true, utmContent: true, startedAt: true },
+    select: {
+      id: true, landingPath: true, utmSource: true, utmMedium: true, utmContent: true, startedAt: true,
+      // Required by classifySourceType: without these an auto-tagged Google
+      // session (gclid, no utm) is misread as `direct` in every channel card.
+      gclid: true, gbraid: true, wbraid: true, fbclid: true,
+    },
   }) as Promise<SessionRow[]>;
 }
 

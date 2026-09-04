@@ -9,6 +9,7 @@ import {
   type SourceType,
 } from "@/lib/source-classifier";
 import { getSpendByPlatform, safeRoas } from "@/lib/ad-spend";
+import type { ClickIds } from "@/lib/click-ids";
 import { formatDuration } from "@/lib/format";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -215,8 +216,13 @@ export async function calculateConversionRate(
 
 export type NewVsReturning = { newVisitors: number; returningVisitors: number; totalAdVisitors: number };
 
-const isPaidAdSession = (s: { utmSource: string | null; utmMedium: string | null }): boolean => {
-  const t = classifySourceType({ utmSource: s.utmSource, utmMedium: s.utmMedium });
+type AdSessionRow = Required<ClickIds> & {
+  utmSource: string | null;
+  utmMedium: string | null;
+};
+
+const isPaidAdSession = (s: AdSessionRow): boolean => {
+  const t = classifySourceType(s);
   return t === "meta_ads" || t === "google_ads";
 };
 
@@ -227,7 +233,12 @@ export async function calculateNewVsReturningFromAds(
 ): Promise<NewVsReturning> {
   const sessions = await agencyScoped(prisma.session).findMany({
     where: { hotelClientId, startedAt: { gte: startDate, lte: endDate } },
-    select: { visitorId: true, utmSource: true, utmMedium: true },
+    select: {
+      visitorId: true, utmSource: true, utmMedium: true,
+      // Required by classifySourceType — an auto-tagged Google session carries a
+      // gclid and no utm, so without these it is not counted as an ad session.
+      gclid: true, gbraid: true, wbraid: true, fbclid: true,
+    },
   });
   const adSessions = sessions.filter(isPaidAdSession);
   const visitorIds = [...new Set(adSessions.map((s) => s.visitorId))];
@@ -471,7 +482,14 @@ export async function calculateBookingsBySource(
 ): Promise<BookingsBySource> {
   const conversions = await agencyScoped(prisma.trackingEvent).findMany({
     where: { hotelClientId, eventType: "conversion", createdAt: { gte: startDate, lte: endDate } },
-    select: { conversionValue: true, utmSource: true, utmMedium: true, utmContent: true },
+    select: {
+      conversionValue: true, utmSource: true, utmMedium: true, utmContent: true,
+      // Required by classifySourceType. Omitting these made an auto-tagged
+      // Google booking read as `direct` HERE while calculateROAS (which does
+      // select them) counted the same booking as google_ads — the same
+      // /owner-metrics payload contradicted itself.
+      gclid: true, gbraid: true, wbraid: true, fbclid: true,
+    },
   });
   const byType = new Map<SourceType, { revenue: number; bookings: number }>();
   let totalRevenue = 0;

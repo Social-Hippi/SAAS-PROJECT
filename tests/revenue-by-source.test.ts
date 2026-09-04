@@ -23,7 +23,7 @@ vi.mock("@/lib/auth", () => ({
 
 import { prisma } from "@/lib/prisma";
 import { GET } from "@/app/api/agency/hotels/[hotelId]/revenue-by-source/route";
-import { classifySourceType, type ClassifiableUtm, type SourceType } from "@/lib/source-classifier";
+import { classifySourceType, type ClassifiableUtm, type SourceType, NO_CLICK_IDS } from "@/lib/source-classifier";
 import { aggregateRevenueBySource, type ConversionRow } from "@/lib/revenue-by-source";
 
 const PREFIX = "TEST_RBS_";
@@ -229,16 +229,16 @@ describe("normalization + filtering (Part 6)", () => {
 describe("source classification is deterministic (Part 6)", () => {
   test("known mappings are stable across calls", () => {
     const cases: [ClassifiableUtm, SourceType][] = [
-      [{ utmSource: "facebook", utmMedium: "cpc" }, "meta_ads"],
-      [{ utmSource: "instagram", utmMedium: "paid_social" }, "meta_ads"],
-      [{ utmSource: "google", utmMedium: "cpc" }, "google_ads"],
-      [{ utmSource: "instagram", utmMedium: "reel" }, "instagram_organic"],
-      [{ utmSource: "facebook", utmMedium: "page" }, "facebook_organic"],
-      [{ utmSource: "instagram", utmMedium: "influencer" }, "influencer"],
-      [{ utmSource: "email", utmMedium: "newsletter" }, "email"],
-      [{ utmSource: "whatsapp", utmMedium: "chat" }, "whatsapp"],
-      [{ utmSource: undefined, utmMedium: undefined }, "direct"],
-      [{ utmSource: "reddit", utmMedium: "social" }, "other"],
+      [{ ...NO_CLICK_IDS, utmSource: "facebook", utmMedium: "cpc" }, "meta_ads"],
+      [{ ...NO_CLICK_IDS, utmSource: "instagram", utmMedium: "paid_social" }, "meta_ads"],
+      [{ ...NO_CLICK_IDS, utmSource: "google", utmMedium: "cpc" }, "google_ads"],
+      [{ ...NO_CLICK_IDS, utmSource: "instagram", utmMedium: "reel" }, "instagram_organic"],
+      [{ ...NO_CLICK_IDS, utmSource: "facebook", utmMedium: "page" }, "facebook_organic"],
+      [{ ...NO_CLICK_IDS, utmSource: "instagram", utmMedium: "influencer" }, "influencer"],
+      [{ ...NO_CLICK_IDS, utmSource: "email", utmMedium: "newsletter" }, "email"],
+      [{ ...NO_CLICK_IDS, utmSource: "whatsapp", utmMedium: "chat" }, "whatsapp"],
+      [{ ...NO_CLICK_IDS, utmSource: undefined, utmMedium: undefined }, "direct"],
+      [{ ...NO_CLICK_IDS, utmSource: "reddit", utmMedium: "social" }, "other"],
     ];
     for (const [utm, expected] of cases) {
       const a = classifySourceType(utm);
@@ -253,9 +253,9 @@ describe("aggregation unit (pure)", () => {
   test("percentOfTotal, averageBookingValue, and sorting", () => {
     const now = new Date();
     const rows: ConversionRow[] = [
-      { utmSource: "google", utmMedium: "cpc", utmCampaign: "b", utmContent: null, value: 6000, occurredAt: now },
-      { utmSource: "instagram", utmMedium: "reel", utmCampaign: "m", utmContent: null, value: 2000, occurredAt: now },
-      { utmSource: "instagram", utmMedium: "reel", utmCampaign: "m", utmContent: null, value: 2000, occurredAt: now },
+      { ...NO_CLICK_IDS, utmSource: "google", utmMedium: "cpc", utmCampaign: "b", utmContent: null, value: 6000, occurredAt: now },
+      { ...NO_CLICK_IDS, utmSource: "instagram", utmMedium: "reel", utmCampaign: "m", utmContent: null, value: 2000, occurredAt: now },
+      { ...NO_CLICK_IDS, utmSource: "instagram", utmMedium: "reel", utmCampaign: "m", utmContent: null, value: 2000, occurredAt: now },
     ];
     const out = aggregateRevenueBySource(rows, "source", { start: new Date(now.getTime() - 6 * 86_400_000), end: now });
     expect(out.totals.revenue).toBe(10000);

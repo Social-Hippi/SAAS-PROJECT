@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { prisma } from "@/lib/prisma";
 import { POST as trackPOST } from "@/app/api/track/event/route";
-import { classifySourceType } from "@/lib/source-classifier";
+import { classifySourceType, NO_CLICK_IDS } from "@/lib/source-classifier";
 import { CLICK_ID_KEYS, JOURNEY_SCENARIOS, type JourneyScenario } from "@/tests/journey/scenarios";
 
 const PREFIX = "TEST_CJ_";
@@ -190,6 +190,6 @@ describe("B3 — return journey (observed, semantics unchanged)", () => {
     expect(a.visitorId).toBe(b.visitorId);
     expect(b.gclid).toBe(gclid);
     // DOCUMENTED: the returning session still classifies as google_ads, not direct.
-    expect(classifySourceType({ utmSource: b.utmSource, utmMedium: null, gclid: b.gclid })).toBe("google_ads");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: b.utmSource, utmMedium: null, gclid: b.gclid })).toBe("google_ads");
   });
 });

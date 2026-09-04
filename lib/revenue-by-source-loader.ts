@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
+import { NO_CLICK_IDS } from "@/lib/source-classifier";
 import {
   aggregateRevenueBySource,
   type ConversionRow,
@@ -94,6 +95,10 @@ export async function computeRevenueBySource(args: {
     value: Number(m.bookingValue),
     occurredAt: m.bookingDate ?? m.redeemedAt,
     couponCode: m.couponCode?.code ?? "manual",
+    // A manual redemption is an off-snippet booking: there is no TrackingEvent
+    // and therefore genuinely no ad click identifier. Stated explicitly rather
+    // than left to an optional field.
+    ...NO_CLICK_IDS,
   }));
 
   const rows = [...trackingRows, ...manualRows];

@@ -13,7 +13,7 @@ export function isGranularity(v: unknown): v is Granularity {
   return typeof v === "string" && (GRANULARITIES as readonly string[]).includes(v);
 }
 
-export type ConversionRow = ClickIds & {
+export type ConversionRow = Required<ClickIds> & {
   utmSource: string | null;
   utmMedium: string | null;
   utmCampaign: string | null;

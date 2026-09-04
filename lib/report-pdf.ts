@@ -71,7 +71,16 @@ export async function generateHotelReportPdf(meta: ReportMeta): Promise<Uint8Arr
     loadHotelReport({ agencyId, hotelId, since: prevSince, until: prevUntil }),
     agencyScopedFor(agencyId, prisma.trackingEvent).findMany({
       where: { hotelClientId: hotelId, eventType: "conversion", createdAt: { gte: since, lte: until } },
-      select: { utmSource: true, utmMedium: true, utmCampaign: true, utmContent: true, conversionValue: true, couponCodeUsed: true, createdAt: true },
+      select: {
+        utmSource: true, utmMedium: true, utmCampaign: true, utmContent: true,
+        conversionValue: true, couponCodeUsed: true, createdAt: true,
+        // Required by classifySourceType. Without these the channel table below
+        // bucketed every auto-tagged Google booking as `direct`, while the KPI
+        // block on the preceding page (via loadHotelReport, which does select
+        // them) counted the SAME booking as paid Google revenue — the two halves
+        // of the client-facing PDF disagreed with each other.
+        gclid: true, gbraid: true, wbraid: true, fbclid: true,
+      },
     }),
     agencyScopedFor(agencyId, prisma.session).count({ where: { hotelClientId: hotelId, startedAt: { gte: since, lte: until } } }),
     agencyScopedFor(agencyId, prisma.session).count({ where: { hotelClientId: hotelId, startedAt: { gte: prevSince, lt: prevUntil } } }),
@@ -87,6 +96,7 @@ export async function generateHotelReportPdf(meta: ReportMeta): Promise<Uint8Arr
   const convRows: ConversionRow[] = convEvents.map((e) => ({
     utmSource: e.utmSource, utmMedium: e.utmMedium, utmCampaign: e.utmCampaign, utmContent: e.utmContent,
     value: e.conversionValue == null ? 0 : Number(e.conversionValue), occurredAt: e.createdAt, couponCode: e.couponCodeUsed,
+    gclid: e.gclid, gbraid: e.gbraid, wbraid: e.wbraid, fbclid: e.fbclid,
   }));
   const rbs = aggregateRevenueBySource(convRows, "source", { start: since, end: until });
 

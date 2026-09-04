@@ -33,7 +33,7 @@ import {
   parseClickIds,
   redactClickId,
 } from "@/lib/click-ids";
-import { classifySourceType } from "@/lib/source-classifier";
+import { classifySourceType, NO_CLICK_IDS } from "@/lib/source-classifier";
 
 const GCLID = "TEST_GCLID_123";
 const GBRAID = "TEST_GBRAID_123";
@@ -83,15 +83,15 @@ describe("capture", () => {
 
 describe("5. existing UTM capture is preserved", () => {
   test("a plain UTM visit still classifies from the UTMs alone", () => {
-    expect(classifySourceType({ utmSource: "facebook", utmMedium: "cpc" })).toBe("meta_ads");
-    expect(classifySourceType({ utmSource: "google", utmMedium: "cpc" })).toBe("google_ads");
-    expect(classifySourceType({ utmSource: "instagram", utmMedium: "social" })).toBe("instagram_organic");
-    expect(classifySourceType({ utmSource: "email", utmMedium: "newsletter" })).toBe("email");
-    expect(classifySourceType({ utmSource: null, utmMedium: null })).toBe("direct");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: "facebook", utmMedium: "cpc" })).toBe("meta_ads");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: "google", utmMedium: "cpc" })).toBe("google_ads");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: "instagram", utmMedium: "social" })).toBe("instagram_organic");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: "email", utmMedium: "newsletter" })).toBe("email");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: null, utmMedium: null })).toBe("direct");
   });
 
   test("UTM classification is unchanged when no click id is present", () => {
-    expect(classifySourceType({ utmSource: "whatsapp", utmMedium: "referral", gclid: null })).toBe("whatsapp");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: "whatsapp", utmMedium: "referral", gclid: null })).toBe("whatsapp");
   });
 });
 
@@ -100,26 +100,26 @@ describe("5. existing UTM capture is preserved", () => {
 describe("6. Google click id is never classified direct", () => {
   test("gclid with NO utm parameters classifies as google_ads", () => {
     // This is the exact auto-tagging journey: https://hotel.com/?gclid=…
-    expect(classifySourceType({ utmSource: null, utmMedium: null, gclid: GCLID })).toBe("google_ads");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: null, utmMedium: null, gclid: GCLID })).toBe("google_ads");
   });
 
   test("gbraid alone classifies as google_ads", () => {
-    expect(classifySourceType({ utmSource: null, utmMedium: null, gbraid: GBRAID })).toBe("google_ads");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: null, utmMedium: null, gbraid: GBRAID })).toBe("google_ads");
   });
 
   test("wbraid alone classifies as google_ads", () => {
-    expect(classifySourceType({ utmSource: null, utmMedium: null, wbraid: WBRAID })).toBe("google_ads");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: null, utmMedium: null, wbraid: WBRAID })).toBe("google_ads");
   });
 
   test("a Google click id outranks a contradicting UTM", () => {
     // Manual tagging + auto-tagging can coexist; the platform-minted id wins.
-    expect(classifySourceType({ utmSource: "email", utmMedium: "newsletter", gclid: GCLID })).toBe("google_ads");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: "email", utmMedium: "newsletter", gclid: GCLID })).toBe("google_ads");
   });
 
   test("an EMPTY/invalid gclid does not fabricate google_ads", () => {
-    expect(classifySourceType({ utmSource: null, utmMedium: null, gclid: "" })).toBe("direct");
-    expect(classifySourceType({ utmSource: null, utmMedium: null, gclid: "   " })).toBe("direct");
-    expect(classifySourceType({ utmSource: null, utmMedium: null, gclid: null })).toBe("direct");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: null, utmMedium: null, gclid: "" })).toBe("direct");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: null, utmMedium: null, gclid: "   " })).toBe("direct");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: null, utmMedium: null, gclid: null })).toBe("direct");
   });
 });
 
@@ -134,24 +134,24 @@ describe("7. Meta click id", () => {
   test("fbclid does NOT by itself make a visit paid meta_ads", () => {
     // Meta appends fbclid to organic post links too. Claiming `meta_ads` here
     // would put organic revenue into the paid ROAS numerator.
-    expect(classifySourceType({ utmSource: null, utmMedium: null, fbclid: FBCLID })).not.toBe("meta_ads");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: null, utmMedium: null, fbclid: FBCLID })).not.toBe("meta_ads");
   });
 
   test("the documented Meta journey still classifies as meta_ads via its UTMs", () => {
     // ?fbclid=…&utm_source=facebook&utm_medium=paid_social
     expect(
-      classifySourceType({ utmSource: "facebook", utmMedium: "paid_social", fbclid: FBCLID }),
+      classifySourceType({ ...NO_CLICK_IDS, utmSource: "facebook", utmMedium: "paid_social", fbclid: FBCLID }),
     ).toBe("meta_ads");
   });
 
   test("fbclid never downgrades an existing organic Meta classification", () => {
-    expect(classifySourceType({ utmSource: "instagram", utmMedium: "social", fbclid: FBCLID })).toBe(
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: "instagram", utmMedium: "social", fbclid: FBCLID })).toBe(
       "instagram_organic",
     );
   });
 
   test("fbclid alongside a Google click id does not override Google", () => {
-    expect(classifySourceType({ utmSource: null, utmMedium: null, gclid: GCLID, fbclid: FBCLID })).toBe(
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: null, utmMedium: null, gclid: GCLID, fbclid: FBCLID })).toBe(
       "google_ads",
     );
   });
@@ -238,7 +238,7 @@ describe("12. malformed and oversized identifiers are handled safely", () => {
   });
 
   test("a malformed id cannot smuggle a classification", () => {
-    expect(classifySourceType({ utmSource: null, utmMedium: null, gclid: "<img src=x>" })).toBe("direct");
+    expect(classifySourceType({ ...NO_CLICK_IDS, utmSource: null, utmMedium: null, gclid: "<img src=x>" })).toBe("direct");
   });
 });
 

@@ -200,9 +200,11 @@ export async function generateSummary(hotelClientId: string, period: Period): Pr
   // ── Channel highlight bullets (Meta / Google / Instagram reach + overall) ──
   // Per-channel booking revenue uses the same R1 classifier as the rest of the app.
   const channelRev = (channel: string) => {
-    const rows = curRows.filter(
-      (r) => classifySourceType({ utmSource: r.utmSource, utmMedium: r.utmMedium, utmContent: r.utmContent }) === channel,
-    );
+    // Pass the WHOLE row. Hand-picking three fields dropped the click ids the
+    // query already selects, so an auto-tagged Google booking was counted as
+    // `direct` here while paidRevenue (which classifies the full row) counted it
+    // as google_ads — this file contradicted itself.
+    const rows = curRows.filter((r) => classifySourceType(r) === channel);
     return { revenue: rows.reduce((s, r) => s + r.value, 0), bookings: rows.length };
   };
   const meta = channelRev("meta_ads");

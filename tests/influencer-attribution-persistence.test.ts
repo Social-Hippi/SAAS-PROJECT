@@ -179,7 +179,10 @@ describe("A5 — URL route", () => {
 
     const conv = await prisma.trackingEvent.findFirstOrThrow({
       where: { sessionId, eventType: "conversion" },
-      select: { id: true, utmSource: true, utmMedium: true, utmContent: true },
+      select: {
+        id: true, utmSource: true, utmMedium: true, utmContent: true,
+        gclid: true, gbraid: true, wbraid: true, fbclid: true,
+      },
     });
     expect(classifySourceType(conv)).toBe("influencer");
 

@@ -82,13 +82,17 @@ export function resolveRange(sp: {
 // Inputs
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type EventInput = ClickIds & {
+export type EventInput = Required<ClickIds> & {
   eventType: "visit" | "conversion";
   // utmSource + utmMedium are REQUIRED (Phase 0): computeKpis has to classify a
   // conversion as paid or non-paid, and it can't do that from utm_content alone.
   // Deliberately not optional — a call site that forgets to SELECT them would
   // otherwise silently classify every booking as `direct` and report a paid ROAS
   // of 0×. A compile error is the cheaper failure.
+  //
+  // The click ids are Required for exactly the same reason: an omitted gclid
+  // reads as `undefined`, isGoogleAdsClick returns false, and every auto-tagged
+  // Google booking silently becomes `direct`. See ClassifiableUtm.
   utmSource: string | null;
   utmMedium: string | null;
   utmContent: string | null;

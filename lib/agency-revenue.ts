@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { agencyScopedFor } from "@/lib/tenant";
 import { TtlLruCache } from "@/lib/lru-cache";
 import type { ConversionRow } from "@/lib/revenue-by-source";
+import { NO_CLICK_IDS } from "@/lib/source-classifier";
 
 // Agency-wide revenue loader (Phase R3) — fetches every conversion across ALL of
 // an agency's non-deleted hotels (plus manual influencer redemptions, which have
@@ -134,6 +135,8 @@ async function fetchAgencyRevenueRows(
       value: Number(m.bookingValue),
       occurredAt: m.bookingDate ?? m.redeemedAt,
       couponCode: m.couponCode?.code ?? "manual",
+      // Off-snippet booking — no TrackingEvent, so genuinely no click id.
+      ...NO_CLICK_IDS,
       hotelClientId: m.hotelClientId,
     })),
   ];
