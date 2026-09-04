@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+
+import { readCode } from "./helpers/read-code";
 
 import {
   validateAgencyName,
@@ -33,24 +33,6 @@ import {
 // session, so the source assertions carry the parts that actually regressed.
 // Mirrors tests/spend-display-integrity.test.ts.
 // ─────────────────────────────────────────────────────────────────────────────
-
-const root = join(__dirname, "..");
-
-/**
- * Read a source file with comments stripped.
- *
- * These assertions are about what the code DOES. The files deliberately explain
- * the defect they fixed — including quoting the old `${user.firstName}'s Agency`
- * default — and a plain substring check would match that prose and fail on a
- * correct file. Stripping comments keeps the assertions honest in both
- * directions: they cannot be satisfied by a comment either.
- */
-function readCode(p: string): string {
-  return readFileSync(join(root, p), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, " ") // block comments (incl. JSDoc)
-    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, " ") // JSX comment expressions
-    .replace(/^[ \t]*\/\/.*$/gm, ""); // whole-line // comments
-}
 
 const read = readCode;
 

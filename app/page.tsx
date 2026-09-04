@@ -164,24 +164,7 @@ export default async function Home() {
           </ul>
         </div>
 
-        {/* Dashboard preview — placeholder slot until a real screenshot is dropped in. */}
-        <div className="mx-auto -mb-24 max-w-5xl px-5 sm:px-8">
-          <div
-            role="img"
-            aria-label="HotelTrack attribution dashboard preview (placeholder)"
-            className="relative flex aspect-[16/9] items-center justify-center overflow-hidden rounded-2xl border border-[var(--lp-border)] bg-[var(--lp-card)] shadow-[0_40px_120px_-40px_var(--lp-glow-strong)]"
-          >
-            <div aria-hidden="true" className="lp-hero-grid absolute inset-0 opacity-60" />
-            <span className="relative flex flex-col items-center gap-3 text-sm text-[var(--lp-ink-faint)]">
-              <LayoutDashboard className="h-9 w-9 text-[var(--lp-emerald)]" strokeWidth={1.5} />
-              [ REPLACE WITH REAL HOTELTRACK DASHBOARD SCREENSHOT ]
-            </span>
-          </div>
-        </div>
       </section>
-
-      {/* spacer to clear the overlapping preview */}
-      <div aria-hidden="true" className="h-24" />
 
       {/* ── The problem ─────────────────────────────────────────────────────── */}
       <section className="mx-auto max-w-7xl px-5 py-20 sm:px-8 sm:py-28">

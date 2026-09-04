@@ -159,8 +159,13 @@ export default async function SettingsPage() {
       <section className="rounded-xl border border-line p-6">
         <h2 className="font-medium">Hotel Self-Signup</h2>
         <p className="mt-1 text-sm text-ink-tertiary">
-          Share this invite code with your hotel clients so they can sign up themselves.
-          They&apos;ll be automatically added to your agency.
+          Share this code with a hotel so they can enter their own details — contact,
+          rooms, channel manager, OTA rate — and be added to your agency without you
+          re-keying it.
+        </p>
+        <p className="mt-2 text-sm text-ink-tertiary">
+          Hotels do not get a login. You share results with them using the report link
+          on each hotel&apos;s page.
         </p>
         <div className="mt-5 max-w-xl">
           <InviteCodeManager
