@@ -69,6 +69,45 @@ export function validateUrl(value: string): string | null {
     : out;
 }
 
+// ── Organisation name ────────────────────────────────────────────────────────
+
+/** Matches the Agency.name column bound and the onboarding form's own limit. */
+export const AGENCY_NAME_MAX = 120;
+export const AGENCY_NAME_MIN = 2;
+
+/**
+ * The agency's ORGANISATION name — the identity every member of that agency
+ * sees in the app header, on generated reports, and in emails to hotels.
+ *
+ * It is deliberately validated in one shared place because it is written from
+ * two: onboarding (creation) and Agency Settings (correction). Until settings
+ * could write it there was no correction path at all, so an agency named at
+ * signup was named permanently — and onboarding pre-filled that field with
+ * `${user.firstName}'s Agency`, which meant a whole organisation was
+ * identified by whichever individual happened to sign up first.
+ *
+ * Returns the trimmed, whitespace-collapsed name, or null with a reason.
+ */
+export function validateAgencyName(
+  value: string,
+): { ok: true; name: string } | { ok: false; error: string } {
+  if (typeof value !== "string") {
+    return { ok: false, error: "Enter your organisation's name." };
+  }
+  // Collapse runs of whitespace (including pasted newlines) to single spaces.
+  const name = value.replace(/\s+/g, " ").trim();
+  if (name.length === 0) {
+    return { ok: false, error: "Enter your organisation's name." };
+  }
+  if (name.length < AGENCY_NAME_MIN) {
+    return { ok: false, error: `Use at least ${AGENCY_NAME_MIN} characters.` };
+  }
+  if (name.length > AGENCY_NAME_MAX) {
+    return { ok: false, error: `Use ${AGENCY_NAME_MAX} characters or fewer.` };
+  }
+  return { ok: true, name };
+}
+
 /** Physical address: 10–500 chars (newlines allowed for multi-line addresses). */
 export function validateAddress(value: string): boolean {
   if (typeof value !== "string") return false;

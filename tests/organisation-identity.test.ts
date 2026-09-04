@@ -1,0 +1,185 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, test } from "vitest";
+
+import {
+  validateAgencyName,
+  AGENCY_NAME_MAX,
+  AGENCY_NAME_MIN,
+} from "@/lib/agency-validation";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ORGANISATION IDENTITY.
+//
+// `Agency.name` is ORGANISATION-level state: it is what every member of an
+// agency sees in the app header, what appears on the reports they share with
+// hotels, and what goes out in emails. It is not a per-user preference.
+//
+// Two defects made it behave like one:
+//
+//   1. Onboarding pre-filled the field with `${user.firstName}'s Agency`, so the
+//      organisation was identified by whichever INDIVIDUAL happened to sign up
+//      first. Users accepted the suggestion — scripts/cleanup-demo-data.ts
+//      exists partly to delete two agencies created exactly that way.
+//
+//   2. Nothing could change it afterwards. createAgencyForCurrentUser was the
+//      ONLY writer of Agency.name in the entire codebase; the settings action
+//      (saveAgencyContact) writes five contact fields and not the name. So the
+//      wrong identity was permanent.
+//
+// These tests pin the validator both write paths now share, and assert — at the
+// source level — that the personal-name default is gone and a correction path
+// exists. The behavioural half of a server action needs a database and a Clerk
+// session, so the source assertions carry the parts that actually regressed.
+// Mirrors tests/spend-display-integrity.test.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const root = join(__dirname, "..");
+
+/**
+ * Read a source file with comments stripped.
+ *
+ * These assertions are about what the code DOES. The files deliberately explain
+ * the defect they fixed — including quoting the old `${user.firstName}'s Agency`
+ * default — and a plain substring check would match that prose and fail on a
+ * correct file. Stripping comments keeps the assertions honest in both
+ * directions: they cannot be satisfied by a comment either.
+ */
+function readCode(p: string): string {
+  return readFileSync(join(root, p), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, " ") // block comments (incl. JSDoc)
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, " ") // JSX comment expressions
+    .replace(/^[ \t]*\/\/.*$/gm, ""); // whole-line // comments
+}
+
+const read = readCode;
+
+const ONBOARDING_PAGE = read("app/(agency)/agency/onboarding/page.tsx");
+const ONBOARDING_CLIENT = read("app/(agency)/agency/onboarding/OnboardingClient.tsx");
+const ONBOARDING_ACTIONS = read("app/(agency)/agency/onboarding/actions.ts");
+const SETTINGS_ACTIONS = read("app/(agency)/agency/(app)/settings/actions.ts");
+const SETTINGS_PAGE = read("app/(agency)/agency/(app)/settings/page.tsx");
+const AGENCY_LAYOUT = read("app/(agency)/agency/(app)/layout.tsx");
+
+// ── 1. The shared validator ─────────────────────────────────────────────────
+
+describe("1. validateAgencyName", () => {
+  test("accepts an ordinary organisation name and returns it trimmed", () => {
+    const r = validateAgencyName("  Social Hippi  ");
+    expect(r).toEqual({ ok: true, name: "Social Hippi" });
+  });
+
+  test("collapses internal whitespace, including pasted newlines", () => {
+    const r = validateAgencyName("Social\n\n   Hippi\tMedia");
+    expect(r.ok && r.name).toBe("Social Hippi Media");
+  });
+
+  test("rejects empty and whitespace-only input", () => {
+    for (const v of ["", "   ", "\n\t "]) {
+      const r = validateAgencyName(v);
+      expect(r.ok, JSON.stringify(v)).toBe(false);
+      expect(!r.ok && r.error).toMatch(/organisation/i);
+    }
+  });
+
+  test("enforces the minimum length", () => {
+    const r = validateAgencyName("a".repeat(AGENCY_NAME_MIN - 1));
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(new RegExp(`${AGENCY_NAME_MIN}`));
+  });
+
+  test("enforces the column bound and reports it", () => {
+    expect(validateAgencyName("a".repeat(AGENCY_NAME_MAX)).ok).toBe(true);
+    const over = validateAgencyName("a".repeat(AGENCY_NAME_MAX + 1));
+    expect(over.ok).toBe(false);
+    expect(!over.ok && over.error).toMatch(new RegExp(`${AGENCY_NAME_MAX}`));
+  });
+
+  test("length is measured AFTER normalization, not before", () => {
+    // Padding must not push a valid name over the limit.
+    const r = validateAgencyName("   " + "a".repeat(AGENCY_NAME_MAX) + "   ");
+    expect(r.ok).toBe(true);
+  });
+
+  test("is not defensive about non-string input", () => {
+    // Server actions read FormData, which can yield a File or null.
+    expect(validateAgencyName(undefined as unknown as string).ok).toBe(false);
+    expect(validateAgencyName(null as unknown as string).ok).toBe(false);
+  });
+});
+
+// ── 2. Onboarding no longer seeds identity from an individual ───────────────
+
+describe("2. onboarding does not derive the organisation name from a person", () => {
+  test("the `<FirstName>'s Agency` default is gone", () => {
+    expect(ONBOARDING_PAGE).not.toContain("'s Agency");
+    expect(ONBOARDING_PAGE).not.toMatch(/user\?\.firstName/);
+  });
+
+  test("no suggestedName is threaded into the form at all", () => {
+    expect(ONBOARDING_PAGE).not.toContain("suggestedName");
+    expect(ONBOARDING_CLIENT).not.toContain("suggestedName");
+    expect(ONBOARDING_CLIENT).not.toContain("defaultValue");
+  });
+
+  test("the field is still required, so an empty name cannot be submitted", () => {
+    expect(ONBOARDING_CLIENT).toMatch(/id="agencyName"[\s\S]{0,400}?required/);
+  });
+
+  test("the label and copy describe an ORGANISATION, not an individual", () => {
+    expect(ONBOARDING_CLIENT).toContain("Organisation name");
+    expect(ONBOARDING_CLIENT).toMatch(/Everyone on your team sees this name/);
+  });
+});
+
+// ── 3. A correction path exists, and both writers share one validator ───────
+
+describe("3. the organisation name is correctable", () => {
+  test("settings exposes a saveAgencyName server action", () => {
+    expect(SETTINGS_ACTIONS).toMatch(/export async function saveAgencyName/);
+  });
+
+  test("it is admin-gated server-side, not merely hidden in the UI", () => {
+    const at = SETTINGS_ACTIONS.indexOf("export async function saveAgencyName");
+    const body = SETTINGS_ACTIONS.slice(at, at + 1200);
+    expect(body).toContain("await requireAdmin()");
+  });
+
+  test("it writes through agencyScoped, so it can only rename the caller's agency", () => {
+    const at = SETTINGS_ACTIONS.indexOf("export async function saveAgencyName");
+    const body = SETTINGS_ACTIONS.slice(at, at + 1600);
+    expect(body).toMatch(/agencyScoped\(prisma\.agency\)\.update/);
+    expect(body).toMatch(/where:\s*\{\s*id:\s*member\.agencyId\s*\}/);
+  });
+
+  test("BOTH write paths use the same validator (they cannot diverge)", () => {
+    expect(ONBOARDING_ACTIONS).toContain("validateAgencyName");
+    expect(SETTINGS_ACTIONS).toContain("validateAgencyName");
+    // The old hand-rolled onboarding check is gone.
+    expect(ONBOARDING_ACTIONS).not.toContain("Agency name must be 120 characters");
+  });
+
+  test("the settings page renders the control", () => {
+    expect(SETTINGS_PAGE).toContain("<OrganisationName");
+    expect(SETTINGS_PAGE).toContain("member.agency.name");
+  });
+});
+
+// ── 4. The rename is organisation-wide, not per-user ────────────────────────
+
+describe("4. the name is shared organisation state", () => {
+  test("the header reads it from the AGENCY record, not from the signed-in user", () => {
+    // If this ever became a user-derived value, one member could see a different
+    // organisation name from another — which is the bug this whole file guards.
+    expect(AGENCY_LAYOUT).toContain("member.agency.name");
+    expect(AGENCY_LAYOUT).not.toMatch(/user\.firstName|user\?\.firstName/);
+  });
+
+  test("a rename revalidates every surface that displays it", () => {
+    const at = SETTINGS_ACTIONS.indexOf("export async function saveAgencyName");
+    const body = SETTINGS_ACTIONS.slice(at, at + 2000);
+    for (const path of ["/agency/settings", "/agency/dashboard", "/agency/hotels"]) {
+      expect(body, path).toContain(`revalidatePath("${path}")`);
+    }
+  });
+});

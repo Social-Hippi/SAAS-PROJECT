@@ -3,15 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth, useUser } from "@clerk/nextjs";
+import { AGENCY_NAME_MAX } from "@/lib/agency-validation";
 import { createAgencyForCurrentUser } from "./actions";
 
-export function OnboardingClient({
-  alreadyMember,
-  suggestedName,
-}: {
-  alreadyMember: boolean;
-  suggestedName: string;
-}) {
+export function OnboardingClient({ alreadyMember }: { alreadyMember: boolean }) {
   const router = useRouter();
   const { getToken } = useAuth();
   const { user } = useUser();
@@ -59,19 +54,22 @@ export function OnboardingClient({
       className="w-full max-w-sm space-y-4 rounded-xl border border-line p-6"
     >
       <div>
-        <h1 className="text-xl font-semibold">Create your agency</h1>
+        <h1 className="text-xl font-semibold">Name your organisation</h1>
         <p className="mt-1 text-sm text-ink-tertiary">
-          This is the workspace your hotel clients will live under.
+          Everyone on your team sees this name, and it appears on the reports you
+          share with hotels. You can change it later in Settings.
         </p>
       </div>
       <div className="space-y-1.5">
         <label htmlFor="agencyName" className="text-sm font-medium">
-          Agency name
+          Organisation name
         </label>
         <input
           id="agencyName"
           name="agencyName"
-          defaultValue={suggestedName}
+          placeholder="e.g. Social Hippi"
+          autoComplete="organization"
+          maxLength={AGENCY_NAME_MAX}
           required
           className="w-full rounded-lg border border-line-strong bg-page px-3 py-2 text-sm text-ink placeholder:text-ink-disabled outline-none focus:border-brand focus:ring-1 focus:ring-brand"
         />

@@ -12,6 +12,7 @@ import { AgencyContactForm } from "@/components/agency/AgencyContactForm";
 import { saveAgencyContact } from "./actions";
 import { ensureInviteCode, inviteUrl } from "@/lib/hotel-invite";
 import { InviteCodeManager } from "./InviteCodeManager";
+import { OrganisationName } from "./OrganisationName";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 
 // Server-side relative time (avoids Date.now() in a client render).
@@ -102,6 +103,19 @@ export default async function SettingsPage() {
       </div>
 
       <BackfillProgress key={backfillJob?.id ?? "none"} initialJob={backfillJob} />
+
+      {/* ── Organisation identity ────────────────────────────────────────────
+          The name every member of this agency sees in the app header and on the
+          reports shared with hotels. Editable here because it previously wasn't
+          editable anywhere, which left agencies stuck with the personal-name
+          default that onboarding used to pre-fill. */}
+      <section className="rounded-card border border-line bg-card p-6 shadow-card">
+        <h2 className="font-medium">Organisation</h2>
+        <p className="mt-1 text-sm text-ink-tertiary">
+          How your organisation is identified across HotelTrack.
+        </p>
+        <OrganisationName initialName={member.agency.name} />
+      </section>
 
       {/* ── Appearance (theme) ───────────────────────────────────────────── */}
       <section className="rounded-card border border-line bg-card p-6 shadow-card">

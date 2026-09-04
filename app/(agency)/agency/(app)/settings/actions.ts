@@ -5,7 +5,11 @@ import { redirect } from "next/navigation";
 import { getCurrentMember, requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
-import { validateAgencyContact, type ContactFormState } from "@/lib/agency-validation";
+import {
+  validateAgencyContact,
+  validateAgencyName,
+  type ContactFormState,
+} from "@/lib/agency-validation";
 import { regenerateInviteCode, setInviteCodeStatus } from "@/lib/hotel-invite";
 import { encryptWithAudit, logTokenAudit } from "@/lib/token-audit";
 import { getTokenForApiCall } from "@/lib/token-access";
@@ -256,6 +260,51 @@ export async function saveAgencyContact(
 
   revalidatePath("/agency/settings");
   return { ok: true };
+}
+
+export type AgencyNameState = { ok: boolean; error?: string; name?: string };
+
+/**
+ * Renames the agency — the ORGANISATION identity every member sees in the app
+ * header, on generated reports, and in emails to hotels.
+ *
+ * This action did not exist. `Agency.name` was written once by
+ * createAgencyForCurrentUser and by nothing else, so an agency was named
+ * permanently at signup — and the onboarding form pre-filled that field with
+ * `${user.firstName}'s Agency`, which left whole organisations identified by
+ * whichever individual signed up first, with no way to correct it in the
+ * product. (scripts/cleanup-demo-data.ts exists partly to delete two agencies
+ * that were created exactly that way.)
+ *
+ * Admin-only and agency-scoped: the update goes through agencyScoped, so the
+ * `where` can only ever resolve to the caller's own agency. Because the name is
+ * organisation-level state, the rename is immediately visible to EVERY member —
+ * the header reads it from member.agency.name on each request, and the paths
+ * that display it are revalidated below.
+ */
+export async function saveAgencyName(
+  _prev: AgencyNameState,
+  formData: FormData,
+): Promise<AgencyNameState> {
+  const member = await requireAdmin();
+  if (!member) {
+    return { ok: false, error: "Only an agency admin can rename the organisation." };
+  }
+
+  const result = validateAgencyName(String(formData.get("agencyName") ?? ""));
+  if (!result.ok) return { ok: false, error: result.error };
+
+  await agencyScoped(prisma.agency).update({
+    where: { id: member.agencyId },
+    data: { name: result.name },
+  });
+
+  // The name appears in the app header (every page under the agency layout),
+  // the hotel list, and the dashboard, so refresh all three for other members.
+  revalidatePath("/agency/settings");
+  revalidatePath("/agency/dashboard");
+  revalidatePath("/agency/hotels");
+  return { ok: true, name: result.name };
 }
 
 /** Regenerate this agency's hotel-signup invite code (old code stops working). */

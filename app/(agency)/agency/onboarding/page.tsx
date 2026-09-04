@@ -36,16 +36,17 @@ export default async function OnboardingPage() {
     );
   }
 
-  const suggestedName = user?.firstName
-    ? `${user.firstName}'s Agency`
-    : "My Agency";
-
+  // NO pre-filled name. This used to default to `${user.firstName}'s Agency`,
+  // which seeded ORGANISATION identity from an INDIVIDUAL: the value is written
+  // once to Agency.name and then shown, unchanged, to every other member of that
+  // agency in the app header and on the reports they share with hotels. Users
+  // accepted the default, so whole organisations ended up named after whoever
+  // signed up first. The field is now empty and required, so the name is a
+  // deliberate answer rather than an accepted suggestion — and Agency Settings
+  // can correct it afterwards (saveAgencyName), which nothing could do before.
   return (
     <main className="flex flex-1 items-center justify-center py-12">
-      <OnboardingClient
-        alreadyMember={Boolean(member)}
-        suggestedName={suggestedName}
-      />
+      <OnboardingClient alreadyMember={Boolean(member)} />
     </main>
   );
 }
