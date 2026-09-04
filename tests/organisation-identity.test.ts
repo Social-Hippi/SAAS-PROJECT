@@ -165,3 +165,36 @@ describe("4. the name is shared organisation state", () => {
     }
   });
 });
+
+// ── 5. No two KPI cards on one screen share a bare label ────────────────────
+
+describe("5. the agency dashboard does not show two bare 'ROAS' cards", () => {
+  const DASHBOARD = readCode("app/(agency)/agency/(app)/dashboard/page.tsx");
+  const ROLLUP = readCode("components/dashboard/AgencyRevenueRollup.tsx");
+
+  test("the page-level card and the rollup card are distinguishable", () => {
+    // Both figures are legitimate, but they answer different questions: the page
+    // card is a fixed 30 days classified by UTM; the rollup has its own range +
+    // hotel filter and classifies on the revenue-by-source basis (a coupon
+    // booking counts as influencer, not paid). Two identical labels showing
+    // different numbers on one screen is what destroyed confidence.
+    expect(DASHBOARD).toContain('label="ROAS"');
+    expect(ROLLUP).not.toContain('label="ROAS"');
+    expect(ROLLUP).toContain('label="ROAS · this selection"');
+  });
+
+  test("every headline KPI on the agency dashboard states what it means", () => {
+    // These cards previously carried no hint at all — unlike the hotel KPI
+    // strip, which has explained itself for some time.
+    for (const label of ["Visits", "Bookings", "Revenue", "ROAS", "Ad spend"]) {
+      const at = DASHBOARD.indexOf(`label="${label}"`);
+      expect(at, label).toBeGreaterThan(-1);
+      expect(DASHBOARD.slice(at, at + 400), label).toContain("hint");
+    }
+  });
+
+  test("the hints name the period, so the number is not undated", () => {
+    expect(DASHBOARD).toContain("Paid-channel revenue ÷ ad spend · last 30 days");
+    expect(DASHBOARD).toContain("Tracked page views · last 30 days");
+  });
+});

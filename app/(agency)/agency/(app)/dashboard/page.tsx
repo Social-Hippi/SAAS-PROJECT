@@ -52,12 +52,20 @@ function KpiCard({
   value,
   delta,
   accent = "zinc",
+  hint,
 }: {
   label: string;
   value: string;
   // Percentage change vs prior period (null = no prior data, undefined = don't render)
   delta?: number | null;
   accent?: Accent;
+  /**
+   * One line stating what the number MEANS — the same discipline the hotel KPI
+   * strip already applies (see hotel/[id]/page.tsx). These cards previously
+   * carried no explanation at all, which is how two differently-computed
+   * figures could both sit on this page under the bare label "ROAS".
+   */
+  hint?: string;
 }) {
   const a = KPI_ACCENT[accent];
   const deltaPill =
@@ -85,6 +93,7 @@ function KpiCard({
       <p className="mt-3 text-2xl font-bold tabular-nums tracking-tight text-ink lg:text-3xl">
         {value}
       </p>
+      {hint && <p className="mt-1 text-[11px] leading-snug text-ink-tertiary">{hint}</p>}
       {delta === null ? (
         <p className="mt-1 text-[11px] text-ink-disabled">No prior period</p>
       ) : delta != null && Number.isFinite(delta) ? (
@@ -428,6 +437,11 @@ export default async function AgencyDashboardPage({
             value={totalSpend == null ? "—" : formatCurrency(totalSpend)}
             delta={deltaSpend}
             accent="violet"
+            hint={
+              totalSpend == null
+                ? "Ad accounts report in different currencies"
+                : "Meta + Google · last 30 days"
+            }
           />
         </div>
       ) : (
@@ -438,24 +452,28 @@ export default async function AgencyDashboardPage({
             value={formatNumber(totals.visits)}
             delta={deltaVisits}
             accent="blue"
+            hint="Tracked page views · last 30 days"
           />
           <KpiCard
             label="Bookings"
             value={formatNumber(totals.bookings)}
             delta={deltaBookings}
             accent="amber"
+            hint="Tracked on hotel websites · last 30 days"
           />
           <KpiCard
             label="Revenue"
             value={formatCurrency(totals.revenue)}
             delta={deltaRevenue}
             accent="emerald"
+            hint="All tracked bookings · last 30 days"
           />
           <KpiCard
             label="ROAS"
             value={formatMultiple(roas)}
             delta={deltaRoas}
             accent="violet"
+            hint="Paid-channel revenue ÷ ad spend · last 30 days"
           />
         </div>
       )}
