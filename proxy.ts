@@ -90,6 +90,7 @@ const isPublicRoute = createRouteMatcher([
   // Google Ads OAuth routes
   "/api/auth/google-ads/start(.*)",
   "/api/auth/google-ads/callback(.*)",
+  "/api/google-ads/sync(.*)",
   // Daily visitor-journey 90-day retention cron, gated by CRON_SECRET in-route.
   "/api/cron/cleanup-journey(.*)",
 ]);

@@ -108,7 +108,7 @@ export function PublicReport({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <KpiCard label="Visits" value={formatNumber(kpis.visits)} />
           <KpiCard label="Bookings" value={formatNumber(kpis.bookings)} />
-          <KpiCard label="Revenue attributed" value={formatCurrency(kpis.revenue)} />
+          <KpiCard label="Tracked booking revenue" value={formatCurrency(kpis.revenue)} />
           {showAdSpend && (
             <>
               <KpiCard

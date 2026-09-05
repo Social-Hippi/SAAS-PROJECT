@@ -78,7 +78,7 @@ describe("2. every hotel-side action re-authorizes", () => {
 
   it("the gate demands manageTeam, not merely a membership", () => {
     // resolveHotelAccess alone would let a MARKETING user manage the team.
-    expect(HOTEL_ACTIONS).toMatch(/requireHotelCapability\([^)]*"manageTeam"\)/s);
+    expect(HOTEL_ACTIONS).toMatch(/requireHotelCapability\([^)]*"manageTeam"\)/);
     expect(HOTEL_ACTIONS).not.toMatch(/await resolveHotelAccess\(/);
   });
 

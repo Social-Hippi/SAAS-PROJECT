@@ -35,6 +35,11 @@ const NAV: { href: string; label: string; icon: ReactNode }[] = [
     icon: icon(<><path d="M3 21h18M5 21V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16M15 21v-9h3a1 1 0 0 1 1 1v8" /><path d="M8 7h0M11 7h0M8 11h0M11 11h0M8 15h0M11 15h0" /></>),
   },
   {
+    href: "/agency/content",
+    label: "Content",
+    icon: icon(<><path d="M4 4h16v16H4z" /><path d="M8 8h8M8 12h8M8 16h5" /></>),
+  },
+  {
     href: "/agency/influencers",
     label: "Influencers",
     icon: icon(<><path d="M12 15a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" /><path d="M4 21a8 8 0 0 1 16 0" /></>),
