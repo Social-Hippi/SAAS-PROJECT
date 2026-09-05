@@ -68,7 +68,9 @@ import {
   type BadgeState,
 } from "@/components/dashboard/IntegrationBadges";
 import type { TokenState } from "@/lib/integration-status";
-import { loadHotelStates } from "@/lib/integration-status";
+import { loadHotelStates, snippetState } from "@/lib/integration-status";
+import { trackingHealth } from "@/lib/data-health";
+import { DataHealthBanner } from "@/components/dashboard/DataHealthBanner";
 import { missingAdDays } from "@/lib/backfill";
 import { computeFunnel, stageRank, STAGE_LABEL } from "@/lib/funnel";
 import { RevenueBySource } from "@/components/dashboard/RevenueBySource";
@@ -1252,6 +1254,16 @@ export default async function HotelDashboardPage({
   const funnelSummary = computeFunnel({ reachedByRank: funnelReachedByRank, revenue: 0 });
   const funnelHasData = (funnelSummary.stages[0]?.visitors ?? 0) > 0;
 
+  // The same verdict the hotel sees on its own dashboard, computed from the same
+  // inputs by the same function — so the agency is never looking at a healthy
+  // page while its client is being told their tracking has stopped. The wording
+  // differs (this audience can fix it); the judgement does not.
+  const tracking = trackingHealth({
+    snippet: snippetState(hotel.snippetStatus, hotel.lastEventAt),
+    lastEventAt: hotel.lastEventAt,
+    hasEventsInWindow: funnelHasData,
+  });
+
   // Influencer Performance (Phase R2) — per-influencer redemptions + revenue for
   // this hotel over the selected range. Not pixel-gated (coupon redemptions exist
   // independently of snippet/Pixel mode, incl. manual entries).
@@ -1348,6 +1360,11 @@ export default async function HotelDashboardPage({
           { name: "GA4", state: ga4Dashboard.connected ? "connected" : "disconnected" },
         ]}
       />
+
+      {/* Tracking health — the snippet is the source of every visit, booking and
+          revenue figure below, so its state is reported before the integrations
+          that only feed part of the picture. */}
+      <DataHealthBanner health={tracking} audience="agency" />
 
       {/* Integration health banner — only when something is broken or expired */}
       {integrationStatus.anyBrokenOrExpired && (

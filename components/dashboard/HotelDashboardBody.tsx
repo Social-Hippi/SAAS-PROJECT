@@ -12,6 +12,9 @@ import { ChannelView } from "@/components/dashboard/ChannelView";
 import { RevenueBySource } from "@/components/dashboard/RevenueBySource";
 import { CommissionSavings } from "@/components/dashboard/CommissionSavings";
 import { ContactAgencyCard } from "@/components/agency/ContactAgencyCard";
+import { DataHealthBanner } from "@/components/dashboard/DataHealthBanner";
+import { snippetState } from "@/lib/integration-status";
+import { trackingHealth } from "@/lib/data-health";
 
 // Shared, full-depth hotel dashboard body. Rendered IDENTICALLY by two surfaces:
 //   • the logged-in hotel-owner dashboard (/hotel/[id]/dashboard) — Clerk auth
@@ -102,6 +105,14 @@ export type HotelDashboardBodyProps = {
   agencyId: string;
   agencyName: string;
   snippetStatus: string;
+  /**
+   * Newest tracked event of any kind, ever. Null = nothing has ever arrived.
+   *
+   * Required rather than optional: it is what separates "installed but never
+   * worked" from "worked, then went silent", and a caller that forgets it would
+   * silently collapse those two into the reassuring one.
+   */
+  lastEventAt: Date | null;
   lastSyncedAt: Date | null;
   /** Agency contact details for the (read-only) ContactAgencyCard. */
   agencyContact: React.ComponentProps<typeof ContactAgencyCard>["contact"];
@@ -137,6 +148,7 @@ export async function HotelDashboardBody({
   agencyId,
   agencyName,
   snippetStatus,
+  lastEventAt,
   lastSyncedAt,
   agencyContact,
   basePath,
@@ -152,7 +164,6 @@ export async function HotelDashboardBody({
   editSlot,
 }: HotelDashboardBodyProps) {
   const range = resolveRange({ range: rangeParam, from: fromParam, to: toParam });
-  const installed = snippetStatus === "installed";
 
   // ── Channel deep-dive view (Meta Ads / Instagram / Influencer / …) ──
   const channel: ChannelKey = isChannelKey(channelParam) ? channelParam : "all";
@@ -184,6 +195,23 @@ export async function HotelDashboardBody({
   const journey = await loadJourneyPreview(
     agencyId, hotelId, range.since, range.until, canViewGuestDetails,
   );
+
+  // "Can I trust the numbers below?" — one verdict, from the signals the app
+  // already records. Computed here rather than above because it needs to know
+  // whether the window on screen contained any activity: a hotel that is still
+  // sending visits but recorded nothing this week is a real zero, while one that
+  // has gone silent for days is a measurement failure wearing the same "0".
+  //
+  // This replaces a test against the snippetStatus value "installed", which
+  // nothing in the codebase ever writes (the tracker writes "live", alerts write
+  // "error", the default is "not_installed"). Every hotel therefore failed it —
+  // so a hotel whose tracking had worked for months was still being told, on
+  // every load, to finish setting it up.
+  const tracking = trackingHealth({
+    snippet: snippetState(snippetStatus, lastEventAt),
+    lastEventAt,
+    hasEventsInWindow: journey.funnelHasData,
+  });
 
   function rangeHref(key: string): string {
     return key === "30" ? basePath : `${basePath}?range=${key}`;
@@ -222,15 +250,10 @@ export async function HotelDashboardBody({
         </div>
       )}
 
-      {!installed && (
-        <section className="rounded-card border border-warning/40 bg-warning/10 p-4 sm:p-5">
-          <h2 className="font-medium text-ink">Finish setup: install your tracking snippet</h2>
-          <p className="mt-1 text-sm text-ink-secondary">
-            Your dashboard fills in once your website is sending visits. Ask {agencyName} if you
-            need help getting the tracking snippet installed.
-          </p>
-        </section>
-      )}
+      {/* Silent while tracking is healthy — including when a real zero is a real
+          zero. It speaks up only when a figure below would otherwise be read as
+          a business result when it is actually a measurement gap. */}
+      <DataHealthBanner health={tracking} audience="hotel" agencyName={agencyName} />
 
       {/* Plain-English performance summary (own period toggle). */}
       <OwnerSummaryCard hotelId={hotelId} apiBase={apiBase} shareToken={shareToken} />

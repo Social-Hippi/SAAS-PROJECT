@@ -76,6 +76,7 @@ export default async function HotelOwnerDashboard({
       agencyId={hotel.agencyId}
       agencyName={hotel.agency.name}
       snippetStatus={hotel.snippetStatus}
+      lastEventAt={hotel.lastEventAt}
       lastSyncedAt={hotel.lastSyncedAt}
       agencyContact={hotel.agency}
       basePath={`/hotel/${hotel.id}/dashboard`}
