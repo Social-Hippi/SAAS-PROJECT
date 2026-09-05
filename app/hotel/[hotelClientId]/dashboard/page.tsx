@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { resolveHotelForViewer } from "@/lib/hotel-auth";
 import { HotelDashboardBody } from "@/components/dashboard/HotelDashboardBody";
@@ -46,7 +47,7 @@ export default async function HotelOwnerDashboard({
   const sp = await searchParams;
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
-  const editSlot =
+  const detailsSection =
     canEdit ? (
       <section className="overflow-hidden rounded-2xl border border-line bg-card">
         <div className="border-b border-line px-4 py-3 sm:px-5">
@@ -69,6 +70,28 @@ export default async function HotelOwnerDashboard({
       </section>
     ) : null;
 
+  // Two capabilities, asked separately. They happen to belong to the same role
+  // today, but manageHotelSettings ("change this hotel's details") and manageTeam
+  // ("decide who else gets in") are different powers, and collapsing them here
+  // would quietly make a future role that has one appear to have both.
+  const ownerSlot =
+    detailsSection || viewer.can("manageTeam") ? (
+      <div className="space-y-4">
+        {detailsSection}
+        {viewer.can("manageTeam") && (
+          <p className="text-sm text-ink-tertiary">
+            Need to give someone else at {hotel.name} access?{" "}
+            <Link
+              href={`/hotel/${hotel.id}/team`}
+              className="font-medium text-brand hover:underline"
+            >
+              Manage people
+            </Link>
+          </p>
+        )}
+      </div>
+    ) : null;
+
   return (
     <HotelDashboardBody
       hotelId={hotel.id}
@@ -88,7 +111,7 @@ export default async function HotelOwnerDashboard({
       showRestrictedNotice={one(sp.notice) === "agency-restricted"}
       channelBackLabel="← My Dashboard"
       canViewGuestDetails={viewer.can("viewGuestDetails")}
-      editSlot={editSlot}
+      ownerSlot={ownerSlot}
     />
   );
 }

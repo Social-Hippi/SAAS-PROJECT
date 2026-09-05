@@ -50,9 +50,22 @@ export async function inviteHotelUser(args: {
   hotelClientId: string;
   rawEmail: string;
   role: HotelRole;
-  invitedByAgencyMemberId: string;
+  /**
+   * Which AGENCY member issued this, or null when the hotel invited its own
+   * person. Nullable rather than a fabricated id: an owner adding their GM is
+   * not an agency action, and recording it as one would put a false name on the
+   * audit trail. The column has always been optional; this is the case it was
+   * optional for.
+   */
+  invitedByAgencyMemberId: string | null;
   hotelName: string;
-  agencyName: string;
+  /**
+   * The name the invitation is signed with — the agency when the agency sends
+   * it, the hotel when the hotel sends its own. Required rather than defaulted
+   * to the agency: an email apparently from an agency that did not send it is a
+   * small dishonesty, and a default is how one gets shipped by accident.
+   */
+  invitedByLabel: string;
 }): Promise<InviteResult> {
   const scoped = <D>(m: D) => agencyScopedFor(args.agencyId, m);
 
@@ -103,7 +116,7 @@ export async function inviteHotelUser(args: {
     to: email,
     token,
     hotelName: args.hotelName,
-    agencyName: args.agencyName,
+    invitedByLabel: args.invitedByLabel,
     role: args.role,
   });
 
@@ -114,15 +127,16 @@ async function sendHotelInviteEmail(opts: {
   to: string;
   token: string;
   hotelName: string;
-  agencyName: string;
+  /** The name the recipient will recognise — their agency, or their own hotel. */
+  invitedByLabel: string;
   role: HotelRole;
 }): Promise<void> {
   const url = `${APP_URL}/hotel-invite/${opts.token}`;
   const html = renderEmail({
     heading: `You've been given access to ${opts.hotelName}`,
-    preheader: `${opts.agencyName} has invited you to view ${opts.hotelName} on HotelTrack.`,
+    preheader: `${opts.invitedByLabel} has invited you to view ${opts.hotelName} on HotelTrack.`,
     bodyHtml:
-      lead(`<strong>${esc(opts.agencyName)}</strong> has invited you to HotelTrack.`) +
+      lead(`<strong>${esc(opts.invitedByLabel)}</strong> has invited you to HotelTrack.`) +
       p(
         `You'll be able to see how ${esc(opts.hotelName)} is performing — where guests are coming from, which marketing is working, and what it's producing.`,
       ) +
@@ -133,7 +147,7 @@ async function sendHotelInviteEmail(opts: {
 
   await sendEmail({
     to: opts.to,
-    subject: `${opts.agencyName} invited you to view ${opts.hotelName}`,
+    subject: `${opts.invitedByLabel} invited you to view ${opts.hotelName}`,
     html,
   });
 }
@@ -150,15 +164,61 @@ export async function revokeHotelInvite(args: {
   return { ok: res.count > 0 };
 }
 
-/** Remove a person's access to a hotel. */
+/**
+ * A refusal is a CODE, not a sentence.
+ *
+ * The hotel surface has to get this across a redirect to re-render the page, and
+ * a message carried in a query string is a message an attacker can write: a
+ * crafted link would put arbitrary text on our page in our voice. The code is
+ * from a closed set and the wording lives on the page.
+ */
+export type RemoveRefusal = "last_owner" | "not_found";
+
+export type RemoveResult = { ok: true } | { ok: false; reason: RemoveRefusal };
+
+/**
+ * Remove a person's access to a hotel.
+ *
+ * `requireRemainingOwner` exists because the two callers are in genuinely
+ * different positions, and collapsing them would be wrong in one direction or
+ * the other:
+ *
+ *   • A HOTEL owner managing their own team passes true. Removing the last owner
+ *     from the hotel side is a door that locks from the inside — the person
+ *     doing it is the only one who could undo it, and afterwards nobody at the
+ *     hotel can invite anyone. They are told to add another owner first.
+ *
+ *   • The AGENCY passes false. An agency revoking every hotel login is a
+ *     legitimate thing to do (an account closes, a contract ends), it does not
+ *     lock the agency out of anything, and the agency can re-invite at will.
+ *     Blocking it would be protecting them from a decision that is theirs.
+ */
 export async function removeHotelMember(args: {
   agencyId: string;
   memberId: string;
-}): Promise<{ ok: boolean }> {
-  const res = await agencyScopedFor(args.agencyId, prisma.hotelMember).deleteMany({
+  requireRemainingOwner: boolean;
+}): Promise<RemoveResult> {
+  const scoped = <D>(m: D) => agencyScopedFor(args.agencyId, m);
+
+  if (args.requireRemainingOwner) {
+    const target = await scoped(prisma.hotelMember).findFirst({
+      where: { id: args.memberId },
+      select: { hotelClientId: true, role: true },
+    });
+    if (!target) return { ok: false, reason: "not_found" };
+
+    if (target.role === "hotel_owner") {
+      const owners = await scoped(prisma.hotelMember).count({
+        where: { hotelClientId: target.hotelClientId, role: "hotel_owner" },
+      });
+      if (owners <= 1) return { ok: false, reason: "last_owner" };
+    }
+  }
+
+  const res = await scoped(prisma.hotelMember).deleteMany({
     where: { id: args.memberId },
   });
-  return { ok: res.count > 0 };
+  return res.count > 0 ? { ok: true } : { ok: false, reason: "not_found" };
 }
 
 export type AcceptOutcome =
@@ -252,6 +312,13 @@ export async function acceptHotelInvite(args: {
     role: row.role,
   };
 }
+
+/** What each refusal means to the person who clicked. Rendered by the page. */
+export const REMOVE_REFUSAL_MESSAGE: Record<RemoveRefusal, string> = {
+  last_owner:
+    "This is the hotel's only owner. Invite another owner first, then remove this one.",
+  not_found: "That person no longer has access — the list may have been out of date.",
+};
 
 export type HotelTeamRow = {
   kind: "member" | "invite";

@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { isHotelRole } from "@/lib/hotel-capabilities";
 import { inviteHotelUser, removeHotelMember, revokeHotelInvite } from "@/lib/hotel-team";
+import type { TeamActionState } from "@/lib/hotel-team-result";
 
 // Agency-side management of who can see a hotel.
 //
@@ -19,7 +20,7 @@ import { inviteHotelUser, removeHotelMember, revokeHotelInvite } from "@/lib/hot
 // nothing when it belongs to another agency and the action reports "not found"
 // rather than acting on it.
 
-export type TeamActionState = { ok: boolean; error?: string; notice?: string };
+export type { TeamActionState } from "@/lib/hotel-team-result";
 
 /** The hotel, but only if it belongs to the caller's agency. */
 async function ownedHotel(hotelClientId: string) {
@@ -54,7 +55,7 @@ export async function inviteHotelUserAction(
     role,
     invitedByAgencyMemberId: member.id,
     hotelName: hotel.name,
-    agencyName: member.agency.name,
+    invitedByLabel: member.agency.name,
   });
 
   if (!result.ok) return { ok: false, error: result.error };
@@ -84,6 +85,10 @@ export async function removeHotelMemberAction(formData: FormData): Promise<void>
   const memberId = String(formData.get("memberId") ?? "").trim();
   const hotelClientId = String(formData.get("hotelClientId") ?? "").trim();
   if (!memberId) return;
-  await removeHotelMember({ agencyId: member.agencyId, memberId });
+  // requireRemainingOwner: false — an agency revoking every hotel login is a
+  // legitimate decision that locks nobody out of anything the agency needs, and
+  // it can re-invite at will. The hotel's own surface passes true; see
+  // removeHotelMember for why the two callers differ.
+  await removeHotelMember({ agencyId: member.agencyId, memberId, requireRemainingOwner: false });
   revalidatePath(`/agency/hotel/${hotelClientId}/team`);
 }

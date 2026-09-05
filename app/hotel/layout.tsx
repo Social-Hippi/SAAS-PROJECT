@@ -3,9 +3,11 @@ import {
   AppSidebar,
   AppMobileNav,
   IconDashboard,
+  IconPeople,
   type NavItem,
 } from "@/components/nav/AppSidebar";
 import { listHotelMembershipsForCurrentUser } from "@/lib/hotel-access";
+import { can } from "@/lib/hotel-capabilities";
 
 // Shell for the hotel-side product. No agency navigation: a hotel user sees
 // their own property (or properties) and nothing about the agency's other
@@ -39,6 +41,21 @@ export default async function HotelLayout({ children }: { children: React.ReactN
         },
       ]
     : [];
+
+  // "People" is per-hotel, so it only makes sense in the sidebar when there is
+  // exactly one hotel to mean. Someone holding several reaches it from whichever
+  // dashboard they are on — a global link would have to pick a property for them
+  // and would be wrong for the other ones.
+  //
+  // The condition is the same predicate the page's guard uses, so the nav cannot
+  // offer a link the gate would answer with a 404.
+  if (primary && memberships.length === 1 && can(primary.role, "manageTeam")) {
+    navItems.push({
+      href: `/hotel/${primary.hotelClientId}/team`,
+      label: "People",
+      icon: IconPeople,
+    });
+  }
 
   return (
     <div className="flex min-h-full">

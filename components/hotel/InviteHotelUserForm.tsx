@@ -2,21 +2,43 @@
 
 import { useActionState, useState } from "react";
 import {
-  HOTEL_ROLES,
   HOTEL_ROLE_DESCRIPTION,
   HOTEL_ROLE_LABEL,
   type HotelRole,
 } from "@/lib/hotel-capabilities";
-import { inviteHotelUserAction, type TeamActionState } from "./actions";
+import type { TeamActionState } from "@/lib/hotel-team-result";
+
+// One invite form, two authorization paths.
+//
+// The agency surface and the hotel's own surface differ in WHO may submit and in
+// what the server does with it — not in what the person fills in. The action is
+// therefore a prop: each page binds its own server action, and neither can be
+// mistaken for the other because neither is chosen here.
+//
+// This component holds no authorization logic of any kind. A server action is a
+// POST endpoint; the page that renders this form has already been gated, and the
+// action re-checks independently. Hiding a form is not access control, so this
+// file does not pretend to do any.
 
 const initialState: TeamActionState = { ok: false };
 
 const inputCls =
   "w-full rounded-lg border border-line-strong bg-page px-3 py-2 text-sm text-ink placeholder:text-ink-disabled outline-none focus:border-brand focus:ring-1 focus:ring-brand";
 
-export function InviteForm({ hotelClientId }: { hotelClientId: string }) {
-  const [state, formAction, pending] = useActionState(inviteHotelUserAction, initialState);
-  const [role, setRole] = useState<HotelRole>("hotel_owner");
+export function InviteHotelUserForm({
+  hotelClientId,
+  action,
+  roles,
+  defaultRole,
+}: {
+  hotelClientId: string;
+  action: (prev: TeamActionState, formData: FormData) => Promise<TeamActionState>;
+  /** Which access levels this caller may grant. Enforced again server-side. */
+  roles: readonly HotelRole[];
+  defaultRole: HotelRole;
+}) {
+  const [state, formAction, pending] = useActionState(action, initialState);
+  const [role, setRole] = useState<HotelRole>(defaultRole);
 
   return (
     <form action={formAction} className="space-y-4">
@@ -31,7 +53,7 @@ export function InviteForm({ hotelClientId }: { hotelClientId: string }) {
           name="email"
           type="email"
           required
-          placeholder="owner@hotel.com"
+          placeholder="name@hotel.com"
           autoComplete="off"
           aria-invalid={state.error ? true : undefined}
           aria-describedby={state.error ? "invite-error" : undefined}
@@ -45,7 +67,7 @@ export function InviteForm({ hotelClientId }: { hotelClientId: string }) {
             line of explanation. A dropdown would hide the difference at exactly
             the moment the person is deciding. */}
         <div className="mt-2 space-y-2">
-          {HOTEL_ROLES.map((r) => (
+          {roles.map((r) => (
             <label
               key={r}
               className={`flex cursor-pointer gap-3 rounded-button border p-3 transition ${

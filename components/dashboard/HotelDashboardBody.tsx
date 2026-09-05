@@ -26,8 +26,10 @@ import { trackingHealth } from "@/lib/data-health";
 // component itself never reads a Clerk session — the page above it has already
 // resolved the hotel (by session or by token) and hands down only display data.
 //
-// Owner-only chrome (the editable hotel-details form) is injected via `editSlot`,
-// so the share link literally cannot render an edit affordance.
+// Viewer-specific chrome (the editable hotel-details form, the link to People)
+// is injected via `ownerSlot`. What a viewer may do is a capability question,
+// and the PAGE is where capabilities were resolved — so the page composes that
+// slot and this body asks no permission questions of its own.
 
 const RANGE_PRESETS = [
   { key: "7", label: "7d" },
@@ -138,8 +140,12 @@ export type HotelDashboardBodyProps = {
    * visible either way — it is aggregate counts, not individual visitors.
    */
   canViewGuestDetails: boolean;
-  /** Owner-only editable section (hotel details). Never passed on the share link. */
-  editSlot?: React.ReactNode;
+  /**
+   * Controls that only some viewers get — the editable hotel-details form, the
+   * link to People. Composed by the page from the same capabilities its guards
+   * used, so a rendered control and a permitted action can never disagree.
+   */
+  ownerSlot?: React.ReactNode;
 };
 
 export async function HotelDashboardBody({
@@ -161,7 +167,7 @@ export async function HotelDashboardBody({
   showRestrictedNotice = false,
   channelBackLabel = "← Dashboard",
   canViewGuestDetails,
-  editSlot,
+  ownerSlot,
 }: HotelDashboardBodyProps) {
   const range = resolveRange({ range: rangeParam, from: fromParam, to: toParam });
 
@@ -370,7 +376,7 @@ export async function HotelDashboardBody({
       <ContactAgencyCard agencyName={agencyName} contact={agencyContact} canEdit={false} viewerIsAgency={false} />
 
       {/* Owner-only editable details (never rendered on the public share link). */}
-      {editSlot}
+      {ownerSlot}
     </div>
   );
 }
