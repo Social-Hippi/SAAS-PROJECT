@@ -13,7 +13,7 @@ import { AgencySavings } from "@/components/dashboard/AgencySavings";
 import { GlowCard } from "@/components/ui/spotlight-card";
 import { isPixelMode } from "@/lib/tracking-mode";
 import { getSpendByPlatformForHotels, safeRoas } from "@/lib/ad-spend";
-import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
+import { isPaidRow, paidRevenueOf } from "@/lib/metrics/canonical";
 import {
   formatCurrency,
   formatMultiple,
@@ -287,7 +287,7 @@ export default async function AgencyDashboardPage({
       m.revenue += v;
       dayRow.bookings += 1;
       dayRow.revenue += v;
-      if (isPaidSourceType(classifySourceType(e))) paidRevenue += v;
+      if (isPaidRow({ ...e, value: v })) paidRevenue += v;
     }
     perHotel.set(e.hotelClientId, m);
     perDay.set(day, dayRow);
@@ -323,15 +323,10 @@ export default async function AgencyDashboardPage({
       prior.revenue += Number(g._sum.conversionValue ?? 0);
     }
   }
-  const priorPaidRevenue = priorConversions.reduce(
-    (sum, c) =>
-      sum +
-      (dashboardHotelIdSet.has(c.hotelClientId) &&
-      isPaidSourceType(classifySourceType(c)) &&
-      c.conversionValue != null
-        ? Number(c.conversionValue)
-        : 0),
-    0,
+  const priorPaidRevenue = paidRevenueOf(
+    priorConversions
+      .filter((c) => dashboardHotelIdSet.has(c.hotelClientId))
+      .map((c) => ({ ...c, value: c.conversionValue == null ? 0 : Number(c.conversionValue) })),
   );
   const priorRoas = safeRoas(priorPaidRevenue, priorPaidSpend.total);
 

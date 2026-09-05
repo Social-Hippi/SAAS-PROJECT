@@ -2,12 +2,8 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
-import {
-  classifySourceType,
-  isPaidSourceType,
-  SOURCE_TYPE_LABEL,
-  type SourceType,
-} from "@/lib/source-classifier";
+import { SOURCE_TYPE_LABEL, type SourceType } from "@/lib/source-classifier";
+import { canonicalSourceType, isPaidRow, paidBookingsOf } from "@/lib/metrics/canonical";
 import { getSpendByPlatform, safeRoas } from "@/lib/ad-spend";
 import type { ClickIds } from "@/lib/click-ids";
 import { formatDuration } from "@/lib/format";
@@ -103,7 +99,7 @@ export async function calculateCostPerBooking(
   ]);
 
   const bookings = conversions.length;
-  const paidBookings = conversions.filter((c) => isPaidSourceType(classifySourceType(c))).length;
+  const paidBookings = paidBookingsOf(conversions.map((c) => ({ ...c, value: 0 })));
   const totalSpend = spend.total;
 
   return {
@@ -164,7 +160,7 @@ export async function calculateROAS(
   for (const c of conversions) {
     const value = num(c.conversionValue);
     totalRevenue += value;
-    const type = classifySourceType(c);
+    const type = canonicalSourceType({ ...c, value });
     if (type === "meta_ads") metaRevenue += value;
     else if (type === "google_ads") googleRevenue += value;
   }
@@ -221,10 +217,10 @@ type AdSessionRow = Required<ClickIds> & {
   utmMedium: string | null;
 };
 
-const isPaidAdSession = (s: AdSessionRow): boolean => {
-  const t = classifySourceType(s);
-  return t === "meta_ads" || t === "google_ads";
-};
+const isPaidAdSession = (s: AdSessionRow): boolean =>
+  // A session carries no revenue; value is the row shape's required field, not
+  // a figure being reported.
+  isPaidRow({ ...s, value: 0 });
 
 export async function calculateNewVsReturningFromAds(
   hotelClientId: string,
@@ -235,7 +231,7 @@ export async function calculateNewVsReturningFromAds(
     where: { hotelClientId, startedAt: { gte: startDate, lte: endDate } },
     select: {
       visitorId: true, utmSource: true, utmMedium: true,
-      // Required by classifySourceType — an auto-tagged Google session carries a
+      // Required by canonicalSourceType — an auto-tagged Google session carries a
       // gclid and no utm, so without these it is not counted as an ad session.
       gclid: true, gbraid: true, wbraid: true, fbclid: true,
     },
@@ -433,7 +429,7 @@ export async function calculateTopCampaigns(
     const name = (c.utmCampaign ?? "").trim();
     if (!name) continue; // no campaign → excluded from this table (the "Direct" bucket)
     const key = name.toLowerCase();
-    const type = classifySourceType(c);
+    const type = canonicalSourceType({ ...c, value: num(c.conversionValue) });
     const source: TopCampaign["source"] =
       type === "meta_ads" ? "meta" : type === "google_ads" ? "google" : "other";
     const row = byCampaign.get(key) ?? { campaignName: name, revenue: 0, bookings: 0, source };
@@ -484,7 +480,7 @@ export async function calculateBookingsBySource(
     where: { hotelClientId, eventType: "conversion", createdAt: { gte: startDate, lte: endDate } },
     select: {
       conversionValue: true, utmSource: true, utmMedium: true, utmContent: true,
-      // Required by classifySourceType. Omitting these made an auto-tagged
+      // Required by canonicalSourceType. Omitting these made an auto-tagged
       // Google booking read as `direct` HERE while calculateROAS (which does
       // select them) counted the same booking as google_ads — the same
       // /owner-metrics payload contradicted itself.
@@ -495,8 +491,8 @@ export async function calculateBookingsBySource(
   let totalRevenue = 0;
   let totalBookings = 0;
   for (const c of conversions) {
-    const type = classifySourceType(c);
     const value = num(c.conversionValue);
+    const type = canonicalSourceType({ ...c, value });
     const row = byType.get(type) ?? { revenue: 0, bookings: 0 };
     row.revenue += value;
     row.bookings += 1;

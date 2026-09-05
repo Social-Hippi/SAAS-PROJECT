@@ -214,22 +214,27 @@ describe("4. classifier callers pass whole rows, never a hand-picked subset", ()
   test("owner-summary channelRev passes the row (it used to drop the click ids)", () => {
     // The regression was `classifySourceType({ utmSource: r.utmSource, ... })` —
     // a literal that satisfied the old optional type while discarding columns
-    // the query had already fetched.
-    expect(OWNER_SUMMARY).toContain("classifySourceType(r) === channel");
+    // the query had already fetched. The classifier is canonicalSourceType now;
+    // the rule it enforces — pass the WHOLE row — is unchanged.
+    expect(OWNER_SUMMARY).toContain("canonicalSourceType(r) === channel");
   });
 
   test("no production classifier call rebuilds a partial literal from a row", () => {
     // Matches `classifySourceType({ utmSource: <expr>.utmSource` — i.e. an
     // object literal assembled FROM a row rather than the row itself. A literal
     // built from scratch (tests, snippet fixtures) is fine; this pattern is not.
-    const sources: [string, string][] = [
-      ["lib/owner-metrics.ts", OWNER_METRICS],
-      ["lib/owner-summary.ts", OWNER_SUMMARY],
-      ["lib/channel-view.ts", CHANNEL_VIEW],
-      ["lib/report-pdf.ts", REPORT_PDF],
+    // The function named per file is the one that file actually calls: the
+    // migrated revenue paths now go through canonicalSourceType, while
+    // channel-view and report-pdf still call classifySourceType directly.
+    // Checking the wrong name would assert nothing.
+    const sources: [string, string, string][] = [
+      ["lib/owner-metrics.ts", OWNER_METRICS, "canonicalSourceType"],
+      ["lib/owner-summary.ts", OWNER_SUMMARY, "canonicalSourceType"],
+      ["lib/channel-view.ts", CHANNEL_VIEW, "classifySourceType"],
+      ["lib/report-pdf.ts", REPORT_PDF, "classifySourceType"],
     ];
-    for (const [name, src] of sources) {
-      expect(src, name).not.toMatch(/classifySourceType\(\{\s*utmSource:\s*\w+\./);
+    for (const [name, src, fn] of sources) {
+      expect(src, name).not.toMatch(new RegExp(`${fn}\\(\\{\\s*utmSource:\\s*\\w+\\.`));
     }
   });
 });

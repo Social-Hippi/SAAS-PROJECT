@@ -4,8 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { aggregateRevenueBySource, type ConversionRow } from "@/lib/revenue-by-source";
 import { calculateSavings, DEFAULT_OTA_RATE } from "@/lib/savings";
-import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
-import { rowSourceType } from "@/lib/revenue-by-source";
+import { canonicalSourceType, paidRevenueOf } from "@/lib/metrics/canonical";
 import { getSpendByPlatform, safeRoas } from "@/lib/ad-spend";
 import { formatCurrency, formatNumber } from "@/lib/format";
 import { templateFor, renderTemplate, type Pattern, type Period } from "@/lib/summary-templates";
@@ -172,10 +171,7 @@ export async function generateSummary(hotelClientId: string, period: Period): Pr
   // revenue (direct, organic, influencer…) ÷ Meta-only spend, narrated to hotel
   // owners as "₹x back for every ₹1 spent" — the most misleading form of the bug.
   const adSpend = paidSpend.total ?? 0;
-  const paidRevenue = curRows.reduce(
-    (s, r) => s + (isPaidSourceType(rowSourceType(r)) ? r.value : 0),
-    0,
-  );
+  const paidRevenue = paidRevenueOf(curRows);
   const roas = safeRoas(paidRevenue, paidSpend.total);
   const savings = calculateSavings(revenue, otaRate);
   const visitsChangePct = pct(visitsCur, visitsPrev);
@@ -204,7 +200,7 @@ export async function generateSummary(hotelClientId: string, period: Period): Pr
     // query already selects, so an auto-tagged Google booking was counted as
     // `direct` here while paidRevenue (which classifies the full row) counted it
     // as google_ads — this file contradicted itself.
-    const rows = curRows.filter((r) => classifySourceType(r) === channel);
+    const rows = curRows.filter((r) => canonicalSourceType(r) === channel);
     return { revenue: rows.reduce((s, r) => s + r.value, 0), bookings: rows.length };
   };
   const meta = channelRev("meta_ads");

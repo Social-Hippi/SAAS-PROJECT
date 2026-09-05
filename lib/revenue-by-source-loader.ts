@@ -8,7 +8,8 @@ import {
   type ConversionRow,
   type Granularity,
 } from "@/lib/revenue-by-source";
-import { classifySourceType, type SourceType } from "@/lib/source-classifier";
+import type { SourceType } from "@/lib/source-classifier";
+import { canonicalSourceType } from "@/lib/metrics/canonical";
 
 // Shared "Revenue by Source" compute, used by BOTH the agency route
 // (/api/agency/hotels/[hotelId]/revenue-by-source) and the hotel-owner route
@@ -103,12 +104,11 @@ export async function computeRevenueBySource(args: {
 
   const rows = [...trackingRows, ...manualRows];
 
-  // A row's effective source type is coupon-aware (influencer wins over UTM) so the
-  // chip filter agrees with the aggregation.
-  const effectiveType = (r: ConversionRow) =>
-    r.couponCode && r.couponCode.trim() ? ("influencer" as const) : classifySourceType(r);
-
-  const filtered = sourceTypeFilter ? rows.filter((r) => sourceTypeFilter.has(effectiveType(r))) : rows;
+  // One classifier, shared with the aggregation below, so the chip filter can
+  // never select a type the groups then disagree about.
+  const filtered = sourceTypeFilter
+    ? rows.filter((r) => sourceTypeFilter.has(canonicalSourceType(r)))
+    : rows;
   const result = aggregateRevenueBySource(filtered, granularity, { start, end });
 
   return {

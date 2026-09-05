@@ -1,5 +1,6 @@
 import { normalizeSource, normalizeMedium, normalizeCampaign } from "./utm-normalize";
-import { classifySourceType, type SourceType } from "./source-classifier";
+import type { SourceType } from "./source-classifier";
+import { canonicalSourceType } from "./metrics/canonical";
 import type { ClickIds } from "./click-ids";
 
 // Revenue-by-source aggregation — pure, no DB, no "server-only", so the API
@@ -40,12 +41,6 @@ export const INFLUENCER_SOURCE = "influencer";
  *  source). Matches the group key at `source` granularity. */
 export function rowSourceKey(row: ConversionRow): string {
   return row.couponCode && row.couponCode.trim() ? INFLUENCER_SOURCE : normalizeSource(row.utmSource);
-}
-
-/** A row's effective source TYPE (coupon ⇒ influencer, else classified by UTM).
- *  Used by the source-type chip filter so it agrees with the aggregation. */
-export function rowSourceType(row: ConversionRow): SourceType {
-  return row.couponCode && row.couponCode.trim() ? "influencer" : classifySourceType(row);
 }
 
 export type RevenueGroup = {
@@ -148,7 +143,11 @@ export function aggregateRevenueBySource(
     const source = isInfluencer ? INFLUENCER_SOURCE : normalizeSource(row.utmSource);
     const medium = isInfluencer ? coupon : normalizeMedium(row.utmMedium);
     const campaign = isInfluencer ? coupon : normalizeCampaign(row.utmCampaign);
-    const sourceType = isInfluencer ? "influencer" : classifySourceType(row);
+    // Grouping still keys on the coupon (above) so an influencer's bookings stay
+    // under their code. The TYPE is canonical, which differs on one row shape:
+    // a coupon used on a PAID click is meta_ads/google_ads, not influencer, so
+    // the spend that bought it can be reconciled against it.
+    const sourceType = canonicalSourceType(row);
     const value = Number.isFinite(row.value) && row.value > 0 ? row.value : 0;
     const dayKey = row.occurredAt.toISOString().slice(0, 10);
     const di = dayIndex.get(dayKey);

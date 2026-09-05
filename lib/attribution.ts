@@ -11,7 +11,7 @@
 // events are exactly those whose utm_content === `ht-<contentPieceId>`.
 
 import { UTM_CONTENT_PREFIX } from "@/lib/utm";
-import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
+import { paidBookingsOf, paidRevenueOf, type CanonicalRow } from "@/lib/metrics/canonical";
 import type { ClickIds } from "@/lib/click-ids";
 
 const DAY_MS = 86_400_000;
@@ -198,9 +198,8 @@ export function computeKpis(events: EventInput[], spend: PaidSpendInput): Kpis {
   let visits = 0;
   let bookings = 0;
   let revenue = 0;
-  let paidRevenue = 0;
-  let paidBookings = 0;
 
+  const conversions: CanonicalRow[] = [];
   for (const e of events) {
     if (e.eventType === "visit") {
       visits += 1;
@@ -209,11 +208,11 @@ export function computeKpis(events: EventInput[], spend: PaidSpendInput): Kpis {
     const value = e.conversionValue ?? 0;
     bookings += 1;
     revenue += value;
-    if (isPaidSourceType(classifySourceType(e))) {
-      paidBookings += 1;
-      paidRevenue += value;
-    }
+    conversions.push({ ...e, value });
   }
+
+  const paidRevenue = paidRevenueOf(conversions);
+  const paidBookings = paidBookingsOf(conversions);
 
   const paidSpend = spend.total;
   const divisible = paidSpend != null && paidSpend > 0;

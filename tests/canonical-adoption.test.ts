@@ -1,13 +1,9 @@
 import { describe, expect, test } from "vitest";
 
 import { readCode } from "./helpers/read-code";
-import {
-  NO_CLICK_IDS,
-  classifySourceType,
-  isPaidSourceType,
-} from "@/lib/source-classifier";
-import { rowSourceType, type ConversionRow } from "@/lib/revenue-by-source";
-import { canonicalSourceType, isPaidRow } from "@/lib/metrics/canonical";
+import { NO_CLICK_IDS } from "@/lib/source-classifier";
+import { aggregateRevenueBySource, type ConversionRow } from "@/lib/revenue-by-source";
+import { canonicalSourceType, isPaidRow, paidRevenueOf } from "@/lib/metrics/canonical";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CANONICAL ADOPTION — the migration this suite exists to force.
@@ -18,10 +14,10 @@ import { canonicalSourceType, isPaidRow } from "@/lib/metrics/canonical";
 // two functions it replaces are still live across nine files that disagree with
 // each other about the same booking.
 //
-// Part 1 pins the disagreement as it behaves TODAY, so the migration cannot be
-// declared done while the two answers still differ.
-// Part 2 is the adoption gate. It FAILS until every listed file stops deciding
-// paid-ness or summing revenue through the legacy classifiers.
+// Part 1 pins the behaviour the migration bought: one classifier, one answer,
+// with grouping and type answering their own separate questions.
+// Part 2 is the adoption gate — no listed file may decide paid-ness or sum
+// revenue through the legacy classifiers again.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Part 1 · The behavioural defect ──────────────────────────────────────────
@@ -45,38 +41,32 @@ const AMBIGUOUS: ConversionRow = {
   occurredAt: new Date("2026-08-01T00:00:00.000Z"),
 };
 
-describe("1. the two live classifiers disagree about the same booking", () => {
-  // ───────────────────────────────────────────────────────────────────────────
-  // THIS ASSERTION ENCODES THE DEFECT. It is deliberately written to pass while
-  // the product is wrong, so that it starts FAILING the moment the disagreement
-  // is fixed.
-  //
-  // MUST BE INVERTED once the migration lands: replace `not.toBe` with `toBe`,
-  // so this suite then asserts the two agree — or delete this test outright if
-  // classifySourceType/rowSourceType are removed with the migration, which is
-  // what lib/metrics/canonical.ts's docblock intends.
-  // ───────────────────────────────────────────────────────────────────────────
-  test("classifySourceType says meta_ads, rowSourceType says influencer", () => {
-    expect(classifySourceType(AMBIGUOUS)).toBe("meta_ads");
-    expect(rowSourceType(AMBIGUOUS)).toBe("influencer");
-    expect(classifySourceType(AMBIGUOUS)).not.toBe(rowSourceType(AMBIGUOUS));
-  });
-
-  // The disagreement is not cosmetic — it decides whether this booking's ₹42,000
-  // lands in the ROAS numerator. Today the agency dashboard (which uses
-  // classifySourceType) and the overview API (which uses rowSourceType) report
-  // different paid revenue for the identical row.
-  test("and therefore disagree about whether the revenue is paid", () => {
-    expect(isPaidSourceType(classifySourceType(AMBIGUOUS))).toBe(true);
-    expect(isPaidSourceType(rowSourceType(AMBIGUOUS))).toBe(false);
-  });
-
-  // The target behaviour, already implemented and already tested in
-  // tests/canonical-metrics.test.ts — recorded here so "inverted" has one
-  // unambiguous meaning: a coupon must not erase a paid click.
-  test("canonicalSourceType already resolves it — paid wins over the coupon", () => {
+describe("1. one classifier, one answer", () => {
+  // Was: an assertion that classifySourceType and rowSourceType DISAGREE on this
+  // row — classifySourceType said meta_ads, rowSourceType said influencer, so the
+  // same ₹42,000 was paid revenue on the agency dashboard and non-paid in the
+  // overview API. Both functions are gone from every revenue path, so the test
+  // now asserts the property their removal bought: one answer, whoever asks.
+  test("a coupon on a paid click is paid media, not influencer", () => {
     expect(canonicalSourceType(AMBIGUOUS)).toBe("meta_ads");
     expect(isPaidRow(AMBIGUOUS)).toBe(true);
+  });
+
+  test("its revenue reaches the ROAS numerator exactly once", () => {
+    expect(paidRevenueOf([AMBIGUOUS])).toBe(42_000);
+  });
+
+  // The coupon still decides GROUPING — the booking belongs to the influencer
+  // who drove it — even though its TYPE is now paid. Those two answers are
+  // different questions, and the migration deliberately kept them different.
+  test("grouping still credits the influencer who drove it", () => {
+    const agg = aggregateRevenueBySource([AMBIGUOUS], "source", {
+      start: new Date("2026-07-01T00:00:00.000Z"),
+      end: new Date("2026-08-31T23:59:59.999Z"),
+    });
+    expect(agg.groups.map((g) => g.key)).toEqual(["influencer"]);
+    expect(agg.groups[0].sourceType).toBe("meta_ads");
+    expect(agg.totals.revenue).toBe(42_000);
   });
 });
 
