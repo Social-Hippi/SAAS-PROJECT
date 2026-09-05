@@ -18,8 +18,12 @@ Both previously decided paid-ness with `rowSourceType`, which returned
 `influencer` whenever a coupon was present — so a coupon used on a paid Meta or
 Google click erased the paid signal and that booking's revenue was excluded from
 the ROAS numerator. Under `canonicalSourceType`, paid wins over the coupon, so
-that revenue now counts as paid. Reported ROAS on these two surfaces can move
-DOWN or UP: the numerator grows, and the numerator was previously wrong.
+that revenue now counts as paid.
+
+Reported ROAS on these two surfaces STRICTLY RISES. Paid revenue only ever gains
+rows — a row that was `influencer` because of its coupon can become `meta_ads`
+or `google_ads`, never the reverse — and the spend denominator is untouched. Any
+step change on those two figures is this commit, not a change in the data.
 
 **Every other migrated site is behaviour-preserving.** `isPaidRow(row)` is
 exactly equivalent to `isPaidSourceType(classifySourceType(row))`, because
