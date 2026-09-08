@@ -74,6 +74,12 @@ import { loadInfluencerPerformance } from "@/lib/influencer-dashboard";
 import { InfluencerPerformance } from "@/components/dashboard/InfluencerPerformance";
 import { ContactAgencyCard } from "@/components/agency/ContactAgencyCard";
 import { ChannelSelector } from "@/components/dashboard/ChannelSelector";
+import { SourceSelector } from "@/components/dashboard/SourceSelector";
+import { isDashboardSource, type DashboardSource } from "@/lib/dashboard-sources";
+import { loadSummaryDashboard } from "@/lib/metrics/summary-dashboard";
+import { AttributionHealthPanel } from "@/components/dashboard/summary/AttributionHealthPanel";
+import { CustomerJourneyFunnel } from "@/components/dashboard/summary/CustomerJourneyFunnel";
+import { CustomerIntentPanel } from "@/components/dashboard/summary/CustomerIntentPanel";
 import { ChannelView } from "@/components/dashboard/ChannelView";
 import { isChannelKey, type ChannelKey } from "@/lib/channel-view";
 import { getSpendByPlatformFor } from "@/lib/ad-spend";
@@ -227,6 +233,14 @@ export type FullHotelDashboardProps = {
   toParam?: string;
   postTypeParam?: string;
   channelParam?: string;
+  /**
+   * The top-level view: summary | website | meta_ads | google_ads | socials.
+   *
+   * Distinct from `channelParam`, which drives the older per-channel deep-dive.
+   * Source is what the owner picks; it MAPS onto a channel for the paid and
+   * social views rather than duplicating them.
+   */
+  sourceParam?: string;
   /** Agency-only: the edit affordance on the agency contact card. */
   canEditAgencyContact?: boolean;
   /** Rendered above the dashboard on the "all channels" view. */
@@ -273,6 +287,7 @@ async function renderDashboard({
   toParam,
   postTypeParam,
   channelParam,
+  sourceParam,
   canEditAgencyContact = false,
   headerSlot,
   footerSlot,
@@ -361,10 +376,56 @@ async function renderDashboard({
   // the heavy full-dashboard queries below entirely (PART 5) and renders the
   // channel deep-dive instead. "all" falls through to the existing comprehensive
   // dashboard, unchanged.
-  const channel: ChannelKey = isChannelKey(channelParam) ? channelParam : "all";
+  const source: DashboardSource = isDashboardSource(sourceParam) ? sourceParam : "summary";
+
+  // A chosen source maps onto the existing channel deep-dive rather than a second
+  // implementation of it: ChannelView is already token-aware and already
+  // spend-gated, so routing here inherits both.
+  const SOURCE_TO_CHANNEL: Partial<Record<DashboardSource, ChannelKey>> = {
+    meta_ads: "meta_ads",
+    google_ads: "google_ads",
+    socials: "instagram_organic",
+  };
+  const sourceChannel = SOURCE_TO_CHANNEL[source];
+
+  const channel: ChannelKey = isChannelKey(channelParam)
+    ? channelParam
+    : (sourceChannel ?? "all");
+  if (source === "website") {
+    const [ga4, websiteSummary] = await Promise.all([
+      loadGa4Dashboard({
+        agencyId,
+        hotelId,
+        since: range.since,
+        until: range.until,
+        // The GA4-vs-HotelTrack cross-check belongs to the Summary view, where
+        // both populations are on screen together; here it would be a stray
+        // number with nothing to compare against.
+        trackedSessions: null,
+      }),
+      loadSummaryDashboard(hotelId, range),
+    ]);
+    return (
+      <div className="space-y-6">
+        {headerSlot}
+        <SourceSelector current={source} />
+        <Ga4WebsiteTraffic data={ga4} manageHref={manageHref} />
+        <CustomerIntentPanel
+          comparisons={websiteSummary.comparisons}
+          lastIntent={websiteSummary.lastIntent}
+          rangeLabel={range.label}
+        />
+        <CustomerJourneyFunnel stages={websiteSummary.funnel} />
+      </div>
+    );
+  }
+
   if (channel !== "all") {
     return (
       <div className="space-y-6">
+        {/* The source control travels WITH the deep-dive. A view you can enter
+            but not leave is the most common way a dashboard traps its reader. */}
+        <SourceSelector current={source} />
         <div className="space-y-1">
           <Link
             href={channelBackHref ?? basePath}
@@ -1349,6 +1410,10 @@ async function renderDashboard({
     until: range.until,
   });
 
+  // Intent, attribution health, the journey funnel and the period comparison —
+  // one service call rather than four screens each loading their own slice.
+  const summary = await loadSummaryDashboard(hotel.id, range);
+
   return (
     <div className="space-y-6">
       {headerSlot}
@@ -1366,10 +1431,28 @@ async function renderDashboard({
         </Link>
       )}
 
+      {/* The primary control. The older per-channel pills stay beneath it for
+          the channels Source does not cover (Facebook, Influencer, Direct,
+          Other) rather than being deleted along with the navigation to them. */}
+      <SourceSelector current={source} />
+
       {/* Channel selector — "All Channels" (this full dashboard) by default;
           pick a channel to switch to its deep-dive view. */}
       <ChannelSelector current="all" />
 
+
+      {/* ── Summary: the journey, what visitors did, and how much of it we can
+             actually account for. These lead because they answer "what is
+             happening, and can I trust it" before any single metric does. ── */}
+      <CustomerJourneyFunnel stages={summary.funnel} />
+
+      <CustomerIntentPanel
+        comparisons={summary.comparisons}
+        lastIntent={summary.lastIntent}
+        rangeLabel={range.label}
+      />
+
+      <AttributionHealthPanel health={summary.attribution} />
 
       {/* Owner Summary — glanceable plain-English read of recent performance,
           at the very top of the dashboard (above all sections). */}

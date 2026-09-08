@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, clientIpFromHeaders } from "@/lib/ratelimit";
 import { resolveShareLink } from "@/lib/share-link-access";
+import { RANGE_PRESETS } from "@/lib/attribution";
 import { FullHotelDashboard } from "@/components/dashboard/FullHotelDashboard";
 import { PasswordGate } from "./PasswordGate";
 
@@ -45,12 +46,6 @@ function ShareMessage({ title, body }: { title: string; body: string }) {
     </main>
   );
 }
-
-const RANGES = [
-  { key: "7", label: "7d" },
-  { key: "30", label: "30d" },
-  { key: "90", label: "90d" },
-] as const;
 
 export default async function SharePage({
   params,
@@ -145,23 +140,30 @@ export default async function SharePage({
           Report shared by {link.agencyName} · {link.websiteUrl}
         </p>
       </div>
-      {/* Range selector. Plain links rather than the agency's DateRangeSelector:
-          a custom from/to picker is a control the report doesn't need, and these
-          survive with JavaScript off. */}
-      <div className="flex gap-2">
-        {RANGES.map((r) => (
-          <a
-            key={r.key}
-            href={`/share/${uuid}?range=${r.key}`}
-            className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
-              r.key === rangeKey
-                ? "border-brand bg-brand text-white"
-                : "border-line-strong bg-elevated text-ink-secondary hover:bg-line-strong"
-            }`}
-          >
-            Last {r.label}
-          </a>
-        ))}
+      {/* Period selector. Plain links rather than the agency's DateRangeSelector:
+          they survive with JavaScript off, they keep the chosen source in the
+          URL, and every option is one tap on a phone. */}
+      <div className="flex flex-wrap gap-2">
+        {RANGE_PRESETS.map((r) => {
+          const params = new URLSearchParams();
+          if (r.key !== "30") params.set("range", r.key);
+          const src = one(sp.source);
+          if (src) params.set("source", src);
+          const qs = params.toString();
+          return (
+            <a
+              key={r.key}
+              href={qs ? `/share/${uuid}?${qs}` : `/share/${uuid}`}
+              className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
+                r.key === rangeKey
+                  ? "border-brand bg-brand text-white"
+                  : "border-line-strong bg-elevated text-ink-secondary hover:bg-line-strong"
+              }`}
+            >
+              {r.label}
+            </a>
+          );
+        })}
       </div>
     </div>
   );
@@ -185,6 +187,7 @@ export default async function SharePage({
           rangeParam={one(sp.range)}
           postTypeParam={one(sp.postType)}
           channelParam={one(sp.channel)}
+          sourceParam={one(sp.source)}
           headerSlot={header}
         />
         <p className="pt-6 text-center text-xs text-ink-disabled">

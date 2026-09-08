@@ -23,7 +23,7 @@ const DAY_MS = 86_400_000;
 export type ResolvedRange = {
   since: Date;
   until: Date;
-  /** "7" | "30" | "90" | "custom" — drives the active state of the selector. */
+  /** A RANGE_PRESET id or "custom" — drives the active state of the selector. */
   key: string;
   label: string;
   /** YYYY-MM-DD values to prefill the custom date inputs. */
@@ -38,16 +38,49 @@ function ymd(d: Date): string {
 }
 
 /**
- * Resolves the dashboard date range from URL search params. Supports the preset
- * windows (`range=7|30|90`) and a custom range (`from`/`to` as YYYY-MM-DD).
- * Defaults to the last 30 days.
+ * The selectable windows, in display order.
+ *
+ * "7" / "30" / "90" keep their original ids so every existing link, export and
+ * bookmark keeps resolving to the same window; the calendar presets are added
+ * alongside them rather than renumbering anything.
  */
-export function resolveRange(sp: {
-  range?: string;
-  from?: string;
-  to?: string;
-}): ResolvedRange {
-  const now = new Date();
+export const RANGE_PRESETS = [
+  { key: "today", label: "Today" },
+  { key: "yesterday", label: "Yesterday" },
+  { key: "7", label: "Last 7 days" },
+  { key: "30", label: "Last 30 days" },
+  { key: "90", label: "Last 90 days" },
+  { key: "this_month", label: "This month" },
+  { key: "prev_month", label: "Previous month" },
+] as const;
+
+export type RangePresetKey = (typeof RANGE_PRESETS)[number]["key"];
+
+/** Start-of-day / end-of-day in UTC, matching how every snapshot date is stored. */
+function startOfDay(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+}
+function endOfDay(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
+}
+function startOfMonth(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0));
+}
+
+/**
+ * Resolves the dashboard date range from URL search params.
+ *
+ * Supports the rolling windows (`range=7|30|90`), the calendar presets
+ * (`today | yesterday | this_month | prev_month`) and a custom range
+ * (`from`/`to` as YYYY-MM-DD). Defaults to the last 30 days.
+ *
+ * `now` is injectable so the calendar presets are testable without freezing the
+ * clock — the rolling windows were always relative, but "this month" is not.
+ */
+export function resolveRange(
+  sp: { range?: string; from?: string; to?: string },
+  now: Date = new Date(),
+): ResolvedRange {
   const from = sp.from && DATE_RE.test(sp.from) ? sp.from : null;
   const to = sp.to && DATE_RE.test(sp.to) ? sp.to : null;
 
@@ -66,15 +99,62 @@ export function resolveRange(sp: {
     };
   }
 
-  const days = sp.range === "7" ? 7 : sp.range === "90" ? 90 : 30;
-  const since = new Date(now.getTime() - days * DAY_MS);
-  return {
+  const build = (since: Date, until: Date, key: string, label: string): ResolvedRange => ({
     since,
-    until: now,
-    key: String(days),
-    label: `Last ${days} days`,
+    until,
+    key,
+    label,
     fromInput: ymd(since),
-    toInput: ymd(now),
+    toInput: ymd(until),
+  });
+
+  switch (sp.range) {
+    case "today":
+      return build(startOfDay(now), now, "today", "Today");
+    case "yesterday": {
+      const y = new Date(now.getTime() - DAY_MS);
+      return build(startOfDay(y), endOfDay(y), "yesterday", "Yesterday");
+    }
+    case "this_month":
+      return build(startOfMonth(now), now, "this_month", "This month");
+    case "prev_month": {
+      const firstOfThis = startOfMonth(now);
+      const inPrev = new Date(firstOfThis.getTime() - DAY_MS);
+      return build(
+        startOfMonth(inPrev),
+        endOfDay(inPrev),
+        "prev_month",
+        "Previous month",
+      );
+    }
+    default: {
+      const days = sp.range === "7" ? 7 : sp.range === "90" ? 90 : 30;
+      const since = new Date(now.getTime() - days * DAY_MS);
+      return build(since, now, String(days), `Last ${days} days`);
+    }
+  }
+}
+
+/**
+ * The equivalent window immediately before `range`, for period-over-period
+ * comparison.
+ *
+ * Calendar presets get the previous CALENDAR period, not a same-length slice:
+ * the month before a 31-day month is 28-31 days long, and comparing March
+ * against "the 31 days before March" would silently include two days of
+ * February twice. Rolling windows and custom ranges get a same-length window,
+ * which is what "vs previous period" already meant on the agency dashboard.
+ */
+export function previousRangeOf(range: ResolvedRange): { since: Date; until: Date } {
+  if (range.key === "this_month" || range.key === "prev_month") {
+    const firstOfThis = startOfMonth(range.since);
+    const inPrev = new Date(firstOfThis.getTime() - DAY_MS);
+    return { since: startOfMonth(inPrev), until: endOfDay(inPrev) };
+  }
+  const span = range.until.getTime() - range.since.getTime();
+  return {
+    since: new Date(range.since.getTime() - span),
+    until: range.since,
   };
 }
 

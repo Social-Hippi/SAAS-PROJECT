@@ -194,6 +194,7 @@ export default async function HotelDashboardPage({
       toParam={one(sp.to)}
       postTypeParam={one(sp.postType)}
       channelParam={one(sp.channel)}
+      sourceParam={one(sp.source)}
       canEditAgencyContact={member.role === "admin"}
       headerSlot={header}
       footerSlot={footer}
