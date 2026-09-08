@@ -94,6 +94,8 @@ const isPublicRoute = createRouteMatcher([
   "/api/billing/renewal-reminders(.*)",
   // Daily budget-threshold alert cron, gated by CRON_SECRET inside the route.
   "/api/budget/check(.*)",
+  // Daily ad-funds refresh + low-balance reminder cron, same CRON_SECRET guard.
+  "/api/balance/check(.*)",
   // Daily GA4 (OAuth) sync cron, gated by CRON_SECRET inside the route.
   "/api/ga4/sync(.*)",
   // GA4 OAuth callback: the browser arrives from accounts.google.com; the signed

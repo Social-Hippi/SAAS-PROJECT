@@ -85,6 +85,10 @@ import {
   loadMetaPaidPerformance,
   loadGooglePaidPerformance,
 } from "@/lib/metrics/paid-performance";
+import { AvailableFundsCard } from "@/components/dashboard/funds/AvailableFundsCard";
+import { loadAdFunds } from "@/lib/metrics/funds";
+import { SocialContentTable } from "@/components/dashboard/social/SocialContentTable";
+import { loadSocialPerformance } from "@/lib/metrics/social-performance";
 import { ChannelView } from "@/components/dashboard/ChannelView";
 import { isChannelKey, type ChannelKey } from "@/lib/channel-view";
 import { getSpendByPlatformFor } from "@/lib/ad-spend";
@@ -436,12 +440,17 @@ async function renderDashboard({
           ? await loadGooglePaidPerformance(hotelId, range, showAdSpend)
           : null;
 
+    // Socials leads with the format comparison, then ChannelView's per-post
+    // detail below it — same shape as the paid views.
+    const social = source === "socials" ? await loadSocialPerformance(hotelId, range) : null;
+
     return (
       <div className="space-y-6">
         {/* The source control travels WITH the deep-dive. A view you can enter
             but not leave is the most common way a dashboard traps its reader. */}
         <SourceSelector current={source} />
         {paid && <PaidPerformanceTable data={paid} />}
+        {social && <SocialContentTable data={social} />}
         <div className="space-y-1">
           <Link
             href={channelBackHref ?? basePath}
@@ -1430,6 +1439,11 @@ async function renderDashboard({
   // one service call rather than four screens each loading their own slice.
   const summary = await loadSummaryDashboard(hotel.id, range);
 
+  // Advertising funds + the low-balance reminder. Gated on showAdSpend: a funds
+  // balance IS a spend figure, so a report withholding costs must withhold this
+  // too rather than leaking the same information under a different heading.
+  const funds = showAdSpend ? await loadAdFunds(hotel.id) : null;
+
   return (
     <div className="space-y-6">
       {headerSlot}
@@ -1469,6 +1483,10 @@ async function renderDashboard({
       />
 
       <AttributionHealthPanel health={summary.attribution} />
+
+      {funds && (
+        <AvailableFundsCard funds={funds} hotelId={hotel.id} shareToken={shareToken} />
+      )}
 
       {/* Owner Summary — glanceable plain-English read of recent performance,
           at the very top of the dashboard (above all sections). */}

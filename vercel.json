@@ -44,6 +44,10 @@
     {
       "path": "/api/cron/cleanup-journey",
       "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/balance/check",
+      "schedule": "30 3 * * *"
     }
   ]
 }

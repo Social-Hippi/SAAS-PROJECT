@@ -169,6 +169,8 @@ model Agency {
   reports                    Report[]
   alerts                     Alert[]
   shareLinks                 ShareLink[]
+  adAccountBalances          AdAccountBalance[]
+  lowBalanceReminders        LowBalanceReminder[]
   instagramConnections       InstagramConnection[]
   socialSnapshots            SocialSnapshot[]
   postSnapshots              PostSnapshot[]
@@ -318,6 +320,8 @@ model HotelClient {
   reports                    Report[]
   alerts                     Alert[]
   shareLinks                 ShareLink[]
+  adAccountBalances          AdAccountBalance[]
+  lowBalanceReminders        LowBalanceReminder[]
   instagramConnections       InstagramConnection[]
   socialSnapshots            SocialSnapshot[]
   postSnapshots              PostSnapshot[]
@@ -1288,6 +1292,95 @@ model ShareLink {
 // retired EAA-via-Page flow were stamped "eaa_via_page" + status
 // "deprecated_eaa" by the rename migration and are never used again.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// A point-in-time reading of an ad account's funding, refreshed by the daily
+/// balance cron.
+///
+/// WHY THIS IS NOT SIMPLY "BALANCE". Meta's ad-account `balance` field is the
+/// amount DUE on the account, not money available to spend — for a credit-line
+/// account there is no such thing as available funds at all, and only prepaid
+/// accounts carry a usable figure. So every field here is nullable and the
+/// derived `availableMinor` is written ONLY when the funding type makes it
+/// meaningful. Everything else reads "Balance unavailable", which is the honest
+/// answer rather than a zero that would read as "you are out of money".
+///
+/// Minor units (paise/cents) throughout, matching how Meta returns them and how
+/// BudgetAlert already stores money.
+model AdAccountBalance {
+  id            String @id @default(cuid())
+  agencyId      String
+  hotelClientId String
+
+  /// "meta" today. String, not an enum, per this schema's open-vocabulary rule -
+  /// Google Ads billing needs a scope this app does not hold, so it is absent
+  /// rather than modelled speculatively.
+  platform  String
+  accountId String
+
+  /// Spendable funds, in minor units. NULL means "this account's funding model
+  /// does not expose one" - never 0.
+  availableMinor Int?
+  /// Outstanding amount due, as Meta reports `balance`.
+  amountDueMinor Int?
+  /// Lifetime spend and the account's spend cap, when set.
+  amountSpentMinor Int?
+  spendCapMinor    Int?
+  /// ISO-4217. NULL means unknown - figures are never assumed to be INR.
+  currency         String?
+  /// Meta's funding_source_details.type, verbatim, for the "why" on screen.
+  fundingType      String?
+
+  /// When we last successfully READ the account, and when the read last failed.
+  checkedAt DateTime
+  lastError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  @@unique([hotelClientId, platform, accountId])
+  @@index([agencyId])
+  @@index([hotelClientId])
+}
+
+/// A hotel's request to be emailed when advertising funds run low.
+///
+/// Configuration ONLY - the evaluation lives in the daily cron
+/// (/api/balance/check), so this is a durable instruction rather than a piece of
+/// front-end state. One reminder per hotel, mirroring BookingConnection's
+/// one-per-hotel shape.
+model LowBalanceReminder {
+  id            String @id @default(cuid())
+  agencyId      String
+  hotelClientId String @unique
+
+  /// Where to send it. Set by whoever configures the reminder, which on the
+  /// share report is the hotel themselves.
+  email     String
+  /// Notify when available funds fall BELOW this, in minor units.
+  thresholdMinor Int
+  currency       String @default("INR")
+  enabled        Boolean @default(true)
+
+  /// Observability the UI shows back: did the job run, and did it ever fire?
+  lastCheckedAt   DateTime?
+  lastTriggeredAt DateTime?
+  /// Balance at the moment it last fired, so the email can be reconstructed.
+  lastTriggeredAtBalanceMinor Int?
+  /// Re-arms the reminder: once fired it stays quiet until funds go back above
+  /// the threshold, so a low account does not email every single day.
+  triggered Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId])
+}
 
 model InstagramConnection {
   id                String    @id @default(cuid())
