@@ -6,6 +6,11 @@ import type { LastIntentRow } from "@/lib/metrics/intent";
 // Customer intent — traffic → intent → contact, with the previous period beside
 // it so "is this getting better?" is answerable without arithmetic.
 //
+// ADAPTIVE: only signals we can actually measure get a row. Anything this hotel
+// is not instrumented for is summarised in one line beneath the table instead of
+// filling it with identical placeholders. The facts are unchanged; they just
+// stop crowding out the numbers that exist.
+//
 // The Last Intent table below it exists because a booking that cannot be traced
 // to a campaign still leaves a trail. "Eleven people reached WhatsApp, and nine
 // of them arrived from Meta Ads" is real, useful, and honest — provided it is
@@ -44,6 +49,9 @@ export function CustomerIntentPanel({
   lastIntent: LastIntentRow[];
   rangeLabel: string;
 }) {
+  const measured = comparisons.filter((c) => isOk(c.current));
+  const unmeasured = comparisons.filter((c) => !isOk(c.current));
+
   return (
     <section className="overflow-hidden rounded-card border border-line bg-card shadow-card">
       <div className="border-b border-line px-4 py-3 sm:px-5">
@@ -64,7 +72,7 @@ export function CustomerIntentPanel({
             </tr>
           </thead>
           <tbody>
-            {comparisons.map((row) => {
+            {measured.map((row) => {
               const cur = presentMetric(row.current);
               const prev = presentMetric(row.previous);
               return (
@@ -91,6 +99,30 @@ export function CustomerIntentPanel({
           </tbody>
         </table>
       </div>
+
+      {measured.length === 0 && (
+        <p className="px-4 py-6 text-center text-sm text-ink-tertiary sm:px-5">
+          None of these signals are tracked on this site yet.
+        </p>
+      )}
+
+      {unmeasured.length > 0 && (
+        <p className="border-t border-line bg-elevated/40 px-4 py-3 text-xs text-ink-tertiary sm:px-5">
+          <span className="font-medium text-ink-secondary">Not tracked yet:</span>{" "}
+          {unmeasured.map((c, i) => (
+            <span key={c.label}>
+              {i > 0 && ", "}
+              <span
+                className="cursor-help underline decoration-dotted underline-offset-2"
+                title={presentMetric(c.current).title}
+              >
+                {c.label.toLowerCase()}
+              </span>
+            </span>
+          ))}
+          .
+        </p>
+      )}
 
       <div className="border-t border-line px-4 py-3 sm:px-5">
         <div className="flex flex-wrap items-baseline justify-between gap-2">

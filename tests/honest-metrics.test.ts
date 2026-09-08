@@ -17,6 +17,13 @@ import {
 } from "@/lib/metrics/metric-value";
 import { classifyClickTarget } from "@/lib/metrics/intent";
 import { resolveRange, previousRangeOf, RANGE_PRESETS } from "@/lib/attribution";
+import {
+  classifyMetaObjective,
+  classifyGoogleChannelType,
+  campaignTypeTooltip,
+  isConversionOriented,
+  CAMPAIGN_TYPE_LABEL,
+} from "@/lib/metrics/campaign-type";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // "HotelTrack must NEVER lie to the hotel owner."
@@ -258,5 +265,78 @@ describe("6. date ranges", () => {
     const prev = previousRangeOf(resolveRange({ range: "this_month" }, jan));
     expect(prev.since.toISOString()).toBe("2025-12-01T00:00:00.000Z");
     expect(prev.until.toISOString()).toBe("2025-12-31T23:59:59.999Z");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Campaign taxonomy. Two platforms with genuinely different concepts behind one
+// column, so the mapping has to be explicit and the approximation has to be
+// admitted rather than hidden.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("7. campaign type normalisation", () => {
+  test("Meta objectives map to the dashboard taxonomy, current and legacy", () => {
+    const cases: [string, string][] = [
+      ["OUTCOME_LEADS", "lead_generation"],
+      ["LEAD_GENERATION", "lead_generation"],
+      ["OUTCOME_SALES", "sales_conversion"],
+      ["CONVERSIONS", "sales_conversion"],
+      ["OUTCOME_TRAFFIC", "traffic"],
+      ["LINK_CLICKS", "traffic"],
+      ["OUTCOME_AWARENESS", "awareness"],
+      ["REACH", "awareness"],
+      ["OUTCOME_ENGAGEMENT", "engagement"],
+      ["VIDEO_VIEWS", "engagement"],
+    ];
+    for (const [objective, expected] of cases) {
+      expect(classifyMetaObjective(objective).type, objective).toBe(expected);
+    }
+  });
+
+  test("SALES and LEAD GENERATION are both conversion-oriented, and stay distinct", () => {
+    // The brief asked for sales to be analysed ALONGSIDE lead gen, not merged
+    // into it: an owner running both wants to see which is which.
+    const sales = classifyMetaObjective("OUTCOME_SALES").type;
+    const leads = classifyMetaObjective("OUTCOME_LEADS").type;
+    expect(sales).not.toBe(leads);
+    expect(isConversionOriented(sales)).toBe(true);
+    expect(isConversionOriented(leads)).toBe(true);
+    expect(isConversionOriented(classifyMetaObjective("REACH").type)).toBe(false);
+  });
+
+  test("an unrecognised or missing objective is 'unknown', never 'other'", () => {
+    // "We have not classified this" and "this is genuinely miscellaneous" are
+    // different claims; only the second is a finding.
+    expect(classifyMetaObjective("SOME_NEW_META_OBJECTIVE").type).toBe("unknown");
+    expect(classifyMetaObjective(null).type).toBe("unknown");
+    expect(classifyMetaObjective("  ").type).toBe("unknown");
+    expect(CAMPAIGN_TYPE_LABEL.unknown).toBe("Not available");
+  });
+
+  test("Google is classified by channel type, and says so", () => {
+    const search = classifyGoogleChannelType("SEARCH");
+    expect(search.type).toBe("sales_conversion");
+    expect(search.basis).toBe("channel_type");
+    expect(classifyGoogleChannelType("PERFORMANCE_MAX").type).toBe("sales_conversion");
+    expect(classifyGoogleChannelType("DISPLAY").type).toBe("awareness");
+  });
+
+  test("the tooltip never presents a Google channel as a declared objective", () => {
+    const tip = campaignTypeTooltip(classifyGoogleChannelType("SEARCH"));
+    expect(tip).toMatch(/Google/);
+    expect(tip).toMatch(/campaign type/i);
+    // Meta's tooltip may say "objective"; Google's must not claim one exists.
+    expect(tip).not.toMatch(/objective set/i);
+
+    const metaTip = campaignTypeTooltip(classifyMetaObjective("OUTCOME_SALES"));
+    expect(metaTip).toMatch(/objective/i);
+  });
+
+  test("a missing objective explains itself in business language", () => {
+    const tip = campaignTypeTooltip(classifyMetaObjective(null));
+    expect(tip).toMatch(/wasn't recorded/i);
+    for (const jargon of ["null", "undefined", "column", "API"]) {
+      expect(tip.toLowerCase()).not.toContain(jargon.toLowerCase());
+    }
   });
 });

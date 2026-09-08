@@ -132,6 +132,7 @@ export async function syncHotelAds(
       const data = {
         metaAccountId: hotel.metaAdAccountId,
         campaignName: row.campaignName,
+        objective: row.objective,
         spend: row.spend.toFixed(2),
         impressions: row.impressions,
         clicks: row.clicks,

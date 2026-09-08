@@ -142,6 +142,7 @@ export async function syncGoogleAdsConnection(conn: Conn, days = 30): Promise<Go
       campaign.id,
       campaign.name,
       campaign.status,
+      campaign.advertising_channel_type,
       segments.date,
       metrics.cost_micros,
       metrics.impressions,
@@ -185,7 +186,12 @@ export async function syncGoogleAdsConnection(conn: Conn, days = 30): Promise<Go
   let campaignDays = 0;
   try {
     for (const r of rows) {
-      const campaign = (r.campaign ?? {}) as { id?: string | number; name?: string; status?: string };
+      const campaign = (r.campaign ?? {}) as {
+        id?: string | number;
+        name?: string;
+        status?: string;
+        advertisingChannelType?: string;
+      };
       const metrics = (r.metrics ?? {}) as {
         costMicros?: string | number; impressions?: string | number; clicks?: string | number;
         conversions?: number; conversionsValue?: number;
@@ -201,6 +207,7 @@ export async function syncGoogleAdsConnection(conn: Conn, days = 30): Promise<Go
         customerId: conn.customerId,
         campaignName: campaign.name ?? "(unnamed campaign)",
         status: campaign.status ?? "UNKNOWN",
+        advertisingChannelType: campaign.advertisingChannelType ?? null,
         spend: money2(numStr(metrics.costMicros) / 1_000_000),
         impressions: Math.round(numStr(metrics.impressions)),
         clicks: Math.round(numStr(metrics.clicks)),

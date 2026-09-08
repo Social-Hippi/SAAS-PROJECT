@@ -4,13 +4,16 @@ import type { FunnelStage } from "@/lib/metrics/summary-dashboard";
 
 // The customer journey, readable in about five seconds.
 //
-// Visitors → engaged → intent → contact → bookings → revenue, with the drop-off
-// between each pair. The bar widths are proportional to the FIRST stage, so the
-// narrowing is the message and the numbers are the detail.
+// ADAPTIVE BY DESIGN. The funnel shows the steps it can actually measure, at
+// full size, with proportional bars. Steps this hotel is not instrumented for
+// are collected into ONE quiet line at the bottom rather than repeated as six
+// identical "Not traceable" rows.
 //
-// A stage we cannot measure keeps its place in the journey and says so. Removing
-// it would imply the step does not exist for this hotel; showing 0 would imply
-// nobody took it. Both are lies of a different shape.
+// That is a presentation decision, not a truthfulness one. The information is
+// still there and still accurate — it simply stops dominating a panel whose job
+// is to show what IS happening. A wall of grey placeholders makes a hotel with
+// 5,768 engaged visitors look like a hotel with nothing, which is its own kind
+// of misreporting.
 
 function StageRow({ stage, top }: { stage: FunnelStage; top: number | null }) {
   const shown = presentMetric(stage.value, stage.key === "revenue" ? "currencyCompact" : "number");
@@ -22,7 +25,7 @@ function StageRow({ stage, top }: { stage: FunnelStage; top: number | null }) {
       : null;
 
   return (
-    <li className="py-3">
+    <li className="py-3.5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="text-sm font-medium text-ink">{stage.label}</span>
@@ -35,15 +38,12 @@ function StageRow({ stage, top }: { stage: FunnelStage; top: number | null }) {
           </span>
         </div>
         <div className="flex items-baseline gap-3">
-          <span
-            className={`text-lg font-semibold tabular-nums ${shown.className}`}
-            title={shown.title}
-          >
+          <span className="text-2xl font-semibold tabular-nums text-ink" title={shown.title}>
             {shown.text}
           </span>
           {isOk(stage.conversionFromPrevious) && (
             <span
-              className="rounded-full bg-elevated px-2 py-0.5 text-xs tabular-nums text-ink-tertiary"
+              className="rounded-full bg-brand/10 px-2 py-0.5 text-xs font-semibold tabular-nums text-brand"
               title={`${rate.text} of the step above reached this one`}
             >
               {rate.text}
@@ -51,19 +51,12 @@ function StageRow({ stage, top }: { stage: FunnelStage; top: number | null }) {
           )}
         </div>
       </div>
-
-      {width == null ? (
-        // No bar for an unmeasured stage: a zero-width bar reads as "none". The
-        // caption explains WHY without repeating the label already shown on the
-        // right — saying "Not traceable — Not traceable" twice reads as a bug.
-        <p className="mt-1.5 text-xs text-ink-tertiary" title={shown.title}>
-          {isOk(stage.value)
-            ? "No visitors reached this step in this period."
-            : "We can't measure this step yet — hover the label above for what's missing."}
-        </p>
-      ) : (
+      {width != null && (
         <div className="mt-2 h-2 overflow-hidden rounded-full bg-elevated">
-          <div className="h-full rounded-full bg-brand" style={{ width: `${width}%` }} />
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-brand to-brand/70"
+            style={{ width: `${width}%` }}
+          />
         </div>
       )}
     </li>
@@ -71,7 +64,10 @@ function StageRow({ stage, top }: { stage: FunnelStage; top: number | null }) {
 }
 
 export function CustomerJourneyFunnel({ stages }: { stages: FunnelStage[] }) {
-  const first = stages[0];
+  const measured = stages.filter((s) => isOk(s.value));
+  const unmeasured = stages.filter((s) => !isOk(s.value));
+
+  const first = measured[0];
   const top = first && isOk(first.value) ? first.value.value : null;
 
   return (
@@ -79,14 +75,44 @@ export function CustomerJourneyFunnel({ stages }: { stages: FunnelStage[] }) {
       <div className="border-b border-line px-4 py-3 sm:px-5">
         <h2 className="font-medium text-ink">Customer journey</h2>
         <p className="mt-0.5 text-sm text-ink-tertiary">
-          How visitors move from arriving on your site to booking a stay.
+          How visitors move through your site, step by step.
         </p>
       </div>
-      <ul className="divide-y divide-line px-4 sm:px-5">
-        {stages.map((s) => (
-          <StageRow key={s.key} stage={s} top={top} />
-        ))}
-      </ul>
+
+      {measured.length === 0 ? (
+        <p className="px-4 py-8 text-center text-sm text-ink-tertiary sm:px-5">
+          We don&apos;t have enough tracking on this site yet to map the journey.
+        </p>
+      ) : (
+        <ul className="divide-y divide-line px-4 sm:px-5">
+          {measured.map((s) => (
+            <StageRow key={s.key} stage={s} top={top} />
+          ))}
+        </ul>
+      )}
+
+      {/* Every gap, once, quietly — not once per row. */}
+      {unmeasured.length > 0 && (
+        <div className="border-t border-line bg-elevated/40 px-4 py-3 sm:px-5">
+          <p className="text-xs text-ink-tertiary">
+            <span className="font-medium text-ink-secondary">Not tracked yet:</span>{" "}
+            {unmeasured.map((s, i) => (
+              <span key={s.key}>
+                {i > 0 && ", "}
+                <span
+                  className="cursor-help underline decoration-dotted underline-offset-2"
+                  title={
+                    s.value.state === "ok" ? s.hint : `${s.hint} — ${s.value.reason}`
+                  }
+                >
+                  {s.label.toLowerCase()}
+                </span>
+              </span>
+            ))}
+            . Adding this tracking would complete the picture below the visits.
+          </p>
+        </div>
+      )}
     </section>
   );
 }

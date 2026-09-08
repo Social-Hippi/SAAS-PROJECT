@@ -80,6 +80,11 @@ import { loadSummaryDashboard } from "@/lib/metrics/summary-dashboard";
 import { AttributionHealthPanel } from "@/components/dashboard/summary/AttributionHealthPanel";
 import { CustomerJourneyFunnel } from "@/components/dashboard/summary/CustomerJourneyFunnel";
 import { CustomerIntentPanel } from "@/components/dashboard/summary/CustomerIntentPanel";
+import { PaidPerformanceTable } from "@/components/dashboard/paid/PaidPerformanceTable";
+import {
+  loadMetaPaidPerformance,
+  loadGooglePaidPerformance,
+} from "@/lib/metrics/paid-performance";
 import { ChannelView } from "@/components/dashboard/ChannelView";
 import { isChannelKey, type ChannelKey } from "@/lib/channel-view";
 import { getSpendByPlatformFor } from "@/lib/ad-spend";
@@ -421,11 +426,22 @@ async function renderDashboard({
   }
 
   if (channel !== "all") {
+    // The per-campaign table leads the paid views; ChannelView's charts and
+    // creative breakdown follow it. Loaded only for the paid sources, so the
+    // Instagram and Facebook deep-dives pay nothing for it.
+    const paid =
+      source === "meta_ads"
+        ? await loadMetaPaidPerformance(hotelId, range, showAdSpend)
+        : source === "google_ads"
+          ? await loadGooglePaidPerformance(hotelId, range, showAdSpend)
+          : null;
+
     return (
       <div className="space-y-6">
         {/* The source control travels WITH the deep-dive. A view you can enter
             but not leave is the most common way a dashboard traps its reader. */}
         <SourceSelector current={source} />
+        {paid && <PaidPerformanceTable data={paid} />}
         <div className="space-y-1">
           <Link
             href={channelBackHref ?? basePath}

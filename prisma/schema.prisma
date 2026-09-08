@@ -889,6 +889,16 @@ model AdCampaignSnapshot {
   metaAccountId  String?
   metaCampaignId String
   campaignName   String
+  /// Meta's own campaign objective, verbatim: OUTCOME_SALES / OUTCOME_LEADS /
+  /// OUTCOME_TRAFFIC / OUTCOME_AWARENESS / OUTCOME_ENGAGEMENT / … plus the
+  /// legacy names (CONVERSIONS, LINK_CLICKS, REACH) still returned for older
+  /// campaigns. Stored RAW and normalised at read time by lib/metrics/
+  /// campaign-type.ts, so a new Meta objective never silently becomes the wrong
+  /// bucket in historical rows.
+  ///
+  /// Nullable because it is unknowable for every row synced before this column
+  /// existed — those read "Not available", never a guessed category.
+  objective      String?
   date           DateTime  @db.Date
   spend          Decimal   @db.Decimal(12, 2)
   impressions    Int
@@ -1676,6 +1686,15 @@ model GoogleAdsCampaignSnapshot {
   campaignId       String
   campaignName     String
   status           String // ENABLED | PAUSED | REMOVED (campaign.status)
+  /// campaign.advertising_channel_type — SEARCH / PERFORMANCE_MAX / DISPLAY /
+  /// VIDEO / SHOPPING / DEMAND_GEN …
+  ///
+  /// Google has NO field equivalent to Meta's objective: a Search campaign can
+  /// pursue leads or sales depending on its conversion actions, which live on a
+  /// different resource. Channel type is the honest, available approximation and
+  /// is labelled as the channel it is rather than being dressed up as an
+  /// objective. Nullable for rows synced before this column existed.
+  advertisingChannelType String?
   date             DateTime @db.Date
   spend            Decimal  @db.Decimal(12, 2) // cost_micros / 1_000_000
   impressions      Int

@@ -372,11 +372,18 @@ export type DailyCampaignRow = {
   conversions: number;
   /** Meta-reported purchase value. */
   purchaseValue: number;
+  /**
+   * Meta's campaign objective, verbatim (OUTCOME_SALES, OUTCOME_LEADS, …).
+   * Null when the API omits it — normalisation happens at read time, never here,
+   * so an unrecognised objective is stored faithfully rather than bucketed.
+   */
+  objective: string | null;
 };
 
 type RawCampaignInsights = RawDailyInsights & {
   campaign_id?: string;
   campaign_name?: string;
+  objective?: string;
 };
 
 /**
@@ -392,7 +399,11 @@ export async function getDailyCampaignInsights(
   const act = normalizeAccountId(adAccountId);
   const raw: RawCampaignInsights[] = [];
   let params: GraphParams = {
-    fields: "campaign_id,campaign_name,spend,impressions,clicks,actions,action_values",
+    // `objective` is a campaign-level insights field; it is simply absent from
+    // the response for campaigns Meta does not report one for, which the
+    // nullable column and read-time normalisation both handle.
+    fields:
+      "campaign_id,campaign_name,objective,spend,impressions,clicks,actions,action_values",
     time_range: JSON.stringify({ since: range.since, until: range.until }),
     time_increment: "1",
     level: "campaign",
@@ -423,6 +434,7 @@ export async function getDailyCampaignInsights(
         date: row.date_start!,
         campaignId: row.campaign_id!,
         campaignName: row.campaign_name ?? row.campaign_id!,
+        objective: row.objective ?? null,
         spend: toNumber(row.spend),
         impressions: Math.round(toNumber(row.impressions)),
         clicks: Math.round(toNumber(row.clicks)),
