@@ -92,7 +92,25 @@ function fmt(n: number): string {
  * Generate a summary for a hotel + period. Returns null when the hotel is not the
  * caller's agency's (so the route can 404 without leaking existence).
  */
-export async function generateSummary(hotelClientId: string, period: Period): Promise<SummaryResult | null> {
+/**
+ * @param opts.audience   Who is reading. "agency" keeps the connect-an-account
+ *   calls to action; "hotel" (the logged-in hotel dashboard AND the public
+ *   /share report) replaces them, because neither of those readers can connect
+ *   an ad account and telling them to is a dead end.
+ * @param opts.hideSpend  Strip ad spend and ROAS from BOTH the structured metrics
+ *   and the prose. Set for a /share/<uuid> viewer whose hotel has
+ *   showAdSpendToHotel off. It has to happen in here rather than on the way out:
+ *   the summary and the channel highlights are rendered STRINGS, so a caller
+ *   zeroing `metrics.adSpend` afterwards would leave "spent \u20b972,000 at 3.1x
+ *   ROAS" sitting in the text it already generated.
+ */
+export async function generateSummary(
+  hotelClientId: string,
+  period: Period,
+  opts: { hideSpend?: boolean; audience?: "agency" | "hotel" } = {},
+): Promise<SummaryResult | null> {
+  const hideSpend = opts.hideSpend ?? false;
+  const forAgency = (opts.audience ?? "agency") === "agency";
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
     where: { id: hotelClientId },
     select: { otaCommissionRate: true },
@@ -170,9 +188,11 @@ export async function generateSummary(hotelClientId: string, period: Period): Pr
   // Phase 0: ROAS is PAID revenue ÷ PAID spend. It used to be ALL booking
   // revenue (direct, organic, influencer…) ÷ Meta-only spend, narrated to hotel
   // owners as "₹x back for every ₹1 spent" — the most misleading form of the bug.
-  const adSpend = paidSpend.total ?? 0;
+  // Both are zeroed/nulled BEFORE renderSummary runs, so the `adSpend` template
+  // flag goes false and the prose never mentions spend or ROAS at all.
+  const adSpend = hideSpend ? 0 : (paidSpend.total ?? 0);
   const paidRevenue = paidRevenueOf(curRows);
-  const roas = safeRoas(paidRevenue, paidSpend.total);
+  const roas = hideSpend ? null : safeRoas(paidRevenue, paidSpend.total);
   const savings = calculateSavings(revenue, otaRate);
   const visitsChangePct = pct(visitsCur, visitsPrev);
 
@@ -215,8 +235,14 @@ export async function generateSummary(hotelClientId: string, period: Period): Pr
   const metaRoas = safeRoas(meta.revenue, paidSpend.meta);
   highlights.push(
     paidSpend.meta > 0
-      ? `Meta Ads: spent ${fmt(paidSpend.meta)}${metaRoas != null ? ` at ${metaRoas.toFixed(1)}x ROAS` : ""}, driving ${meta.bookings} booking${plural(meta.bookings)} (${fmt(meta.revenue)}).`
-      : `Meta Ads: not connected — connect a Meta ad account to track spend and ROAS.`,
+      ? hideSpend
+        // Outcome only: the bookings and revenue Meta drove are still the point,
+        // and neither one lets the reader back out the spend.
+        ? `Meta Ads: drove ${meta.bookings} booking${plural(meta.bookings)} (${fmt(meta.revenue)}).`
+        : `Meta Ads: spent ${fmt(paidSpend.meta)}${metaRoas != null ? ` at ${metaRoas.toFixed(1)}x ROAS` : ""}, driving ${meta.bookings} booking${plural(meta.bookings)} (${fmt(meta.revenue)}).`
+      : forAgency
+        ? `Meta Ads: not connected — connect a Meta ad account to track spend and ROAS.`
+        : `Meta Ads: no ad account is connected for this hotel yet.`,
   );
   // 2 — Google Ads. Phase 0: this was a hardcoded "coming soon" string that
   // shipped alongside a working Google Ads integration. Now it reflects reality.
@@ -224,9 +250,16 @@ export async function generateSummary(hotelClientId: string, period: Period): Pr
   highlights.push(
     googleAdsConnections > 0
       ? paidSpend.google > 0
-        ? `Google Ads: spent ${fmt(paidSpend.google)}, driving ${google.bookings} booking${plural(google.bookings)} (${fmt(google.revenue)}).`
-        : `Google Ads: connected, but no spend recorded in this period.`
-      : `Google Ads: not connected — connect a Google Ads account to track spend and ROAS.`,
+        ? hideSpend
+          ? `Google Ads: drove ${google.bookings} booking${plural(google.bookings)} (${fmt(google.revenue)}).`
+          : `Google Ads: spent ${fmt(paidSpend.google)}, driving ${google.bookings} booking${plural(google.bookings)} (${fmt(google.revenue)}).`
+        : hideSpend
+          // "no spend recorded" is itself a statement about spend.
+          ? `Google Ads: connected, but no activity in this period.`
+          : `Google Ads: connected, but no spend recorded in this period.`
+      : forAgency
+        ? `Google Ads: not connected — connect a Google Ads account to track spend and ROAS.`
+        : `Google Ads: no ad account is connected for this hotel yet.`,
   );
   // 3 — Instagram reach
   highlights.push(

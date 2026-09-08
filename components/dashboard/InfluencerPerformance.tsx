@@ -5,13 +5,30 @@ import type { InfluencerPerfRow } from "@/lib/influencer-dashboard";
 // revenue for this hotel + period, with the snippet-vs-manual capture split.
 // Presentational only; rows are computed server-side (agency-scoped).
 
-export function InfluencerPerformance({ rows }: { rows: InfluencerPerfRow[] }) {
+export function InfluencerPerformance({
+  rows,
+  viewerIsAgency = true,
+}: {
+  rows: InfluencerPerfRow[];
+  /**
+   * False on the public /share report. The empty state is a call to action on an
+   * agency admin page ("create influencers & codes"), which a hotel reading its
+   * own report can neither reach nor act on — so it gets the fact, not the task.
+   */
+  viewerIsAgency?: boolean;
+}) {
   if (rows.length === 0) {
     return (
       <p className="px-4 py-8 text-center text-sm text-ink-tertiary">
-        No coupon redemptions in this period yet. Create influencers &amp; codes under{" "}
-        <span className="text-ink-secondary">Influencers &amp; Coupons</span>, then redemptions
-        appear here as bookings use those codes (or you log them manually).
+        {viewerIsAgency ? (
+          <>
+            No coupon redemptions in this period yet. Create influencers &amp; codes under{" "}
+            <span className="text-ink-secondary">Influencers &amp; Coupons</span>, then redemptions
+            appear here as bookings use those codes (or you log them manually).
+          </>
+        ) : (
+          <>No influencer coupon redemptions in this period.</>
+        )}
       </p>
     );
   }

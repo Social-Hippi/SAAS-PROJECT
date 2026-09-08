@@ -202,7 +202,9 @@ describe("5. the agency dashboard does not show two bare 'ROAS' cards", () => {
 // ── 6. One date context per dashboard ───────────────────────────────────────
 
 describe("6. the hotel dashboard has a single date context", () => {
-  const HOTEL_PAGE = readCode("app/(agency)/agency/(app)/hotel/[id]/page.tsx");
+  // The panels moved into the shared dashboard the agency page and the public
+  // /share report both render; the invariant is unchanged, its home is not.
+  const HOTEL_PAGE = readCode("components/dashboard/FullHotelDashboard.tsx");
   const SAVINGS = readCode("components/dashboard/CommissionSavings.tsx");
   const RBS = readCode("components/dashboard/RevenueBySource.tsx");
   const SUMMARY = readCode("components/dashboard/OwnerSummaryCard.tsx");

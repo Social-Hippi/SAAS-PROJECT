@@ -27,6 +27,18 @@ const isPublicRoute = createRouteMatcher([
   // Public, UUID-addressed hotel report links. No login: access is gated by the
   // unguessable token (and an optional password) inside the route itself.
   "/share(.*)",
+  // The hotel READ routes that the /share/<uuid> report's client components call.
+  // They cannot sit behind the session gate: a share reader has no Clerk session,
+  // so middleware would 307 their fetches to /sign-in and the report would render
+  // with every client panel stuck on an error.
+  //
+  // "Public" here means "middleware does not require a session" — NOT unguarded.
+  // Every route under this prefix is a GET that calls requireReadAccess(), which
+  // demands EITHER a Clerk grant on that exact hotel OR a live ShareLink token
+  // addressing it, and none of them export a write verb. Listing the prefix does
+  // not weaken the logged-in path either: clerkMiddleware still resolves the
+  // session, so auth() inside the handler sees it exactly as before.
+  "/api/hotel(.*)",
   // Public, token-addressed hotel-owner dashboard (/h/<shareToken>). No login:
   // access is gated entirely by the unguessable 256-bit token inside the route,
   // which also enforces hotel-level data isolation.

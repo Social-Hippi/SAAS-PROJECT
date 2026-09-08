@@ -4,6 +4,7 @@ import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { SHARE_TOKEN_HEADER, isShareTokenShape } from "@/lib/share-token";
 import { resolveHotelAccess } from "@/lib/hotel-access";
+import { resolveShareLink } from "@/lib/share-link-access";
 import type { HotelCapability } from "@/lib/hotel-capabilities";
 
 // The blanket hotel-access lockdown has been LIFTED for logged-in hotel users.
@@ -22,9 +23,34 @@ import type { HotelCapability } from "@/lib/hotel-capabilities";
 // to anyone holding a URL, regardless of showAdSpendToHotel. Hotels receive
 // results either by logging in (now possible) or through the /share/<uuid>
 // report link, which is spend-gated server-side.
+//
+// NOTE — the /share/<uuid> link is a DIFFERENT credential and is NOT covered by
+// this retirement. Its token is a ShareLink row, so it carries the three things
+// the raw HotelClient.shareToken never had: an expiry, a revocation switch, and
+// an optional password. That is what makes it safe to serve the full dashboard
+// from, which requireShareLinkAccess() below does. The 64-hex /h token still
+// grants nothing.
 function shareTokenDashboardRetired(): boolean {
   return true;
 }
+
+/**
+ * What a /share/<uuid> holder may do.
+ *
+ * READ capabilities only, and deliberately enumerated rather than inherited from
+ * a hotel role: a link-holder is an anonymous stranger who happens to have been
+ * sent a URL, so every capability they get is one somebody chose to give them.
+ * No management capability appears here, and no write route consults this gate.
+ *
+ * viewGuestDetails is included because the share report renders the same
+ * visitor-journey preview the agency sees — the reviewed, deliberate scope of
+ * this surface. Removing it here is all it would take to withhold those rows.
+ */
+const SHARE_LINK_CAPABILITIES: readonly HotelCapability[] = [
+  "viewPerformance",
+  "viewGuestDetails",
+  "viewDataHealth",
+];
 
 // Authorization for the hotel dashboard (/hotel/[hotelClientId]). A user reaches a
 // hotel only via a HotelMember grant on THAT hotel, or as an agency member of the
@@ -119,6 +145,19 @@ export type HotelOwnerAccess = {
   isAgencyMember: boolean;
   /** The shared capability predicate, so a data route can gate on what it returns. */
   can: (capability: HotelCapability) => boolean;
+  /**
+   * Whether ad spend and every spend-derived figure may reach this caller.
+   *
+   * ALWAYS true for a Clerk session — the agency obviously sees its own spend,
+   * and a signed-in hotel user sees their own hotel's (a deliberate, documented
+   * decision: showAdSpendToHotel has never gated the logged-in dashboard).
+   *
+   * On a /share/<uuid> link it carries the hotel's showAdSpendToHotel flag, so
+   * the read routes strip spend for exactly the hotels whose agency chose to
+   * hide it. Without this the report's server-rendered half would honour the
+   * toggle while its client-fetched half quietly ignored it.
+   */
+  spendVisible: boolean;
 };
 
 /**
@@ -147,6 +186,8 @@ export async function requireHotelOwnerAccess(hotelClientId: string): Promise<Ho
     isOwner: access.principal.kind === "hotel" && access.principal.role === "hotel_owner",
     isAgencyMember: access.principal.kind === "agency",
     can: access.can,
+    // A session — agency member or granted hotel user — always sees spend.
+    spendVisible: true,
   };
 }
 
@@ -200,6 +241,50 @@ export async function requireShareTokenAccess(
     isOwner: false,
     isAgencyMember: false,
     can: () => false,
+    spendVisible: false,
+  };
+}
+
+/**
+ * Authorization gate for the PUBLIC /share/<uuid> report link.
+ *
+ * The ShareLink token IS the credential — there is no session. Everything about
+ * whether the link is live (revoked, expired, hotel soft-deleted, agency
+ * suspended, password not yet entered in this browser) is decided by
+ * resolveShareLink(), the SAME function the page itself calls, so the report and
+ * the routes feeding it can never disagree about whether the link still works.
+ *
+ * Two things are checked here and nowhere else:
+ *
+ *   1. The link must address THIS hotel. A valid token for hotel A asking for
+ *      hotel B — `/api/hotel/<B>/...` with A's token in the header — is refused,
+ *      even when both hotels belong to the same agency.
+ *   2. agencyId comes off the ShareLink row, never the request, so the caller's
+ *      runWithAgencyScope() stays pinned to the owning tenant.
+ *
+ * Returns null — never throws — for every failure, so callers answer 404 and we
+ * never confirm that a token happened to be well-formed.
+ */
+export async function requireShareLinkAccess(
+  token: string | null | undefined,
+  hotelClientId: string,
+): Promise<HotelOwnerAccess | null> {
+  const resolution = await resolveShareLink(token);
+  if (!resolution.ok) return null;
+  const { link } = resolution;
+  // The token must address THIS hotel — never a sibling, even in the same agency.
+  if (link.hotelClientId !== hotelClientId) return null;
+
+  return {
+    agencyId: link.agencyId,
+    hotelId: link.hotelClientId,
+    // A link-holder is a read-only stranger: never an owner, never the agency.
+    // Any route that gates on either of these keeps refusing them.
+    isOwner: false,
+    isAgencyMember: false,
+    can: (capability) => SHARE_LINK_CAPABILITIES.includes(capability),
+    // The one place the hotel's showAdSpendToHotel flag enters the data routes.
+    spendVisible: link.showAdSpend,
   };
 }
 
@@ -212,6 +297,13 @@ export async function requireShareTokenAccess(
  * gate. The result is discriminated so each route returns the RIGHT status:
  *   • bad/again share token  → 404 (don't confirm the token format was valid)
  *   • denied Clerk session   → 403 (the historical behaviour these routes return)
+ *
+ * Two token shapes can arrive in that header, and they are NOT equivalent:
+ *   • a /share/<uuid> ShareLink token → authorized (expiry + revocation +
+ *     optional password all enforced by resolveShareLink)
+ *   • the legacy 64-hex HotelClient.shareToken → still retired, grants nothing
+ * The uuid gate is tried first; the legacy gate is kept so the retirement stays
+ * an explicit, tested refusal rather than an accident of shape-matching.
  */
 export type ReadAccessResult =
   | { ok: true; access: HotelOwnerAccess }
@@ -220,6 +312,8 @@ export type ReadAccessResult =
 export async function requireReadAccess(req: Request, hotelClientId: string): Promise<ReadAccessResult> {
   const headerToken = req.headers.get(SHARE_TOKEN_HEADER);
   if (headerToken) {
+    const shareLink = await requireShareLinkAccess(headerToken, hotelClientId);
+    if (shareLink) return { ok: true, access: shareLink };
     const access = await requireShareTokenAccess(headerToken, hotelClientId);
     return access ? { ok: true, access } : { ok: false, status: 404 };
   }

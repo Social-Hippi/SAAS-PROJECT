@@ -97,7 +97,9 @@ describe("1. snippetStatus vocabulary", () => {
 
 describe("2. the verdict reaches both audiences", () => {
   const HOTEL_BODY = readCode("components/dashboard/HotelDashboardBody.tsx");
-  const AGENCY_PAGE = readCode("app/(agency)/agency/(app)/hotel/[id]/page.tsx");
+  // Lives in the shared dashboard now, which the agency page and the public
+  // /share report both render — so this pins BOTH audiences at once.
+  const AGENCY_PAGE = readCode("components/dashboard/FullHotelDashboard.tsx");
 
   it("the hotel's own dashboard renders the shared verdict", () => {
     expect(HOTEL_BODY).toContain("trackingHealth(");
