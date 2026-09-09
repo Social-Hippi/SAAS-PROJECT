@@ -12,13 +12,11 @@ import { saveLowBalanceReminder } from "./actions";
 
 export function LowBalanceReminderForm({
   hotelId,
-  shareToken,
   initialEmail,
   initialThresholdMinor,
   configured,
 }: {
   hotelId: string;
-  shareToken?: string;
   initialEmail: string | null;
   initialThresholdMinor: number | null;
   configured: boolean;
@@ -37,7 +35,7 @@ export function LowBalanceReminderForm({
     setError(null);
     setSaved(false);
     startTransition(async () => {
-      const res = await saveLowBalanceReminder({ hotelId, shareToken, email, threshold });
+      const res = await saveLowBalanceReminder({ hotelId, email, threshold });
       if (res.ok) {
         setSaved(true);
         setOpen(false);

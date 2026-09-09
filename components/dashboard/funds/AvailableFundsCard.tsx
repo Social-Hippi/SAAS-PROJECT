@@ -15,6 +15,12 @@ import { LowBalanceReminderForm } from "./LowBalanceReminderForm";
 // The reminder is offered either way. Configuring it before a balance exists is
 // harmless and the job simply never fires; hiding the control would make the
 // feature undiscoverable for exactly the accounts that later gain a cap.
+//
+// EXCEPT on the public /share/<uuid> report, which carries no session. Changing
+// WHO receives this hotel's balance figures is a write, and that write now
+// requires a session — so a link-holder is pointed at their agency rather than
+// shown a form the server would refuse. The guard itself lives in
+// funds/actions.ts; this gate only keeps the UI honest about it.
 
 function relTime(d: Date | null): string {
   if (!d) return "not checked yet";
@@ -28,11 +34,14 @@ function relTime(d: Date | null): string {
 export function AvailableFundsCard({
   funds,
   hotelId,
-  shareToken,
+  viewer,
+  agencyName,
 }: {
   funds: AdFunds;
   hotelId: string;
-  shareToken?: string;
+  /** "share" is the public, session-less report — it gets no write control. */
+  viewer: "agency" | "share";
+  agencyName: string;
 }) {
   const available = presentMetric(funds.available, "currency");
   const threshold = funds.reminder.thresholdMinor;
@@ -92,13 +101,18 @@ export function AvailableFundsCard({
       </div>
 
       <div className="border-t border-line px-4 py-4 sm:px-5">
-        <LowBalanceReminderForm
-          hotelId={hotelId}
-          shareToken={shareToken}
-          initialEmail={funds.reminder.email}
-          initialThresholdMinor={funds.reminder.thresholdMinor}
-          configured={funds.reminder.configured}
-        />
+        {viewer === "share" ? (
+          <p className="text-sm text-ink-tertiary">
+            To set or change the low-balance reminder, contact {agencyName}.
+          </p>
+        ) : (
+          <LowBalanceReminderForm
+            hotelId={hotelId}
+            initialEmail={funds.reminder.email}
+            initialThresholdMinor={funds.reminder.thresholdMinor}
+            configured={funds.reminder.configured}
+          />
+        )}
 
         {funds.reminder.configured && (
           <dl className="mt-3 grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2">

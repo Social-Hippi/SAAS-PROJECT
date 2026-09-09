@@ -1485,7 +1485,12 @@ async function renderDashboard({
       <AttributionHealthPanel health={summary.attribution} />
 
       {funds && (
-        <AvailableFundsCard funds={funds} hotelId={hotel.id} shareToken={shareToken} />
+        <AvailableFundsCard
+          funds={funds}
+          hotelId={hotel.id}
+          viewer={viewer}
+          agencyName={agencyName}
+        />
       )}
 
       {/* Owner Summary — glanceable plain-English read of recent performance,
