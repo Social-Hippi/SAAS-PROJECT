@@ -364,6 +364,67 @@ function render(meta: ReportMeta, d: RenderData): Uint8Array {
     }
   }
 
+  // ── How we count ──────────────────────────────────────────────────────────
+  // The methodology travels WITH the export, expanded. A PDF is forwarded,
+  // printed and read months later by people who never saw the web page, and the
+  // honest gaps in this report — no booking link, operations figures recorded by
+  // the property — read as defects unless the document says what they are.
+  doc.addPage();
+  y = 60;
+  put("How we count", M, y, { size: 16, color: INK, strong: true }); y += 20;
+  para(
+    "Every figure in this report comes from one of three systems, and they are never added " +
+      "together. Adding them would count the same customer more than once, by an amount nobody " +
+      "can determine.",
+    { size: 10.5 },
+  );
+  y += 4;
+
+  put("What HotelTrack measured", M, y, { size: 11, color: INK, strong: true }); y += 15;
+  para(
+    "Website visits, sessions and on-site conversions, recorded by the tracking snippet on the " +
+      "property's own site. Days are cut in the property's own timezone.",
+    { size: 10, color: MUTE },
+  );
+
+  put("What the ad platforms report", M, y, { size: 11, color: INK, strong: true }); y += 15;
+  para(
+    "Impressions, clicks and spend as Google and Meta count them, in their own daily buckets and " +
+      "attribution windows. Their conversion counts have no action type recorded, so what they " +
+      "count is not known. Platform days and site days may differ by up to one day at each " +
+      "boundary; that gap is not reconciled, because it cannot be reconstructed from the data " +
+      "either platform supplies.",
+    { size: 10, color: MUTE },
+  );
+
+  put("What the property recorded", M, y, { size: 11, color: INK, strong: true }); y += 15;
+  para(
+    "Calls, WhatsApp enquiries and confirmed room nights come from the property's own operations " +
+      "tracker, not from HotelTrack. That tracker has no source or campaign column, so none of " +
+      "those contacts can be attributed to a marketing channel. \u201CRoom nights confirmed\u201D counts " +
+      "nights, not bookings \u2014 one booking can be several nights \u2014 so any ratio built on it is a " +
+      "yield figure and may legitimately exceed 100%. It is never a conversion rate.",
+    { size: 10, color: MUTE },
+  );
+
+  put("What is not yet connected", M, y, { size: 11, color: INK, strong: true }); y += 15;
+  para(
+    "Booking confirmations are not linked to website sessions: the booking engine sits on a " +
+      "different domain from the marketing site and identity does not survive the hand-off. Until " +
+      "it does, no booking revenue can be credited to a marketing channel, and any figure claiming " +
+      "otherwise would be invented. Anything without positive evidence of a channel is reported as " +
+      "Unattributed rather than assigned to one.",
+    { size: 10, color: MUTE },
+  );
+
+  put("Scope of this export", M, y, { size: 11, color: INK, strong: true }); y += 15;
+  para(
+    "This export covers ALL properties in the group over the period named on the first page. The " +
+      "on-screen report can be filtered to a single property; this document is not, so a figure " +
+      "here may be larger than the same figure viewed for one property on screen.",
+    { size: 10, color: MUTE },
+  );
+
   // ── Footer on every page ──
   const total = doc.getNumberOfPages();
   const contact = [meta.agencyContact.contactEmail, meta.agencyContact.mobile, meta.agencyContact.websiteUrl].filter(Boolean).join("   ·   ");

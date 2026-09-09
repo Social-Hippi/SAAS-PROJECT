@@ -18,11 +18,25 @@ const DELETE_AGENCIES = ["revanth's Agency", "Talari Sunil's Agency"];
 const DELETE_HOTELS = ["Taj Backwater Retreat", "Neelakurunji Luxury Plantation Bungalow"];
 
 async function main() {
-  const agency = await prisma.agency.findFirst({
+  // This script DELETES hotels and agency history, and it picks its target by
+  // NAME. Agency names are not unique — two live tenants share "Social Hippi" —
+  // so findFirst here could delete the wrong tenant's data. It refuses on an
+  // ambiguous match rather than choosing, and nothing is deleted.
+  const candidates = await prisma.agency.findMany({
     where: { name: KEEP_AGENCY },
-    select: { id: true },
+    select: { id: true, email: true },
   });
-  if (!agency) throw new Error(`Agency "${KEEP_AGENCY}" not found — aborting, nothing deleted.`);
+  if (candidates.length === 0) {
+    throw new Error(`Agency "${KEEP_AGENCY}" not found — aborting, nothing deleted.`);
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      `"${KEEP_AGENCY}" matches ${candidates.length} agencies ` +
+        `(${candidates.map((c) => c.id).join(", ")}) — aborting, nothing deleted. ` +
+        `Agency names are not unique; target this script by id.`,
+    );
+  }
+  const agency = candidates[0]!;
 
   await prisma.$transaction(async (tx) => {
     // 1. Demo hotels (cascade removes all hotel-scoped rows).

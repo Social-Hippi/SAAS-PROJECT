@@ -96,6 +96,8 @@ import { loadBlockA, loadBlockB, blendedCostPerContact } from "@/lib/metrics/con
 import { ok as mvOk, unavailable as mvUnavailable } from "@/lib/metrics/metric-value";
 import { buildPeriodNarrative, buildRecommendedActions, type NarrativeFacts } from "@/lib/summary-templates";
 import { PeriodNarrative } from "@/components/dashboard/PeriodNarrative";
+import { DemandRhythm } from "@/components/dashboard/DemandRhythm";
+import { contactsByWeekday } from "@/lib/ops-tracker/metrics";
 import { MethodologyPanel, type MetricDefinition } from "@/components/dashboard/MethodologyPanel";
 import { zonedDayString } from "@/lib/timezone";
 import { whenMigrated } from "@/lib/missing-table";
@@ -1532,7 +1534,7 @@ async function renderDashboard({
   const visitSelect = {
     utmSource: true, utmMedium: true, utmContent: true,
     gclid: true, gbraid: true, wbraid: true, fbclid: true,
-    sessionId: true, pageUrl: true,
+    sessionId: true, pageUrl: true, createdAt: true,
   } as const;
 
   const [visitRowsAll, prevVisitRowsAll] = pixelMode
@@ -1687,6 +1689,17 @@ async function renderDashboard({
       ? { name: noOutcomeCampaigns[0].name, spend: formatCurrency(noOutcomeCampaigns[0].spend) }
       : null,
   };
+  // ── 9.4 · demand rhythm ────────────────────────────────────────────────────
+  // Visits bucketed by the PROPERTY's weekday, not UTC's: an evening booking in
+  // Kolkata is the same day to a hotelier and the next day to a UTC clock, and
+  // a staffing signal that is a day out is worse than none.
+  const visitsWeekday: (number | null)[] = Array.from({ length: 7 }, () => null);
+  for (const v of scopedVisits) {
+    const day = new Date(`${zonedDayString(v.createdAt, range.timezone)}T00:00:00.000Z`).getUTCDay();
+    visitsWeekday[day] = (visitsWeekday[day] ?? 0) + 1;
+  }
+  const contactsWeekday = contactsByWeekday(blockA.days);
+
   const narrativeSentences = buildPeriodNarrative(narrativeFacts);
   const recommendedActions = buildRecommendedActions(narrativeFacts);
 
@@ -1910,6 +1923,13 @@ async function renderDashboard({
           </ul>
         </section>
       )}
+
+      <DemandRhythm
+        contactsByWeekday={contactsWeekday}
+        visitsByWeekday={visitsWeekday}
+        periodLabel={range.dateLabel}
+        scopeLabel={scopeLabel}
+      />
 
       {/* Customer contact — three blocks that are never added together. */}
       <ContactReport

@@ -93,6 +93,8 @@ export type BlockA = {
   /** Which property this covers, or null for the whole group. */
   segmentName: string | null;
   summary: TrackerSummary;
+  /** The underlying days, for breakdowns the summary does not carry (9.4). */
+  days: TrackerDay[];
   freshness: SourceFreshness;
   /** Workbook tabs that arrived but map to no property — surfaced, not dropped. */
   unmappedTabs: string[];
@@ -186,6 +188,7 @@ export async function loadBlockA(args: {
   return {
     segmentName: segmentId ? (segments.find((s) => s.id === segmentId)?.name ?? null) : null,
     summary: summariseTrackerDays(days, datesInRange(range)),
+    days,
     freshness: freshnessOf({
       label: "Operations tracker",
       connected: segments.some((s) => s.id != null),
