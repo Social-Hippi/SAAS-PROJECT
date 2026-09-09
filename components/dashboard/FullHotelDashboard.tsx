@@ -98,6 +98,7 @@ import { buildPeriodNarrative, buildRecommendedActions, type NarrativeFacts } fr
 import { PeriodNarrative } from "@/components/dashboard/PeriodNarrative";
 import { MethodologyPanel, type MetricDefinition } from "@/components/dashboard/MethodologyPanel";
 import { zonedDayString } from "@/lib/timezone";
+import { whenMigrated } from "@/lib/missing-table";
 import { loadAdFunds } from "@/lib/metrics/funds";
 import { SocialContentTable } from "@/components/dashboard/social/SocialContentTable";
 import { loadSocialPerformance } from "@/lib/metrics/social-performance";
@@ -413,11 +414,18 @@ async function renderDashboard({
   // segmentable figure below is cut by the selected one; group-level figures
   // (ad spend) stay group-level and say so, because campaign rows carry no
   // property signal that can be trusted.
-  const segments = await agencyScoped(prisma.propertySegment).findMany({
-    where: { hotelClientId: hotel.id, isActive: true },
-    orderBy: { displayOrder: "asc" },
-    select: { id: true, name: true, slug: true, displayOrder: true, pathPrefixes: true, bookingHosts: true },
-  });
+  // Tolerates a pending migration: no PropertySegment table means no property
+  // split, not a broken page. See lib/missing-table.ts.
+  const segments = await whenMigrated("property segments", [] as {
+    id: string; name: string; slug: string; displayOrder: number;
+    pathPrefixes: string[]; bookingHosts: string[];
+  }[], () =>
+    agencyScoped(prisma.propertySegment).findMany({
+      where: { hotelClientId: hotel.id, isActive: true },
+      orderBy: { displayOrder: "asc" },
+      select: { id: true, name: true, slug: true, displayOrder: true, pathPrefixes: true, bookingHosts: true },
+    }),
+  );
   const selectedSegmentId =
     propertyParam && segments.some((sg) => sg.id === propertyParam) ? propertyParam : null;
   const segmentRules: SegmentRule[] = segments;

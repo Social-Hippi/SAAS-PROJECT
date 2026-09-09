@@ -10,6 +10,7 @@ import {
   type TrackerSummary,
 } from "@/lib/ops-tracker/metrics";
 import { zonedDayString } from "@/lib/timezone";
+import { whenMigrated } from "@/lib/missing-table";
 import type { ResolvedRange } from "@/lib/attribution";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -121,22 +122,26 @@ export async function loadBlockA(args: {
   const now = args.now ?? new Date();
 
   const [rows, segments] = await Promise.all([
-    agencyScoped(prisma.manualLeadDaily).findMany({
-      where: {
-        hotelClientId,
-        ...(segmentId ? { propertySegmentId: segmentId } : {}),
-        date: {
-          gte: new Date(`${zonedDayString(range.since, range.timezone)}T00:00:00.000Z`),
-          lte: new Date(`${zonedDayString(range.until, range.timezone)}T00:00:00.000Z`),
+    whenMigrated("operations tracker", [], () =>
+      agencyScoped(prisma.manualLeadDaily).findMany({
+        where: {
+          hotelClientId,
+          ...(segmentId ? { propertySegmentId: segmentId } : {}),
+          date: {
+            gte: new Date(`${zonedDayString(range.since, range.timezone)}T00:00:00.000Z`),
+            lte: new Date(`${zonedDayString(range.until, range.timezone)}T00:00:00.000Z`),
+          },
         },
-      },
-      orderBy: { date: "asc" },
-    }),
-    agencyScoped(prisma.propertySegment).findMany({
-      where: { hotelClientId, isActive: true },
-      select: { id: true, name: true },
-      orderBy: { displayOrder: "asc" },
-    }),
+        orderBy: { date: "asc" },
+      }),
+    ),
+    whenMigrated("property segments", [], () =>
+      agencyScoped(prisma.propertySegment).findMany({
+        where: { hotelClientId, isActive: true },
+        select: { id: true, name: true },
+        orderBy: { displayOrder: "asc" },
+      }),
+    ),
   ]);
 
   const days: TrackerDay[] = rows.map((r) => ({
@@ -160,11 +165,13 @@ export async function loadBlockA(args: {
   // A tab that arrived but maps to nothing is a configuration gap. It is
   // reported rather than silently dropped, because a property whose data is
   // quietly absent looks identical to a property with no business.
-  const unmapped = await agencyScoped(prisma.manualLeadDaily).findMany({
-    where: { hotelClientId, propertySegmentId: null },
-    select: { sourceTabName: true },
-    distinct: ["sourceTabName"],
-  });
+  const unmapped = await whenMigrated("operations tracker", [], () =>
+    agencyScoped(prisma.manualLeadDaily).findMany({
+      where: { hotelClientId, propertySegmentId: null },
+      select: { sourceTabName: true },
+      distinct: ["sourceTabName"],
+    }),
+  );
 
   const withData = new Set(rows.map((r) => r.propertySegmentId).filter(Boolean) as string[]);
   const propertiesMissingData = segmentId
