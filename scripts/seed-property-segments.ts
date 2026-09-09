@@ -12,7 +12,13 @@
 // Unassigned, which is rendered as its own visible row. A guessed prefix would
 // instead put real visits under the wrong property, silently.
 //
-//   npx tsx scripts/seed-property-segments.ts [--hotel <id>] [--agency <id>]
+// Matching rules are PRESERVED on re-run by default, so a hand-correction made
+// in the admin surface is not silently reverted by a redeploy. Pass
+// --update-rules to overwrite them from this file — which is what to do when the
+// rules here have been corrected centrally, as they were once the production
+// path inventory resolved the prefixes.
+//
+//   npx tsx scripts/seed-property-segments.ts [--hotel <id>] [--agency <id>] [--update-rules]
 
 import "./load-env";
 import { prisma } from "../lib/prisma";
@@ -23,6 +29,7 @@ const argOf = (name: string): string | null => {
   return i >= 0 && args[i + 1] ? args[i + 1]! : null;
 };
 
+const UPDATE_RULES = args.includes("--update-rules");
 const HOTEL_ID = argOf("--hotel") ?? "cmru6bnmo000004l6yl2ryzh9"; // Aster Holidays
 const AGENCY_ID = argOf("--agency") ?? "cmr3jr4ni000004i5mzd380hb";
 
@@ -33,7 +40,9 @@ const SEGMENTS = [
     displayOrder: 1,
     // Confirmed by the ₹7,475 conversion on 8 Sep 2026.
     bookingHosts: ["bookings.coffeeberryhills.in"],
-    pathPrefixes: [] as string[], // unknown — admin-fillable
+    // Resolved from the production path inventory over 90 days. Prefix matching
+    // catches gallery pages, the ads landing page and #rooms anchors.
+    pathPrefixes: ["/coffeeberry-hills"],
     sourceSheetId: "1udjgKPY6i5piW627rwV_bWDvp5mjquHTNn_b4I7_QD0",
     sourceTabName: "Aster | Call Reports Tracker",
     trackerLayout: "cbh_v1",
@@ -43,8 +52,8 @@ const SEGMENTS = [
     name: "Three Hills",
     displayOrder: 2,
     bookingHosts: [] as string[], // unknown — see Open Decisions
-    // Confirmed present in recorded traffic.
-    pathPrefixes: ["/three-hills-coorg-resort"],
+    // Both spellings appear in recorded traffic.
+    pathPrefixes: ["/three-hills", "/3hills"],
     sourceSheetId: "143UeHzcX7kJalj1-ar838cPiYt_9CaR3nbsUSW7pw7U",
     sourceTabName: "3hills tracker",
     trackerLayout: "three_hills_v1",
@@ -85,14 +94,17 @@ async function main() {
         sourceTabName: seg.sourceTabName,
         trackerLayout: seg.trackerLayout,
       },
-      // Refresh routing only. Matching rules are left alone so a hand-correction
-      // survives a re-run.
+      // Routing always refreshes. Matching rules only with --update-rules, so a
+      // hand-correction is not silently reverted by an ordinary re-run.
       update: {
         name: seg.name,
         displayOrder: seg.displayOrder,
         sourceSheetId: seg.sourceSheetId,
         sourceTabName: seg.sourceTabName,
         trackerLayout: seg.trackerLayout,
+        ...(UPDATE_RULES
+          ? { pathPrefixes: seg.pathPrefixes, bookingHosts: seg.bookingHosts }
+          : {}),
       },
       select: { id: true, name: true, pathPrefixes: true, bookingHosts: true },
     });
@@ -102,7 +114,13 @@ async function main() {
   }
 
   console.log(`\nSeeded ${SEGMENTS.length} segments for ${hotel.name}.`);
-  console.log("Unknown rules left empty on purpose — unmatched traffic shows as Unassigned.");
+  if (!UPDATE_RULES) {
+    console.log("Matching rules were PRESERVED. Re-run with --update-rules to overwrite them.");
+  }
+  console.log(
+    "Three Hills' booking hostname is still unknown and stays empty — its conversions fall to " +
+      "Unassigned until someone supplies it.",
+  );
 }
 
 main()
