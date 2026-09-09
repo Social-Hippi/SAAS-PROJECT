@@ -111,18 +111,35 @@ function MiniTrend({ points }: { points: Ga4Dashboard["trend"] }) {
   );
 }
 
-export function Ga4WebsiteTraffic({ data, hotelId }: { data: Ga4Dashboard; hotelId: string }) {
+export function Ga4WebsiteTraffic({
+  data,
+  manageHref,
+}: {
+  data: Ga4Dashboard;
+  /**
+   * Integrations-page href, or null on a read-only surface (the public /share
+   * report). Connecting GA4 is the agency's job on a page the hotel cannot open,
+   * so a link-holder is told the state without being handed a dead control.
+   */
+  manageHref: string | null;
+}) {
   if (!data.connected) {
     return (
       <SectionCard title="Website Traffic" subtitle="Full traffic picture from Google Analytics 4.">
         <div className="p-8 text-center">
-          <p className="text-sm text-ink-tertiary">Connect GA4 to see website traffic data.</p>
-          <a
-            href={`/agency/hotel/${hotelId}/integrations`}
-            className="mt-3 inline-block rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-hover"
-          >
-            Go to Integrations →
-          </a>
+          <p className="text-sm text-ink-tertiary">
+            {manageHref
+              ? "Connect GA4 to see website traffic data."
+              : "Google Analytics isn't connected for this hotel yet."}
+          </p>
+          {manageHref && (
+            <a
+              href={manageHref}
+              className="mt-3 inline-block rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-hover"
+            >
+              Go to Integrations →
+            </a>
+          )}
         </div>
       </SectionCard>
     );

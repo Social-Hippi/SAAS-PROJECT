@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
 import { csvResponse, slugForFile, toCsv } from "@/lib/csv";
 import { sanitizeAoa, sanitizeRows } from "@/lib/xlsx";
-import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
+import { paidRevenueOf } from "@/lib/metrics/canonical";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -89,13 +89,11 @@ export async function GET(request: Request) {
   // Phase 0: combined paid spend, and PAID revenue ÷ paid spend (was all
   // booking revenue ÷ Meta-only spend, exported to agencies as "ROAS").
   const totalSpend = Number(spendAgg._sum.spend ?? 0) + Number(googleSpendAgg._sum.spend ?? 0);
-  const paidRevenue = paidConversions.reduce(
-    (sum, c) =>
-      sum +
-      (isPaidSourceType(classifySourceType(c)) && c.conversionValue != null
-        ? Number(c.conversionValue)
-        : 0),
-    0,
+  const paidRevenue = paidRevenueOf(
+    paidConversions.map((c) => ({
+      ...c,
+      value: c.conversionValue == null ? 0 : Number(c.conversionValue),
+    })),
   );
   const roas = totalSpend > 0 ? paidRevenue / totalSpend : null;
 

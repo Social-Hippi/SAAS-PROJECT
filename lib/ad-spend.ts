@@ -225,11 +225,7 @@ export function getSpendByPlatformForHotels(
  * "no denominator" answer, so the UI renders "—" instead of a misleading 0×.
  * A null `spend` (currencies not combinable) also yields null.
  */
-export function safeRoas(revenue: number, spend: number | null): number | null {
-  if (spend == null || !Number.isFinite(spend) || spend <= 0) return null;
-  if (!Number.isFinite(revenue)) return null;
-  return revenue / spend;
-}
+export { safeRoas } from "@/lib/metrics/canonical";
 
 /**
  * The combined PAID spend to divide by, or null when the platforms cannot be

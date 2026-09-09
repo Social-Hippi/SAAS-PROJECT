@@ -36,7 +36,18 @@ function Th({
   );
 }
 
-export function ChannelPerformanceTable({ rows }: { rows: ChannelRow[] }) {
+export function ChannelPerformanceTable({
+  rows,
+  showRoas = true,
+}: {
+  rows: ChannelRow[];
+  /**
+   * False on a surface where ad spend is withheld. True ROAS is credited revenue
+   * ÷ this channel's spend, and revenue is in the row beside it — so leaving the
+   * column in would hand the reader the spend by division.
+   */
+  showRoas?: boolean;
+}) {
   if (rows.length === 0) {
     return (
       <p className="px-4 py-6 text-sm text-ink-tertiary">
@@ -67,9 +78,11 @@ export function ChannelPerformanceTable({ rows }: { rows: ChannelRow[] }) {
             <Th right hint="Booking value credited to this channel under the selected model.">
               Revenue
             </Th>
-            <Th right hint="Credited revenue ÷ this channel's ad spend. Shown only for paid channels with known spend.">
-              True ROAS
-            </Th>
+            {showRoas && (
+              <Th right hint="Credited revenue ÷ this channel's ad spend. Shown only for paid channels with known spend.">
+                True ROAS
+              </Th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -88,11 +101,13 @@ export function ChannelPerformanceTable({ rows }: { rows: ChannelRow[] }) {
               <td className="px-4 py-2 text-right tabular-nums text-ink">
                 {formatCurrency(r.revenue, { compact: true })}
               </td>
-              <td className="px-4 py-2 text-right tabular-nums">
-                <span className={r.trueRoas == null ? "text-ink-disabled" : "text-success"}>
-                  {roas(r.trueRoas)}
-                </span>
-              </td>
+              {showRoas && (
+                <td className="px-4 py-2 text-right tabular-nums">
+                  <span className={r.trueRoas == null ? "text-ink-disabled" : "text-success"}>
+                    {roas(r.trueRoas)}
+                  </span>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

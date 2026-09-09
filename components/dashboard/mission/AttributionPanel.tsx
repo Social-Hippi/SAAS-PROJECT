@@ -15,8 +15,11 @@ import { ChannelPerformanceTable } from "./ChannelPerformanceTable";
 
 export function AttributionPanel({
   byModel,
+  showRoas = true,
 }: {
   byModel: Record<AttributionModel, ChannelRow[]>;
+  /** Passed through to the table; false when ad spend is withheld. */
+  showRoas?: boolean;
 }) {
   const [model, setModel] = useState<AttributionModel>("first");
   const active = ATTRIBUTION_MODELS.find((m) => m.id === model)!;
@@ -66,7 +69,7 @@ export function AttributionPanel({
         ({active.lens}) — {active.question}
       </p>
 
-      <ChannelPerformanceTable rows={byModel[model]} />
+      <ChannelPerformanceTable rows={byModel[model]} showRoas={showRoas} />
     </section>
   );
 }

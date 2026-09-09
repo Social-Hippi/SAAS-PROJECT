@@ -10,7 +10,7 @@ import { loadChannelView, type ChannelView } from "@/lib/channel-view";
 import { loadGa4Dashboard } from "@/lib/ga4-dashboard";
 import { aggregateRevenueBySource, type ConversionRow } from "@/lib/revenue-by-source";
 import { computeFunnel, stageRank } from "@/lib/funnel";
-import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
+import { formatCurrency, formatMultiple, formatNumber, formatPercent } from "@/lib/format";
 import { buildReportNarrative, type Verdict } from "@/lib/report-narrative";
 import { GEIST_REGULAR_B64 } from "@/lib/report-font";
 
@@ -71,7 +71,16 @@ export async function generateHotelReportPdf(meta: ReportMeta): Promise<Uint8Arr
     loadHotelReport({ agencyId, hotelId, since: prevSince, until: prevUntil }),
     agencyScopedFor(agencyId, prisma.trackingEvent).findMany({
       where: { hotelClientId: hotelId, eventType: "conversion", createdAt: { gte: since, lte: until } },
-      select: { utmSource: true, utmMedium: true, utmCampaign: true, utmContent: true, conversionValue: true, couponCodeUsed: true, createdAt: true },
+      select: {
+        utmSource: true, utmMedium: true, utmCampaign: true, utmContent: true,
+        conversionValue: true, couponCodeUsed: true, createdAt: true,
+        // Required by classifySourceType. Without these the channel table below
+        // bucketed every auto-tagged Google booking as `direct`, while the KPI
+        // block on the preceding page (via loadHotelReport, which does select
+        // them) counted the SAME booking as paid Google revenue — the two halves
+        // of the client-facing PDF disagreed with each other.
+        gclid: true, gbraid: true, wbraid: true, fbclid: true,
+      },
     }),
     agencyScopedFor(agencyId, prisma.session).count({ where: { hotelClientId: hotelId, startedAt: { gte: since, lte: until } } }),
     agencyScopedFor(agencyId, prisma.session).count({ where: { hotelClientId: hotelId, startedAt: { gte: prevSince, lt: prevUntil } } }),
@@ -87,6 +96,7 @@ export async function generateHotelReportPdf(meta: ReportMeta): Promise<Uint8Arr
   const convRows: ConversionRow[] = convEvents.map((e) => ({
     utmSource: e.utmSource, utmMedium: e.utmMedium, utmCampaign: e.utmCampaign, utmContent: e.utmContent,
     value: e.conversionValue == null ? 0 : Number(e.conversionValue), occurredAt: e.createdAt, couponCode: e.couponCodeUsed,
+    gclid: e.gclid, gbraid: e.gbraid, wbraid: e.wbraid, fbclid: e.fbclid,
   }));
   const rbs = aggregateRevenueBySource(convRows, "source", { start: since, end: until });
 
@@ -292,7 +302,7 @@ function render(meta: ReportMeta, d: RenderData): Uint8Array {
       // "—" when the ad accounts report in currencies that cannot be safely
       // combined. Never ₹0 — an unavailable total is not "no spend".
       { label: "Ad spend", value: spend == null ? "—" : money(spend), delta: pctDelta(spend, prevSpend), inverse: true },
-      { label: "Return on ad spend", value: `₹${(roas ?? 0).toFixed(2)}`, sub: "paid-channel revenue per ₹1 spent", delta: pctDelta(roas, prevRoas) },
+      { label: "Return on ad spend", value: formatMultiple(roas), sub: "paid-channel revenue per ₹1 spent", delta: pctDelta(roas, prevRoas) },
       { label: "Website conversion rate", value: convRate == null ? "—" : formatPercent(convRate), sub: "visitors who booked", delta: pctDelta(convRate, prevConvRate) },
       { label: "Commission saved vs OTAs", value: money(d.cur.otaSavings.amount), delta: null },
     ];
@@ -389,11 +399,11 @@ function renderChannels(
     const k = v.kpis;
     h.kvLine([
       ["Spend", money(k.totalSpend)], ["Times shown", formatNumber(k.impressions)], ["Clicks to site", formatNumber(k.linkClicks)],
-      ["Bookings", formatNumber(k.conversions)], ["Back per ₹1", `₹${(k.roas ?? 0).toFixed(2)}`],
+      ["Bookings", formatNumber(k.conversions)], ["Back per ₹1", formatMultiple(k.roas)],
     ]);
     if (v.topCampaigns && v.topCampaigns.length > 0) {
       h.table(["Campaign", "Spend", "Revenue", "Bookings", "Back per ₹1"],
-        v.topCampaigns.slice(0, 5).map((c) => [c.campaignName, money(c.spend), money(c.revenue), formatNumber(c.bookings), `₹${(c.roas ?? 0).toFixed(2)}`]),
+        v.topCampaigns.slice(0, 5).map((c) => [c.campaignName, money(c.spend), money(c.revenue), formatNumber(c.bookings), formatMultiple(c.roas)]),
         [1, 2, 3, 4]);
     }
   }

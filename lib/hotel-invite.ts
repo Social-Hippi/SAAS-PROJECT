@@ -109,7 +109,7 @@ export function newHotelJoinedEmail(opts: {
       bodyHtml:
         lead(`<strong>${esc(opts.hotelName)}</strong> just signed up via your HotelTrack invite link.`) +
         p(`Contact email: ${esc(opts.hotelEmail)}`) +
-        p(`They can already see their dashboard. To start tracking, connect their Meta / Instagram / GA4 integrations and confirm the tracking snippet is installed.`),
+        p(`Their hotel record is set up with the details they entered, and they have owner access to their own dashboard. To start tracking, connect their Meta / Instagram / GA4 integrations and confirm the tracking snippet is installed.`),
       cta: { label: "Configure their integrations", url: integrationsUrl },
     }),
   };
@@ -123,7 +123,19 @@ export function hotelWelcomeEmail(opts: {
   siteId: string;
   agencyContact?: { email?: string | null; mobile?: string | null } | null;
 }): { subject: string; html: string } {
+  // This email links to a dashboard the hotel can genuinely open.
+  //
+  // It previously promised one that did not exist: hotel logins were disabled at
+  // the authorization layer, so the CTA led to a redirect back to the marketing
+  // homepage. The link was removed rather than left lying.
+  //
+  // It is back because the underlying gap is closed — signup now creates a
+  // HotelMember grant (hotel_owner) alongside the HotelClient, and
+  // resolveHotelAccess honours it. Restoring the CTA without that grant would
+  // reintroduce the original dead end, which tests/hotel-invite-honesty.test.ts
+  // guards against.
   const dashboardUrl = `${APP_URL}/hotel/${opts.hotelClientId}/dashboard`;
+
   // Must match the snippet shown in the agency UI: public/t.js locates its own
   // <script> tag by looking for "id=" in the src and reads the siteId from that
   // query param — a data-* attribute is never read, so the tag must carry ?id=.
@@ -135,14 +147,14 @@ export function hotelWelcomeEmail(opts: {
         )
       : "";
   return {
-    subject: `Welcome to HotelTrack, ${opts.hotelName}`,
+    subject: `${opts.hotelName} is set up on HotelTrack`,
     html: renderEmail({
       heading: "Your hotel dashboard is ready",
       preheader: `${opts.hotelName} is now set up on HotelTrack with ${opts.agencyName}.`,
       bodyHtml:
         lead(`Welcome, <strong>${esc(opts.hotelName)}</strong> 🎉`) +
-        p(`Your hotel is now connected to ${esc(opts.agencyName)} on HotelTrack. Log in any time to see your bookings, channel performance and savings.`) +
-        p(`<strong>Install your tracking snippet</strong> — paste this just before <code>&lt;/head&gt;</code> on your website so we can attribute bookings:`) +
+        p(`Your hotel is now set up with ${esc(opts.agencyName)} on HotelTrack. Sign in any time to see where your guests are coming from and which marketing is working.`) +
+        p(`<strong>One step to complete</strong> — ask whoever manages your website to paste this just before <code>&lt;/head&gt;</code>, so we can see which marketing brought each visitor:`) +
         `<pre style="margin:0 0 14px;padding:12px;background:#f4f4f5;border-radius:8px;font-size:12px;overflow:auto;color:#18181b;">${snippet}</pre>` +
         contactLine,
       cta: { label: "Open my dashboard", url: dashboardUrl },

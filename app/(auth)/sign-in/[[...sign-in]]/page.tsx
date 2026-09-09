@@ -1,9 +1,16 @@
+import type { Metadata } from "next";
 import { SignIn } from "@clerk/nextjs";
+import { AuthShell, authAppearance } from "../../AuthShell";
+
+export const metadata: Metadata = {
+  title: "Sign in · HotelTrack",
+  description: "Sign in to HotelTrack — marketing attribution for hotels.",
+};
 
 export default function SignInPage() {
   return (
-    <main className="flex flex-1 items-center justify-center bg-gradient-to-b from-page to-card px-4 py-12">
-      <SignIn />
-    </main>
+    <AuthShell title="Sign in" subtitle="Welcome back. Sign in to continue.">
+      <SignIn appearance={authAppearance} />
+    </AuthShell>
   );
 }

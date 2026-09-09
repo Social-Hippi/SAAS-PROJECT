@@ -1,6 +1,7 @@
 import { getCurrentMember } from "@/lib/auth";
 import { loadAgencyRevenueRows, parseAgencyWindow, parseHotelFilter } from "@/lib/agency-revenue";
-import { aggregateRevenueBySource, isGranularity, rowSourceType, type Granularity } from "@/lib/revenue-by-source";
+import { aggregateRevenueBySource, isGranularity, type Granularity } from "@/lib/revenue-by-source";
+import { canonicalSourceType } from "@/lib/metrics/canonical";
 import { isSourceType, type SourceType } from "@/lib/source-classifier";
 
 // GET /api/agency/revenue-by-source — the agency-wide equivalent of R1's
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
   }
 
   const filtered = sourceTypeFilter
-    ? data.rows.filter((r) => sourceTypeFilter.has(rowSourceType(r)))
+    ? data.rows.filter((r) => sourceTypeFilter.has(canonicalSourceType(r)))
     : data.rows;
 
   const result = aggregateRevenueBySource(filtered, granularity, { start, end });

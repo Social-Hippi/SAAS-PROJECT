@@ -12,6 +12,7 @@ import { AgencyContactForm } from "@/components/agency/AgencyContactForm";
 import { saveAgencyContact } from "./actions";
 import { ensureInviteCode, inviteUrl } from "@/lib/hotel-invite";
 import { InviteCodeManager } from "./InviteCodeManager";
+import { OrganisationName } from "./OrganisationName";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 
 // Server-side relative time (avoids Date.now() in a client render).
@@ -103,6 +104,19 @@ export default async function SettingsPage() {
 
       <BackfillProgress key={backfillJob?.id ?? "none"} initialJob={backfillJob} />
 
+      {/* ── Organisation identity ────────────────────────────────────────────
+          The name every member of this agency sees in the app header and on the
+          reports shared with hotels. Editable here because it previously wasn't
+          editable anywhere, which left agencies stuck with the personal-name
+          default that onboarding used to pre-fill. */}
+      <section className="rounded-card border border-line bg-card p-6 shadow-card">
+        <h2 className="font-medium">Organisation</h2>
+        <p className="mt-1 text-sm text-ink-tertiary">
+          How your organisation is identified across HotelTrack.
+        </p>
+        <OrganisationName initialName={member.agency.name} />
+      </section>
+
       {/* ── Appearance (theme) ───────────────────────────────────────────── */}
       <section className="rounded-card border border-line bg-card p-6 shadow-card">
         <h2 className="font-medium">Appearance</h2>
@@ -145,8 +159,14 @@ export default async function SettingsPage() {
       <section className="rounded-xl border border-line p-6">
         <h2 className="font-medium">Hotel Self-Signup</h2>
         <p className="mt-1 text-sm text-ink-tertiary">
-          Share this invite code with your hotel clients so they can sign up themselves.
-          They&apos;ll be automatically added to your agency.
+          Share this code with a hotel so they can enter their own details — contact,
+          rooms, channel manager, OTA rate — and be added to your agency without you
+          re-keying it.
+        </p>
+        <p className="mt-2 text-sm text-ink-tertiary">
+          Whoever signs up becomes the hotel&apos;s owner and can see their own dashboard.
+          To give other people at the hotel access, use <strong>Hotel access</strong> on
+          that hotel&apos;s page.
         </p>
         <div className="mt-5 max-w-xl">
           <InviteCodeManager

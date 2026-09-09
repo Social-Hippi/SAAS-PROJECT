@@ -4,6 +4,7 @@ import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { ensureInviteCode } from "@/lib/hotel-invite";
 import { isAllowedStaffEmail } from "@/lib/access";
+import { validateAgencyName } from "@/lib/agency-validation";
 
 /**
  * Provisions an Agency for a freshly signed-up user: creates the Agency and an
@@ -15,9 +16,11 @@ export async function createAgencyForCurrentUser(formData: FormData) {
   const { userId } = await auth();
   if (!userId) return { error: "You must be signed in." };
 
-  const name = (formData.get("agencyName") as string | null)?.trim();
-  if (!name) return { error: "Agency name is required." };
-  if (name.length > 120) return { error: "Agency name must be 120 characters or fewer." };
+  // Same validator Agency Settings uses (saveAgencyName), so the two write
+  // paths for this one organisation-level value cannot diverge.
+  const parsed = validateAgencyName(String(formData.get("agencyName") ?? ""));
+  if (!parsed.ok) return { error: parsed.error };
+  const name = parsed.name;
 
   const user = await currentUser();
   // L1: a hotel-owner (hotel_client) must not self-promote into an agency_admin

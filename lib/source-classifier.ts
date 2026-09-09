@@ -70,11 +70,43 @@ function contentLooksInfluencer(content: string | null | undefined): boolean {
   return INFLUENCER_CONTENT_PATTERNS.some((re) => re.test(v));
 }
 
-export type ClassifiableUtm = ClickIds & {
+/**
+ * Everything classifySourceType needs to reach a stable answer.
+ *
+ * The click identifiers are REQUIRED, not optional, for the same reason
+ * utmSource/utmMedium are (see lib/attribution.ts EventInput): a call site that
+ * forgets to SELECT them still type-checks against an optional field, and
+ * `isGoogleAdsClick` then reads `undefined` and returns false — so every
+ * auto-tagged Google click (the DEFAULT Ads setting, which sends a gclid and NO
+ * utm parameters at all) silently classifies as `direct`.
+ *
+ * That is not a hypothetical: it produced two surfaces that contradicted
+ * themselves — the owner-metrics payload, whose ROAS counted a booking as
+ * google_ads while its own bookings-by-source counted it as direct, and the
+ * client-facing PDF, whose KPI block and channel table disagreed the same way.
+ *
+ * Requiring the fields turns that into a compile error, which is the cheaper
+ * failure. Callers that genuinely have no click ids (e.g. a manual redemption
+ * with no TrackingEvent) pass NO_CLICK_IDS explicitly, which is a deliberate,
+ * reviewable statement rather than an accident of a SELECT.
+ */
+export type ClassifiableUtm = Required<ClickIds> & {
   utmSource: string | null | undefined;
   utmMedium: string | null | undefined;
   utmContent?: string | null | undefined;
 };
+
+/**
+ * The explicit "this record genuinely carries no ad click identifier" value.
+ * Use it only where that is TRUE of the data — never to silence a type error on
+ * a row that has the columns and simply didn't select them.
+ */
+export const NO_CLICK_IDS = {
+  gclid: null,
+  gbraid: null,
+  wbraid: null,
+  fbclid: null,
+} as const satisfies Required<ClickIds>;
 
 /**
  * Classify a conversion's UTM into a SourceType. Deterministic; branches are

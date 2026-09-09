@@ -27,7 +27,12 @@ import { buildReportNarrative, type NarrativeInput } from "@/lib/report-narrativ
 const root = join(__dirname, "..");
 const read = (p: string) => readFileSync(join(root, p), "utf8");
 
-const PUBLIC_REPORT = read("app/share/[uuid]/PublicReport.tsx");
+// The public /share/<uuid> report and the agency's hotel page are now the SAME
+// component, so these assertions pin the one surface both of them render.
+// (They used to read app/share/[uuid]/PublicReport.tsx, a separate five-panel
+// report that has been deleted — a test over a file no live route renders is
+// worse than no test, because it passes while the real surface drifts.)
+const SHARE_DASHBOARD = read("components/dashboard/FullHotelDashboard.tsx");
 const REPORT_PDF = read("lib/report-pdf.ts");
 const ROLLUP = read("components/dashboard/AgencyRevenueRollup.tsx");
 const AGENCY_DASHBOARD = read("app/(agency)/agency/(app)/dashboard/page.tsx");
@@ -37,35 +42,50 @@ const ALERTS = read("lib/alerts.ts");
 // ── 1. Public report: combined paid spend, and correct labels ───────────────
 
 describe("public share report (client-facing)", () => {
-  test("the Ad spend tile binds the COMBINED paid spend, not Meta-only ads.spend", () => {
-    expect(PUBLIC_REPORT).toContain("kpis.spend == null ? \"—\" : formatCurrency(kpis.spend)");
-    // The old Meta-only binding must be gone from the spend tile. `ads.spend` may
-    // still legitimately appear nowhere else in this file.
-    expect(PUBLIC_REPORT).not.toContain("formatCurrency(ads.spend)");
+  test("the headline Ad spend KPI binds the COMBINED paid spend", () => {
+    // The KPI strip's "Ad spend" card divides into the same ROAS shown beside it,
+    // so it must be kpis.spend (Meta + Google), never the Meta-only ads.spend.
+    expect(SHARE_DASHBOARD).toMatch(
+      /label: "Ad spend",[\s\S]{0,200}kpis\.spend != null \? formatCurrency\(kpis\.spend/,
+    );
   });
 
   test("a null combined spend renders “—”, never ₹0", () => {
     // The guard is a null CHECK, not a `?? 0` coercion.
-    expect(PUBLIC_REPORT).toContain("kpis.spend == null");
-    expect(PUBLIC_REPORT).not.toContain("kpis.spend ?? 0");
-    expect(PUBLIC_REPORT).toContain("Ad accounts report in different currencies");
+    expect(SHARE_DASHBOARD).toContain("kpis.spend != null");
+    expect(SHARE_DASHBOARD).not.toContain("kpis.spend ?? 0");
+    expect(SHARE_DASHBOARD).toContain("Ad accounts report in different currencies");
   });
 
   test("the ROAS hint states the PAID definition", () => {
-    expect(PUBLIC_REPORT).toContain("Paid revenue ÷ paid ad spend");
+    expect(SHARE_DASHBOARD).toContain("Paid-channel revenue ÷ paid ad spend");
     // The stale hint described the old blended formula.
-    expect(PUBLIC_REPORT).not.toContain('hint="Revenue ÷ ad spend"');
+    expect(SHARE_DASHBOARD).not.toContain('hint="Revenue ÷ ad spend"');
   });
 
   test("the cost/booking hint states the PAID definition", () => {
-    expect(PUBLIC_REPORT).toContain("Paid ad spend ÷ paid bookings");
-    expect(PUBLIC_REPORT).not.toContain('hint="Ad spend ÷ bookings"');
+    expect(SHARE_DASHBOARD).toContain("Paid ad spend ÷ paid-attributed bookings");
+    expect(SHARE_DASHBOARD).not.toContain('hint="Ad spend ÷ bookings"');
   });
 
-  test("the Meta-only spend chart is labelled as Meta, not as the combined total", () => {
-    // `ads.spendOverTime` comes from AdSnapshot and is Meta-only; leaving it
-    // titled "Spend over time" reads as a breakdown of the combined tile.
-    expect(PUBLIC_REPORT).toContain("Meta spend over time");
+  test("the Meta-only spend figures are labelled as Meta, not as the combined total", () => {
+    // `ads.spend` / `ads.spendOverTime` come from AdSnapshot and are Meta-only.
+    // They may appear — but only under a tile that says so, never as "Ad spend".
+    expect(SHARE_DASHBOARD).toMatch(/Meta ad spend[\s\S]{0,200}formatCurrency\(ads\.spend\)/);
+    expect(SHARE_DASHBOARD).toContain("Meta ROAS");
+  });
+
+  test("every spend figure on the report is behind the showAdSpend gate", () => {
+    // The share link honours the hotel's showAdSpendToHotel flag. Each of these
+    // is spend, or something spend divides into, so each must be conditional.
+    for (const marker of [
+      "showAdSpend ? [{",              // the Ad spend / True ROAS KPI cards
+      "{showAdSpend && (",             // the Meta tiles, chart and campaign grid
+      "{metaConnected && showAdSpend && (", // the Meta campaign breakdown table
+      "budgetStatus && showAdSpend &&", // the monthly ad budget card
+    ]) {
+      expect(SHARE_DASHBOARD, marker).toContain(marker);
+    }
   });
 });
 
@@ -223,7 +243,7 @@ describe("soft-deleted hotel consistency", () => {
 
 describe("no contaminated ROAS formulas", () => {
   const LIVE_SOURCES: [string, string][] = [
-    ["PublicReport.tsx", PUBLIC_REPORT],
+    ["FullHotelDashboard.tsx", SHARE_DASHBOARD],
     ["report-pdf.ts", REPORT_PDF],
     ["agency dashboard", AGENCY_DASHBOARD],
     ["alerts.ts", ALERTS],

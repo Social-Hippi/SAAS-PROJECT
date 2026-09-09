@@ -23,6 +23,8 @@
     "backfill:funnel": "tsx scripts/backfill-funnel-stages.ts",
     "setup:razorpay": "tsx scripts/setup-razorpay.ts",
     "dev:activate": "tsx scripts/dev-activate-subscription.ts",
+    "dev:share-link": "tsx scripts/dev-share-link.ts",
+    "dev:show-spend": "tsx scripts/dev-show-spend.ts",
     "set:super-admin": "tsx scripts/set-super-admin.ts",
     "attach:member": "tsx scripts/attach-member.ts",
     "test": "vitest run",

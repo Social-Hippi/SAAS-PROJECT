@@ -20,7 +20,7 @@ import { describe, expect, test } from "vitest";
 
 import { computeKpis, type EventInput, type PaidSpendInput } from "@/lib/attribution";
 import { safeRoas } from "@/lib/ad-spend";
-import { classifySourceType, isPaidSourceType, PAID_SOURCE_TYPES } from "@/lib/source-classifier";
+import { classifySourceType, isPaidSourceType, PAID_SOURCE_TYPES, NO_CLICK_IDS } from "@/lib/source-classifier";
 
 // ── Builders ────────────────────────────────────────────────────────────────
 
@@ -28,6 +28,7 @@ type ConvOpts = { source?: string | null; medium?: string | null; content?: stri
 
 function conversion(value: number, opts: ConvOpts = {}): EventInput {
   return {
+    ...NO_CLICK_IDS,
     eventType: "conversion",
     utmSource: opts.source ?? null,
     utmMedium: opts.medium ?? null,

@@ -13,7 +13,7 @@ import { AgencySavings } from "@/components/dashboard/AgencySavings";
 import { GlowCard } from "@/components/ui/spotlight-card";
 import { isPixelMode } from "@/lib/tracking-mode";
 import { getSpendByPlatformForHotels, safeRoas } from "@/lib/ad-spend";
-import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
+import { isPaidRow, paidRevenueOf } from "@/lib/metrics/canonical";
 import {
   formatCurrency,
   formatMultiple,
@@ -52,12 +52,20 @@ function KpiCard({
   value,
   delta,
   accent = "zinc",
+  hint,
 }: {
   label: string;
   value: string;
   // Percentage change vs prior period (null = no prior data, undefined = don't render)
   delta?: number | null;
   accent?: Accent;
+  /**
+   * One line stating what the number MEANS — the same discipline the hotel KPI
+   * strip already applies (see hotel/[id]/page.tsx). These cards previously
+   * carried no explanation at all, which is how two differently-computed
+   * figures could both sit on this page under the bare label "ROAS".
+   */
+  hint?: string;
 }) {
   const a = KPI_ACCENT[accent];
   const deltaPill =
@@ -85,6 +93,7 @@ function KpiCard({
       <p className="mt-3 text-2xl font-bold tabular-nums tracking-tight text-ink lg:text-3xl">
         {value}
       </p>
+      {hint && <p className="mt-1 text-[11px] leading-snug text-ink-tertiary">{hint}</p>}
       {delta === null ? (
         <p className="mt-1 text-[11px] text-ink-disabled">No prior period</p>
       ) : delta != null && Number.isFinite(delta) ? (
@@ -278,7 +287,7 @@ export default async function AgencyDashboardPage({
       m.revenue += v;
       dayRow.bookings += 1;
       dayRow.revenue += v;
-      if (isPaidSourceType(classifySourceType(e))) paidRevenue += v;
+      if (isPaidRow({ ...e, value: v })) paidRevenue += v;
     }
     perHotel.set(e.hotelClientId, m);
     perDay.set(day, dayRow);
@@ -314,15 +323,10 @@ export default async function AgencyDashboardPage({
       prior.revenue += Number(g._sum.conversionValue ?? 0);
     }
   }
-  const priorPaidRevenue = priorConversions.reduce(
-    (sum, c) =>
-      sum +
-      (dashboardHotelIdSet.has(c.hotelClientId) &&
-      isPaidSourceType(classifySourceType(c)) &&
-      c.conversionValue != null
-        ? Number(c.conversionValue)
-        : 0),
-    0,
+  const priorPaidRevenue = paidRevenueOf(
+    priorConversions
+      .filter((c) => dashboardHotelIdSet.has(c.hotelClientId))
+      .map((c) => ({ ...c, value: c.conversionValue == null ? 0 : Number(c.conversionValue) })),
   );
   const priorRoas = safeRoas(priorPaidRevenue, priorPaidSpend.total);
 
@@ -428,6 +432,11 @@ export default async function AgencyDashboardPage({
             value={totalSpend == null ? "—" : formatCurrency(totalSpend)}
             delta={deltaSpend}
             accent="violet"
+            hint={
+              totalSpend == null
+                ? "Ad accounts report in different currencies"
+                : "Meta + Google · last 30 days"
+            }
           />
         </div>
       ) : (
@@ -438,24 +447,28 @@ export default async function AgencyDashboardPage({
             value={formatNumber(totals.visits)}
             delta={deltaVisits}
             accent="blue"
+            hint="Tracked page views · last 30 days"
           />
           <KpiCard
             label="Bookings"
             value={formatNumber(totals.bookings)}
             delta={deltaBookings}
             accent="amber"
+            hint="Tracked on hotel websites · last 30 days"
           />
           <KpiCard
             label="Revenue"
             value={formatCurrency(totals.revenue)}
             delta={deltaRevenue}
             accent="emerald"
+            hint="All tracked bookings · last 30 days"
           />
           <KpiCard
             label="ROAS"
             value={formatMultiple(roas)}
             delta={deltaRoas}
             accent="violet"
+            hint="Paid-channel revenue ÷ ad spend · last 30 days"
           />
         </div>
       )}

@@ -195,6 +195,95 @@ export async function getAdAccounts(accessToken: string): Promise<AdAccount[]> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Ad-account funding
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * What Meta will and will not tell us about money left to spend.
+ *
+ * `balance` is NOT available funds — it is the amount DUE on the account, which
+ * for a credit-line account grows as you spend. There is no field anywhere in
+ * the Marketing API that reports "prepaid rupees remaining"; Meta simply does
+ * not publish it to apps.
+ *
+ * The one genuinely usable figure is a SPEND CAP: when an account has one,
+ * `spend_cap - amount_spent` is real headroom, and running out of it stops the
+ * ads exactly like running out of money. So `availableMinor` is derived only in
+ * that case and is null otherwise — which the UI renders as "Balance
+ * unavailable" rather than as zero.
+ *
+ * All amounts are minor units (paise for an INR account) as Meta returns them.
+ */
+export type AdAccountFunding = {
+  accountId: string;
+  currency: string | null;
+  /** spend_cap − amount_spent, when a cap exists. Null when it does not. */
+  availableMinor: number | null;
+  amountDueMinor: number | null;
+  amountSpentMinor: number | null;
+  spendCapMinor: number | null;
+  /** funding_source_details.type, verbatim, for display. */
+  fundingType: string | null;
+};
+
+type RawFunding = {
+  id?: string;
+  account_id?: string;
+  currency?: string;
+  balance?: string;
+  amount_spent?: string;
+  spend_cap?: string;
+  funding_source_details?: { type?: number | string; display_string?: string };
+};
+
+/** Minor-unit string → integer, or null when absent/unparseable. */
+function minorOrNull(v: string | undefined): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+/**
+ * Read one ad account's funding state.
+ *
+ * Never throws on a missing field: Meta omits `spend_cap` entirely for accounts
+ * without one, and omits `funding_source_details` unless the token has the
+ * permission to see it. Each absence becomes a null, not a zero.
+ */
+export async function getAdAccountFunding(
+  accessToken: string,
+  adAccountId: string,
+): Promise<AdAccountFunding> {
+  const act = normalizeAccountId(adAccountId);
+  const res = await graphGet<RawFunding>(act, accessToken, {
+    fields: "account_id,currency,balance,amount_spent,spend_cap,funding_source_details",
+  });
+
+  const spendCapMinor = minorOrNull(res.spend_cap);
+  const amountSpentMinor = minorOrNull(res.amount_spent);
+
+  // A cap of 0 means "no cap set" in Meta's encoding, not "nothing left".
+  const hasCap = spendCapMinor != null && spendCapMinor > 0;
+  const availableMinor =
+    hasCap && amountSpentMinor != null
+      ? Math.max(0, spendCapMinor - amountSpentMinor)
+      : null;
+
+  const rawType = res.funding_source_details?.display_string
+    ?? (res.funding_source_details?.type != null ? String(res.funding_source_details.type) : null);
+
+  return {
+    accountId: res.account_id ?? act.replace(/^act_/, ""),
+    currency: res.currency ?? null,
+    availableMinor,
+    amountDueMinor: minorOrNull(res.balance),
+    amountSpentMinor,
+    spendCapMinor,
+    fundingType: rawType,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // getInsights
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -372,11 +461,18 @@ export type DailyCampaignRow = {
   conversions: number;
   /** Meta-reported purchase value. */
   purchaseValue: number;
+  /**
+   * Meta's campaign objective, verbatim (OUTCOME_SALES, OUTCOME_LEADS, …).
+   * Null when the API omits it — normalisation happens at read time, never here,
+   * so an unrecognised objective is stored faithfully rather than bucketed.
+   */
+  objective: string | null;
 };
 
 type RawCampaignInsights = RawDailyInsights & {
   campaign_id?: string;
   campaign_name?: string;
+  objective?: string;
 };
 
 /**
@@ -392,7 +488,11 @@ export async function getDailyCampaignInsights(
   const act = normalizeAccountId(adAccountId);
   const raw: RawCampaignInsights[] = [];
   let params: GraphParams = {
-    fields: "campaign_id,campaign_name,spend,impressions,clicks,actions,action_values",
+    // `objective` is a campaign-level insights field; it is simply absent from
+    // the response for campaigns Meta does not report one for, which the
+    // nullable column and read-time normalisation both handle.
+    fields:
+      "campaign_id,campaign_name,objective,spend,impressions,clicks,actions,action_values",
     time_range: JSON.stringify({ since: range.since, until: range.until }),
     time_increment: "1",
     level: "campaign",
@@ -423,6 +523,7 @@ export async function getDailyCampaignInsights(
         date: row.date_start!,
         campaignId: row.campaign_id!,
         campaignName: row.campaign_name ?? row.campaign_id!,
+        objective: row.objective ?? null,
         spend: toNumber(row.spend),
         impressions: Math.round(toNumber(row.impressions)),
         clicks: Math.round(toNumber(row.clicks)),

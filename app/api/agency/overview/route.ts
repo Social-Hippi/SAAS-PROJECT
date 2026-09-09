@@ -2,9 +2,9 @@ import { getCurrentMember } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScopedFor } from "@/lib/tenant";
 import { loadAgencyRevenueRows, parseAgencyWindow, parseHotelFilter } from "@/lib/agency-revenue";
-import { aggregateRevenueBySource, rowSourceKey, rowSourceType, type ConversionRow } from "@/lib/revenue-by-source";
+import { aggregateRevenueBySource, rowSourceKey, type ConversionRow } from "@/lib/revenue-by-source";
 import { getSpendByPlatformForHotels, safeRoas } from "@/lib/ad-spend";
-import { isPaidSourceType } from "@/lib/source-classifier";
+import { paidRevenueOf } from "@/lib/metrics/canonical";
 
 // GET /api/agency/overview — the "first thing you see" agency KPIs for the period:
 // total revenue/bookings, ad spend + ROAS, active vs total hotels, top
@@ -75,11 +75,9 @@ export async function GET(request: Request) {
   const totalAdSpend = paidSpend.total;
 
   // Paid-attributed revenue: the only revenue an ad spend denominator may see.
-  let paidRevenue = 0;
-  for (const r of cur.rows) {
-    if (!Number.isFinite(r.value) || r.value <= 0) continue;
-    if (isPaidSourceType(rowSourceType(r))) paidRevenue += r.value;
-  }
+  // The positive-value guard matches sumRevenue above, so both KPIs count the
+  // same rows; canonical decides which of those rows is paid.
+  const paidRevenue = paidRevenueOf(cur.rows.filter((r) => Number.isFinite(r.value) && r.value > 0));
 
   const roas = safeRoas(paidRevenue, totalAdSpend);
   const blendedRoas = safeRoas(totalRevenue, totalAdSpend);

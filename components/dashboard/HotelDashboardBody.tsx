@@ -12,6 +12,9 @@ import { ChannelView } from "@/components/dashboard/ChannelView";
 import { RevenueBySource } from "@/components/dashboard/RevenueBySource";
 import { CommissionSavings } from "@/components/dashboard/CommissionSavings";
 import { ContactAgencyCard } from "@/components/agency/ContactAgencyCard";
+import { DataHealthBanner } from "@/components/dashboard/DataHealthBanner";
+import { snippetState } from "@/lib/integration-status";
+import { trackingHealth } from "@/lib/data-health";
 
 // Shared, full-depth hotel dashboard body. Rendered IDENTICALLY by two surfaces:
 //   • the logged-in hotel-owner dashboard (/hotel/[id]/dashboard) — Clerk auth
@@ -23,8 +26,10 @@ import { ContactAgencyCard } from "@/components/agency/ContactAgencyCard";
 // component itself never reads a Clerk session — the page above it has already
 // resolved the hotel (by session or by token) and hands down only display data.
 //
-// Owner-only chrome (the editable hotel-details form) is injected via `editSlot`,
-// so the share link literally cannot render an edit affordance.
+// Viewer-specific chrome (the editable hotel-details form, the link to People)
+// is injected via `ownerSlot`. What a viewer may do is a capability question,
+// and the PAGE is where capabilities were resolved — so the page composes that
+// slot and this body asks no permission questions of its own.
 
 const RANGE_PRESETS = [
   { key: "7", label: "7d" },
@@ -43,7 +48,13 @@ function relTime(d: Date | null): string {
 
 // Compact funnel + last-5 visitor journeys, server-rendered, scoped to this hotel
 // via runWithAgencyScope. (Mirrors the agency dashboard's preview.)
-async function loadJourneyPreview(agencyId: string, hotelId: string, since: Date, until: Date) {
+async function loadJourneyPreview(
+  agencyId: string,
+  hotelId: string,
+  since: Date,
+  until: Date,
+  includeVisitorRows: boolean,
+) {
   return runWithAgencyScope(agencyId, async () => {
     const [funnelStageGroups, recentSessions] = await Promise.all([
       agencyScoped(prisma.session).groupBy({
@@ -51,15 +62,19 @@ async function loadJourneyPreview(agencyId: string, hotelId: string, since: Date
         where: { hotelClientId: hotelId, startedAt: { gte: since, lte: until } },
         _count: { _all: true },
       }),
-      agencyScoped(prisma.session).findMany({
-        where: { hotelClientId: hotelId },
-        orderBy: { startedAt: "desc" },
-        take: 5,
-        select: {
-          id: true, visitorId: true, startedAt: true, totalTimeMs: true,
-          pageViewCount: true, landingPath: true, exitPath: true,
-        },
-      }),
+      // Skipped entirely without viewGuestDetails — the funnel below is derived
+      // from the aggregate groupBy, so it is unaffected.
+      includeVisitorRows
+        ? agencyScoped(prisma.session).findMany({
+            where: { hotelClientId: hotelId },
+            orderBy: { startedAt: "desc" },
+            take: 5,
+            select: {
+              id: true, visitorId: true, startedAt: true, totalTimeMs: true,
+              pageViewCount: true, landingPath: true, exitPath: true,
+            },
+          })
+        : [],
     ]);
 
     const reachedByRank: Record<number, number> = {};
@@ -92,6 +107,14 @@ export type HotelDashboardBodyProps = {
   agencyId: string;
   agencyName: string;
   snippetStatus: string;
+  /**
+   * Newest tracked event of any kind, ever. Null = nothing has ever arrived.
+   *
+   * Required rather than optional: it is what separates "installed but never
+   * worked" from "worked, then went silent", and a caller that forgets it would
+   * silently collapse those two into the reassuring one.
+   */
+  lastEventAt: Date | null;
   lastSyncedAt: Date | null;
   /** Agency contact details for the (read-only) ContactAgencyCard. */
   agencyContact: React.ComponentProps<typeof ContactAgencyCard>["contact"];
@@ -108,8 +131,21 @@ export type HotelDashboardBodyProps = {
   showRestrictedNotice?: boolean;
   /** Label for the back link from a channel deep-dive. */
   channelBackLabel?: string;
-  /** Owner-only editable section (hotel details). Never passed on the share link. */
-  editSlot?: React.ReactNode;
+  /**
+   * Whether this viewer holds the viewGuestDetails capability.
+   *
+   * Required, not defaulted: a default of `true` would silently show
+   * visitor-level rows to any future caller that forgot the prop, which is the
+   * failure mode worth making impossible. The funnel above the list stays
+   * visible either way — it is aggregate counts, not individual visitors.
+   */
+  canViewGuestDetails: boolean;
+  /**
+   * Controls that only some viewers get — the editable hotel-details form, the
+   * link to People. Composed by the page from the same capabilities its guards
+   * used, so a rendered control and a permitted action can never disagree.
+   */
+  ownerSlot?: React.ReactNode;
 };
 
 export async function HotelDashboardBody({
@@ -118,6 +154,7 @@ export async function HotelDashboardBody({
   agencyId,
   agencyName,
   snippetStatus,
+  lastEventAt,
   lastSyncedAt,
   agencyContact,
   basePath,
@@ -129,10 +166,10 @@ export async function HotelDashboardBody({
   channelParam,
   showRestrictedNotice = false,
   channelBackLabel = "← Dashboard",
-  editSlot,
+  canViewGuestDetails,
+  ownerSlot,
 }: HotelDashboardBodyProps) {
   const range = resolveRange({ range: rangeParam, from: fromParam, to: toParam });
-  const installed = snippetStatus === "installed";
 
   // ── Channel deep-dive view (Meta Ads / Instagram / Influencer / …) ──
   const channel: ChannelKey = isChannelKey(channelParam) ? channelParam : "all";
@@ -159,7 +196,28 @@ export async function HotelDashboardBody({
     );
   }
 
-  const journey = await loadJourneyPreview(agencyId, hotelId, range.since, range.until);
+  // The capability decides what is FETCHED, not just what is painted. Loading
+  // visitor rows and then hiding them would still put them in the HTML payload.
+  const journey = await loadJourneyPreview(
+    agencyId, hotelId, range.since, range.until, canViewGuestDetails,
+  );
+
+  // "Can I trust the numbers below?" — one verdict, from the signals the app
+  // already records. Computed here rather than above because it needs to know
+  // whether the window on screen contained any activity: a hotel that is still
+  // sending visits but recorded nothing this week is a real zero, while one that
+  // has gone silent for days is a measurement failure wearing the same "0".
+  //
+  // This replaces a test against the snippetStatus value "installed", which
+  // nothing in the codebase ever writes (the tracker writes "live", alerts write
+  // "error", the default is "not_installed"). Every hotel therefore failed it —
+  // so a hotel whose tracking had worked for months was still being told, on
+  // every load, to finish setting it up.
+  const tracking = trackingHealth({
+    snippet: snippetState(snippetStatus, lastEventAt),
+    lastEventAt,
+    hasEventsInWindow: journey.funnelHasData,
+  });
 
   function rangeHref(key: string): string {
     return key === "30" ? basePath : `${basePath}?range=${key}`;
@@ -198,15 +256,10 @@ export async function HotelDashboardBody({
         </div>
       )}
 
-      {!installed && (
-        <section className="rounded-card border border-warning/40 bg-warning/10 p-4 sm:p-5">
-          <h2 className="font-medium text-ink">Finish setup: install your tracking snippet</h2>
-          <p className="mt-1 text-sm text-ink-secondary">
-            Your dashboard fills in once your website is sending visits. Ask {agencyName} if you
-            need help getting the tracking snippet installed.
-          </p>
-        </section>
-      )}
+      {/* Silent while tracking is healthy — including when a real zero is a real
+          zero. It speaks up only when a figure below would otherwise be read as
+          a business result when it is actually a measurement gap. */}
+      <DataHealthBanner health={tracking} audience="hotel" agencyName={agencyName} />
 
       {/* Plain-English performance summary (own period toggle). */}
       <OwnerSummaryCard hotelId={hotelId} apiBase={apiBase} shareToken={shareToken} />
@@ -252,13 +305,17 @@ export async function HotelDashboardBody({
       {/* Recent Visitor Journeys + funnel — page-by-page paths and drop-off. */}
       <section className="overflow-hidden rounded-card border border-line bg-card">
         <div className="border-b border-line px-4 py-3 sm:px-5">
-          <h2 className="font-medium text-ink">Recent Visitor Journeys</h2>
+          <h2 className="font-medium text-ink">
+            {canViewGuestDetails ? "Recent Visitor Journeys" : "Visitor funnel"}
+          </h2>
           <p className="mt-0.5 text-sm text-ink-tertiary">
-            The page-by-page path recent visitors took, with time on site and drop-off.
+            {canViewGuestDetails
+              ? "The page-by-page path recent visitors took, with time on site and drop-off."
+              : "How visitors move through your site, and where they drop off."}
           </p>
         </div>
         {journey.funnelHasData && (
-          <div className="border-b border-line px-4 py-4">
+          <div className={canViewGuestDetails ? "border-b border-line px-4 py-4" : "px-4 py-4"}>
             <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-tertiary">
               Funnel · {range.label.toLowerCase()}
             </p>
@@ -275,7 +332,15 @@ export async function HotelDashboardBody({
             </div>
           </div>
         )}
-        {journey.recentSessions.length === 0 ? (
+        {!canViewGuestDetails ? (
+          // NOT the empty state. "No visitor journeys yet" would be a false
+          // statement to someone whose role simply excludes them — there may be
+          // thousands. Say which it is.
+          <p className="px-4 py-6 text-sm text-ink-tertiary">
+            Individual visitor journeys aren&apos;t part of your access level. The funnel above
+            covers the same visitors in aggregate.
+          </p>
+        ) : journey.recentSessions.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-ink-tertiary">
             No visitor journeys yet. They appear once your website is tracking visits.
           </p>
@@ -311,7 +376,7 @@ export async function HotelDashboardBody({
       <ContactAgencyCard agencyName={agencyName} contact={agencyContact} canEdit={false} viewerIsAgency={false} />
 
       {/* Owner-only editable details (never rendered on the public share link). */}
-      {editSlot}
+      {ownerSlot}
     </div>
   );
 }

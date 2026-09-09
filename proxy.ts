@@ -27,6 +27,18 @@ const isPublicRoute = createRouteMatcher([
   // Public, UUID-addressed hotel report links. No login: access is gated by the
   // unguessable token (and an optional password) inside the route itself.
   "/share(.*)",
+  // The hotel READ routes that the /share/<uuid> report's client components call.
+  // They cannot sit behind the session gate: a share reader has no Clerk session,
+  // so middleware would 307 their fetches to /sign-in and the report would render
+  // with every client panel stuck on an error.
+  //
+  // "Public" here means "middleware does not require a session" — NOT unguarded.
+  // Every route under this prefix is a GET that calls requireReadAccess(), which
+  // demands EITHER a Clerk grant on that exact hotel OR a live ShareLink token
+  // addressing it, and none of them export a write verb. Listing the prefix does
+  // not weaken the logged-in path either: clerkMiddleware still resolves the
+  // session, so auth() inside the handler sees it exactly as before.
+  "/api/hotel(.*)",
   // Public, token-addressed hotel-owner dashboard (/h/<shareToken>). No login:
   // access is gated entirely by the unguessable 256-bit token inside the route,
   // which also enforces hotel-level data isolation.
@@ -34,6 +46,13 @@ const isPublicRoute = createRouteMatcher([
   // Public hotel self-signup page (/join/<inviteCode>). No login to view; the
   // route resolves the agency from the code and the signup uses Clerk directly.
   "/join(.*)",
+  // Per-person hotel invitation acceptance (/hotel-invite/<token>). Public so
+  // the page itself can send a signed-out recipient to Clerk and back with the
+  // token intact; the single-use token is the credential, verified in-route
+  // against its stored SHA-256. Listing it here also keeps it OUT of the
+  // /hotel(.*) matcher below, which would otherwise require a session before
+  // the invitation could ever be accepted.
+  "/hotel-invite(.*)",
   // The tracking endpoints are called cross-origin by the snippet on hotel
   // websites with no auth — they must stay public (scoped by the public siteId).
   "/api/track(.*)",
@@ -75,6 +94,8 @@ const isPublicRoute = createRouteMatcher([
   "/api/billing/renewal-reminders(.*)",
   // Daily budget-threshold alert cron, gated by CRON_SECRET inside the route.
   "/api/budget/check(.*)",
+  // Daily ad-funds refresh + low-balance reminder cron, same CRON_SECRET guard.
+  "/api/balance/check(.*)",
   // Daily GA4 (OAuth) sync cron, gated by CRON_SECRET inside the route.
   "/api/ga4/sync(.*)",
   // GA4 OAuth callback: the browser arrives from accounts.google.com; the signed
@@ -83,6 +104,7 @@ const isPublicRoute = createRouteMatcher([
   // Google Ads OAuth routes
   "/api/auth/google-ads/start(.*)",
   "/api/auth/google-ads/callback(.*)",
+  "/api/google-ads/sync(.*)",
   // Daily visitor-journey 90-day retention cron, gated by CRON_SECRET in-route.
   "/api/cron/cleanup-journey(.*)",
 ]);
@@ -176,10 +198,18 @@ export default clerkMiddleware(async (auth, req) => {
   }
 
   if (isHotelRoute(req)) {
-    // ACCESS LOCKDOWN: hotels no longer log in. The /hotel owner dashboard is
-    // retired — the route itself now 404s via lib/hotel-auth. Only agency staff
-    // may resolve here at all; any other role (incl. a legacy hotel_client) → home.
-    if (role !== "agency_admin") return NextResponse.redirect(home);
+    // Hotel users log in again, so this no longer gates on the platform role.
+    //
+    // It cannot: a hotel person's authority comes from a HotelMember grant on a
+    // SPECIFIC hotel, and middleware has no database access to check one. Any
+    // role check here would be either too permissive (wrong hotel) or too strict
+    // (a legitimate member with an unexpected role claim). The real gate is
+    // resolveHotelAccess, called server-side by every /hotel page and
+    // /api/hotel route, which resolves the hotel row and then requires a grant
+    // on that exact hotel — so an unauthorized user gets a 404, not a redirect.
+    //
+    // Middleware's job here is only "is this request authenticated at all",
+    // which the !userId check above already did.
     return NextResponse.next();
   }
 

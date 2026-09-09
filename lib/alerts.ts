@@ -12,7 +12,7 @@ import {
   esc,
 } from "@/lib/email";
 import { formatCurrency, formatNumber, formatPercent, formatMultiple } from "@/lib/format";
-import { classifySourceType, isPaidSourceType } from "@/lib/source-classifier";
+import { paidRevenueOf } from "@/lib/metrics/canonical";
 
 // Email alerts engine. Detects four conditions across every agency (each query
 // scoped by agencyId per the multi-tenancy rule), writes an Alert row for each,
@@ -588,15 +588,10 @@ async function checkWeeklySummary(
   const totalSpend = [...spendMap.values()].reduce((a, b) => a + b, 0);
   // Phase 0: PAID revenue ÷ paid spend. Was totals.revenue (every channel,
   // including direct and organic) ÷ Meta-only spend — emailed weekly as "ROAS".
-  const paidRevenue = conversionRows.reduce(
-    (sum, c) =>
-      sum +
-      (activeHotelIds.has(c.hotelClientId) &&
-      isPaidSourceType(classifySourceType(c)) &&
-      c.conversionValue != null
-        ? Number(c.conversionValue)
-        : 0),
-    0,
+  const paidRevenue = paidRevenueOf(
+    conversionRows
+      .filter((c) => activeHotelIds.has(c.hotelClientId))
+      .map((c) => ({ ...c, value: c.conversionValue == null ? 0 : Number(c.conversionValue) })),
   );
   const roas = totalSpend > 0 ? paidRevenue / totalSpend : null;
 

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { resolveHotelForViewer } from "@/lib/hotel-auth";
 import { HotelDashboardBody } from "@/components/dashboard/HotelDashboardBody";
@@ -23,6 +24,10 @@ import { HotelDetailsForm } from "./HotelDetailsForm";
 //   • Ad spend is ALWAYS shown to the signed-in owner for their own hotel.
 //   • Only the owner's own contact details are editable. The OTA commission rate
 //     is agency-managed (read-only here).
+//   • What the viewer sees depends on their ROLE, not just on reaching the page:
+//     viewGuestDetails decides whether the visitor-journey rows are fetched at
+//     all, so a marketing user gets the performance picture without individual
+//     visitors. The predicate is the same one the guards use.
 
 export const dynamic = "force-dynamic";
 const HOTEL_API = "/api/hotel";
@@ -42,7 +47,7 @@ export default async function HotelOwnerDashboard({
   const sp = await searchParams;
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
-  const editSlot =
+  const detailsSection =
     canEdit ? (
       <section className="overflow-hidden rounded-2xl border border-line bg-card">
         <div className="border-b border-line px-4 py-3 sm:px-5">
@@ -65,6 +70,28 @@ export default async function HotelOwnerDashboard({
       </section>
     ) : null;
 
+  // Two capabilities, asked separately. They happen to belong to the same role
+  // today, but manageHotelSettings ("change this hotel's details") and manageTeam
+  // ("decide who else gets in") are different powers, and collapsing them here
+  // would quietly make a future role that has one appear to have both.
+  const ownerSlot =
+    detailsSection || viewer.can("manageTeam") ? (
+      <div className="space-y-4">
+        {detailsSection}
+        {viewer.can("manageTeam") && (
+          <p className="text-sm text-ink-tertiary">
+            Need to give someone else at {hotel.name} access?{" "}
+            <Link
+              href={`/hotel/${hotel.id}/team`}
+              className="font-medium text-brand hover:underline"
+            >
+              Manage people
+            </Link>
+          </p>
+        )}
+      </div>
+    ) : null;
+
   return (
     <HotelDashboardBody
       hotelId={hotel.id}
@@ -72,6 +99,7 @@ export default async function HotelOwnerDashboard({
       agencyId={hotel.agencyId}
       agencyName={hotel.agency.name}
       snippetStatus={hotel.snippetStatus}
+      lastEventAt={hotel.lastEventAt}
       lastSyncedAt={hotel.lastSyncedAt}
       agencyContact={hotel.agency}
       basePath={`/hotel/${hotel.id}/dashboard`}
@@ -82,7 +110,8 @@ export default async function HotelOwnerDashboard({
       channelParam={one(sp.channel)}
       showRestrictedNotice={one(sp.notice) === "agency-restricted"}
       channelBackLabel="← My Dashboard"
-      editSlot={editSlot}
+      canViewGuestDetails={viewer.can("viewGuestDetails")}
+      ownerSlot={ownerSlot}
     />
   );
 }

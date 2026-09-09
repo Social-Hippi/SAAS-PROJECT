@@ -148,12 +148,19 @@ export function AgencyRevenueRollup({ hotels }: { hotels: Hotel[] }) {
           hint={overview?.periodOverPeriodGrowth != null ? `${overview.periodOverPeriodGrowth >= 0 ? "▲" : "▼"} ${Math.abs(overview.periodOverPeriodGrowth).toFixed(1)}% vs prev period` : "vs prev period —"}
           tone={overview?.periodOverPeriodGrowth != null ? (overview.periodOverPeriodGrowth >= 0 ? "text-success" : "text-danger") : undefined} />
         <Kpi label="Total bookings" value={overview ? formatNumber(overview.totalBookings) : "—"} />
-        <Kpi label="ROAS" value={overview ? (overview.roas == null ? "—" : formatMultiple(overview.roas)) : "—"}
+        {/* This panel has its OWN range + hotel filter, and classifies revenue on
+            the revenue-by-source basis (a booking that used an influencer coupon
+            counts as influencer, not as paid). The page-level ROAS card above is
+            a fixed 30 days over all hotels and classifies by UTM alone. Both are
+            legitimate answers to DIFFERENT questions — so the label says which
+            one this is, rather than leaving two bare "ROAS" cards on one screen
+            showing different numbers with no explanation. */}
+        <Kpi label="ROAS · this selection" value={overview ? (overview.roas == null ? "—" : formatMultiple(overview.roas)) : "—"}
           hint={
             overview
               ? overview.totalAdSpend == null
                 ? "Ad spend — (accounts report in different currencies)"
-                : `Ad spend ${formatCurrency(overview.totalAdSpend, { compact: true })}`
+                : `Paid revenue ÷ ${formatCurrency(overview.totalAdSpend, { compact: true })} ad spend`
               : undefined
           } />
         <Kpi label="Active hotels" value={overview ? `${overview.activeHotelsCount} of ${overview.totalHotelsCount}` : "—"} hint="generating bookings" />

@@ -42,6 +42,11 @@ export const POLICIES = {
   sharePage: { limit: 30, window: "60 s", failOpen: false },
   // Share password attempts, per (token+IP) — tight anti-brute-force.
   sharePassword: { limit: 5, window: "60 s", failOpen: false },
+  // Saving a low-balance reminder from the public share report, per (token+IP).
+  // This is the ONE write a link-holder can perform, and it names an email
+  // address to send hotel figures to, so it is deliberately tight and fails
+  // CLOSED — a store outage must not open an unmetered write.
+  shareReminder: { limit: 5, window: "60 s", failOpen: false },
   // Public hotel-owner dashboard (/h/<token>) load, per IP.
   hotelOwner: { limit: 30, window: "60 s", failOpen: false },
   // Hotel self-signup, per IP (invite-code probing + account spam).

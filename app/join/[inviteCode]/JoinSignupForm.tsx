@@ -2,13 +2,20 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { completeHotelSignup } from "./actions";
 
 // Hotel self-signup form. Submits to the server action, which creates the hotel's
-// Clerk account (Backend SDK) + the HotelClient. A newly created account has no
-// browser session yet, so we then send the owner to Clerk's hosted sign-in,
-// returning to their dashboard. An already-signed-in visitor goes straight there.
+// Clerk account (Backend SDK) + the HotelClient.
+//
+// It used to redirect to /hotel/<id>/dashboard on success. Hotel logins are
+// currently disabled at the authorization layer (hotelAccessNeutralized in
+// lib/hotel-auth.ts), so that route 404s and proxy.ts bounces the signed-in
+// hotel user to the marketing homepage with no explanation — the signup
+// completed, the account existed, and the product silently ejected them.
+//
+// It now resolves to an on-page confirmation that says what actually happened
+// and what happens next. No redirect into a dead route, and no dashboard is
+// promised that the product cannot open.
 
 const CHANNEL_MANAGERS = ["None", "djubo", "eZee", "STAAH", "RateGain", "Other", "Custom"];
 const inputCls =
@@ -34,9 +41,9 @@ export function JoinSignupForm({
   agencyName: string;
   alreadyAuthed: boolean;
 }) {
-  const router = useRouter();
   const [pending, start] = useTransition();
   const [formError, setFormError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
   const [existingEmail, setExistingEmail] = useState(false);
   const [errs, setErrs] = useState<Record<string, string>>({});
   const [sameWa, setSameWa] = useState(false);
@@ -47,6 +54,35 @@ export function JoinSignupForm({
   const set = (k: keyof typeof v) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setV((p) => ({ ...p, [k]: e.target.value }));
   const waValue = sameWa ? v.ownerPhone : v.whatsappNumber;
+
+  if (done) {
+    return (
+      <div className="rounded-card border border-line bg-card p-6 text-center shadow-card">
+        <p className="text-2xl" aria-hidden>
+          ✓
+        </p>
+        <h2 className="mt-2 text-lg font-semibold tracking-tight text-ink">
+          You&apos;re set up with {agencyName}
+        </h2>
+        <p className="mt-2 text-sm text-ink-secondary">
+          Your hotel has been added to {agencyName}&apos;s account. They&apos;ll finish
+          connecting your marketing data and share your performance reports with you.
+        </p>
+        <div className="mt-5 rounded-button border border-line bg-page p-4 text-left">
+          <p className="text-sm font-medium text-ink">What happens next</p>
+          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-ink-tertiary">
+            <li>{agencyName} installs a small tracking snippet on your website.</li>
+            <li>They connect your ad and analytics accounts.</li>
+            <li>Sign in any time to see your results.</li>
+          </ol>
+        </div>
+        <p className="mt-5 text-xs text-ink-disabled">
+          Questions? Contact {agencyName} directly — they manage your account.
+        </p>
+      </div>
+    );
+  }
+
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -59,14 +95,7 @@ export function JoinSignupForm({
         setExistingEmail(!!res.existingEmail);
         return;
       }
-      const dest = `/hotel/${res.hotelClientId}/dashboard`;
-      if (res.needsSignIn) {
-        // New account created server-side — sign in to get a session, then land on the dashboard.
-        router.push(`/sign-in?redirect_url=${encodeURIComponent(dest)}`);
-      } else {
-        router.push(dest);
-        router.refresh();
-      }
+      setDone(true);
     });
   }
 

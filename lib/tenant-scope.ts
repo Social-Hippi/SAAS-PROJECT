@@ -190,4 +190,9 @@ export const MULTI_TENANT_MODELS = [
   "booking",
   "bookingStatusEvent",
   "bookingJourneyMatch",
+  // Hotel-side users. These carry agencyId like every other tenant table and go
+  // through the SAME scoping wrapper — the hotel dimension is an additional
+  // filter (see lib/hotel-access.ts), never a second tenancy system.
+  "hotelMember",
+  "hotelUserInvite",
 ] as const;

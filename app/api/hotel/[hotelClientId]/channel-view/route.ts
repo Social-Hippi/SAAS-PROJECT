@@ -3,6 +3,7 @@ import { runWithAgencyScope } from "@/lib/tenant";
 import { TtlLruCache } from "@/lib/lru-cache";
 import { parseAgencyWindow } from "@/lib/agency-revenue";
 import { loadChannelView, isChannelKey, type ChannelView } from "@/lib/channel-view";
+import { stripSpendFromChannelView } from "@/lib/share-spend-gate";
 
 // GET /api/hotel/[hotelClientId]/channel-view?channel=&startDate=&endDate= —
 // hotel-owner mirror of the agency channel-view route. Same per-channel deep-dive
@@ -10,9 +11,10 @@ import { loadChannelView, isChannelKey, type ChannelView } from "@/lib/channel-v
 // Influencer, Direct, Other). Authorized via requireHotelOwnerAccess; reads run
 // inside runWithAgencyScope so they are scoped to the owning agency + this hotel.
 //
-// Ad spend: the owner ALWAYS sees full Meta spend for their OWN hotel here. The
-// showAdSpendToHotel flag only gates the public /h/ share link, not the logged-in
-// owner's authenticated dashboard.
+// Ad spend: a SESSION (agency member or granted hotel user) always sees full spend
+// for this hotel — showAdSpendToHotel has never gated the logged-in dashboard. A
+// /share/<uuid> caller is gated on that flag, and the strip happens on the way out
+// so one cache entry serves both kinds of caller.
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -33,8 +35,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ hote
   const { start, end } = parseAgencyWindow(url.searchParams);
 
   const key = `${hotelClientId}|${channelParam}|${start.toISOString()}|${end.toISOString()}`;
+  const gate = (v: ChannelView | null) =>
+    v == null ? { channel: "all" } : access.spendVisible ? v : stripSpendFromChannelView(v);
+
   const hit = cache.get(key);
-  if (hit !== undefined) return Response.json(hit ?? { channel: "all" });
+  if (hit !== undefined) return Response.json(gate(hit));
 
   let data: ChannelView | null;
   try {
@@ -46,5 +51,5 @@ export async function GET(request: Request, { params }: { params: Promise<{ hote
   }
 
   cache.set(key, data);
-  return Response.json(data ?? { channel: "all" });
+  return Response.json(gate(data));
 }

@@ -15,7 +15,7 @@ import { describe, expect, test } from "vitest";
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { buildUtmLink, slugify, UTM_CONTENT_PREFIX } from "@/lib/utm";
-import { classifySourceType } from "@/lib/source-classifier";
+import { classifySourceType, NO_CLICK_IDS } from "@/lib/source-classifier";
 import {
   contentPieceIdFromUtmContent,
   isInfluencerUtm,
@@ -73,7 +73,7 @@ describe("A3 — HotelTrack-generated influencer URL", () => {
 
   test("the URL classifies as `influencer`, not paid or organic social", () => {
     expect(
-      classifySourceType({
+      classifySourceType({ ...NO_CLICK_IDS,
         utmSource: params.get("utm_source"),
         utmMedium: params.get("utm_medium"),
         utmContent: params.get("utm_content"),
@@ -84,7 +84,7 @@ describe("A3 — HotelTrack-generated influencer URL", () => {
   test("an influencer link is never mistaken for a Meta ad", () => {
     // instagram + a NON-paid medium must not reach the meta_ads branch.
     expect(
-      classifySourceType({ utmSource: "instagram", utmMedium: "influencer" }),
+      classifySourceType({ ...NO_CLICK_IDS, utmSource: "instagram", utmMedium: "influencer" }),
     ).not.toBe("meta_ads");
   });
 });

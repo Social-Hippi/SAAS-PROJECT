@@ -31,6 +31,30 @@ enum MemberRole {
   analyst
 }
 
+/// A hotel-side user's role WITHIN one hotel. Deliberately separate from
+/// MemberRole (which is agency-side): an agency analyst and a hotel manager are
+/// different principals with different data, not two values of one scale.
+///
+///   hotel_owner     — full read of their hotel + can manage their hotel's team
+///   hotel_manager   — full read of their hotel; no team management
+///   hotel_marketing — marketing surfaces only (channels, campaigns, attribution)
+///
+/// Lowercase to match MemberRole's existing convention in this schema.
+enum HotelRole {
+  hotel_owner
+  hotel_manager
+  hotel_marketing
+}
+
+/// Lifecycle of a per-person hotel invitation. Closed set → enum, uppercase to
+/// match the other status enums (BookingStatus, GA4Status, GoogleAdsStatus).
+enum HotelInviteState {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
 enum ConversionMethod {
   url_change
   same_page
@@ -145,6 +169,8 @@ model Agency {
   reports                    Report[]
   alerts                     Alert[]
   shareLinks                 ShareLink[]
+  adAccountBalances          AdAccountBalance[]
+  lowBalanceReminders        LowBalanceReminder[]
   instagramConnections       InstagramConnection[]
   socialSnapshots            SocialSnapshot[]
   postSnapshots              PostSnapshot[]
@@ -173,6 +199,8 @@ model Agency {
   bookings                   Booking[]
   bookingStatusEvents        BookingStatusEvent[]
   bookingJourneyMatches      BookingJourneyMatch[]
+  hotelMembers               HotelMember[]
+  hotelUserInvites           HotelUserInvite[]
 }
 
 model AgencyMember {
@@ -292,6 +320,8 @@ model HotelClient {
   reports                    Report[]
   alerts                     Alert[]
   shareLinks                 ShareLink[]
+  adAccountBalances          AdAccountBalance[]
+  lowBalanceReminders        LowBalanceReminder[]
   instagramConnections       InstagramConnection[]
   socialSnapshots            SocialSnapshot[]
   postSnapshots              PostSnapshot[]
@@ -316,9 +346,102 @@ model HotelClient {
   unattributedMentions       UnattributedMention[]
   bookingConnection          BookingConnection?
   bookings                   Booking[]
+  members                    HotelMember[]
+  userInvites                HotelUserInvite[]
 
   @@index([agencyId])
   @@index([createdByUserId]) // hotel-owner → their hotel lookup
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOTEL-SIDE USERS.
+//
+// Until now the ONLY user↔hotel link in the schema was HotelClient.createdByUserId
+// — a single nullable column recording who self-signed-up. That is a provenance
+// note, not an access model: it cannot express a second person at the same hotel,
+// cannot carry a role, and cannot be revoked. So hotel access was necessarily
+// all-or-nothing, which is why it was switched off wholesale in lib/hotel-auth.ts.
+//
+// HotelMember is the grant. It deliberately MIRRORS AgencyMember (clerkId → a
+// membership row carrying a role) so there is ONE tenancy architecture, not two:
+// every row still carries agencyId, is indexed on it, and is reachable through
+// the existing agencyScoped* helpers. The hotel dimension is an ADDITIONAL
+// filter, never a replacement for the agency one.
+//
+// One difference from AgencyMember, and it is intentional: clerkId is NOT
+// globally unique here. AgencyMember.clerkId is @unique because a person belongs
+// to exactly one agency. A hotel person may legitimately hold several properties
+// (a group owner with three hotels), so uniqueness is per (hotel, user).
+// ─────────────────────────────────────────────────────────────────────────────
+
+model HotelMember {
+  id                      String    @id @default(cuid())
+  /// Denormalised from HotelClient at write time, exactly like every other
+  /// multi-tenant table, so tenant filtering stays a direct index hit and the
+  /// existing agencyScoped() wrapper works unchanged.
+  agencyId                String
+  hotelClientId           String
+  /// The Clerk user this grant belongs to.
+  clerkId                 String
+  /// Captured at accept time for display + audit. Not an identity — clerkId is.
+  email                   String
+  name                    String
+  role                    HotelRole
+  /// Which agency member issued the grant (audit trail). SetNull-free by design:
+  /// it is a plain id, so removing a member never erases who granted access.
+  invitedByAgencyMemberId String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  /// One membership per (hotel, user) — re-accepting an invite updates the role
+  /// rather than stacking a second grant.
+  @@unique([hotelClientId, clerkId])
+  @@index([agencyId])
+  @@index([hotelClientId])
+  /// "Which hotels does this signed-in user belong to?" — the hot path for every
+  /// hotel-side request.
+  @@index([clerkId])
+}
+
+/// A per-person invitation to ONE hotel, issued by an agency admin.
+///
+/// Distinct from HotelInvite above, which is the agency-wide self-signup CODE a
+/// hotel uses to create its own HotelClient record. That one onboards a
+/// PROPERTY; this one grants a PERSON access to a property that already exists.
+///
+/// The emailed token is never stored — only its SHA-256, the same discipline the
+/// rest of the codebase applies to share passwords (scrypt), visitor PII and
+/// share-access IPs. A leaked database therefore cannot be used to accept an
+/// outstanding invitation.
+model HotelUserInvite {
+  id                      String           @id @default(cuid())
+  agencyId                String
+  hotelClientId           String
+  /// Lowercased at write time so the accept path can compare deterministically.
+  email                   String
+  role                    HotelRole
+  /// SHA-256 of the token that went out in the email. Unique so a token maps to
+  /// at most one invitation, and so re-issuing produces a genuinely new row.
+  tokenHash               String           @unique
+  status                  HotelInviteState @default(PENDING)
+  expiresAt               DateTime
+  invitedByAgencyMemberId String?
+  acceptedByClerkId       String?
+  acceptedAt              DateTime?
+  revokedAt               DateTime?
+  createdAt               DateTime         @default(now())
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId])
+  /// "Outstanding invitations for this hotel" — the agency-side management view.
+  @@index([hotelClientId, status])
+  /// "Has this person already been invited here?" — the duplicate-invite guard.
+  @@index([hotelClientId, email])
 }
 
 // Audit trail for hotel self-signups. One row per started signup; status moves
@@ -770,6 +893,16 @@ model AdCampaignSnapshot {
   metaAccountId  String?
   metaCampaignId String
   campaignName   String
+  /// Meta's own campaign objective, verbatim: OUTCOME_SALES / OUTCOME_LEADS /
+  /// OUTCOME_TRAFFIC / OUTCOME_AWARENESS / OUTCOME_ENGAGEMENT / … plus the
+  /// legacy names (CONVERSIONS, LINK_CLICKS, REACH) still returned for older
+  /// campaigns. Stored RAW and normalised at read time by lib/metrics/
+  /// campaign-type.ts, so a new Meta objective never silently becomes the wrong
+  /// bucket in historical rows.
+  ///
+  /// Nullable because it is unknowable for every row synced before this column
+  /// existed — those read "Not available", never a guessed category.
+  objective      String?
   date           DateTime  @db.Date
   spend          Decimal   @db.Decimal(12, 2)
   impressions    Int
@@ -1159,6 +1292,95 @@ model ShareLink {
 // retired EAA-via-Page flow were stamped "eaa_via_page" + status
 // "deprecated_eaa" by the rename migration and are never used again.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// A point-in-time reading of an ad account's funding, refreshed by the daily
+/// balance cron.
+///
+/// WHY THIS IS NOT SIMPLY "BALANCE". Meta's ad-account `balance` field is the
+/// amount DUE on the account, not money available to spend — for a credit-line
+/// account there is no such thing as available funds at all, and only prepaid
+/// accounts carry a usable figure. So every field here is nullable and the
+/// derived `availableMinor` is written ONLY when the funding type makes it
+/// meaningful. Everything else reads "Balance unavailable", which is the honest
+/// answer rather than a zero that would read as "you are out of money".
+///
+/// Minor units (paise/cents) throughout, matching how Meta returns them and how
+/// BudgetAlert already stores money.
+model AdAccountBalance {
+  id            String @id @default(cuid())
+  agencyId      String
+  hotelClientId String
+
+  /// "meta" today. String, not an enum, per this schema's open-vocabulary rule -
+  /// Google Ads billing needs a scope this app does not hold, so it is absent
+  /// rather than modelled speculatively.
+  platform  String
+  accountId String
+
+  /// Spendable funds, in minor units. NULL means "this account's funding model
+  /// does not expose one" - never 0.
+  availableMinor Int?
+  /// Outstanding amount due, as Meta reports `balance`.
+  amountDueMinor Int?
+  /// Lifetime spend and the account's spend cap, when set.
+  amountSpentMinor Int?
+  spendCapMinor    Int?
+  /// ISO-4217. NULL means unknown - figures are never assumed to be INR.
+  currency         String?
+  /// Meta's funding_source_details.type, verbatim, for the "why" on screen.
+  fundingType      String?
+
+  /// When we last successfully READ the account, and when the read last failed.
+  checkedAt DateTime
+  lastError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  @@unique([hotelClientId, platform, accountId])
+  @@index([agencyId])
+  @@index([hotelClientId])
+}
+
+/// A hotel's request to be emailed when advertising funds run low.
+///
+/// Configuration ONLY - the evaluation lives in the daily cron
+/// (/api/balance/check), so this is a durable instruction rather than a piece of
+/// front-end state. One reminder per hotel, mirroring BookingConnection's
+/// one-per-hotel shape.
+model LowBalanceReminder {
+  id            String @id @default(cuid())
+  agencyId      String
+  hotelClientId String @unique
+
+  /// Where to send it. Set by whoever configures the reminder, which on the
+  /// share report is the hotel themselves.
+  email     String
+  /// Notify when available funds fall BELOW this, in minor units.
+  thresholdMinor Int
+  currency       String @default("INR")
+  enabled        Boolean @default(true)
+
+  /// Observability the UI shows back: did the job run, and did it ever fire?
+  lastCheckedAt   DateTime?
+  lastTriggeredAt DateTime?
+  /// Balance at the moment it last fired, so the email can be reconstructed.
+  lastTriggeredAtBalanceMinor Int?
+  /// Re-arms the reminder: once fired it stays quiet until funds go back above
+  /// the threshold, so a low account does not email every single day.
+  triggered Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId])
+}
 
 model InstagramConnection {
   id                String    @id @default(cuid())
@@ -1557,6 +1779,15 @@ model GoogleAdsCampaignSnapshot {
   campaignId       String
   campaignName     String
   status           String // ENABLED | PAUSED | REMOVED (campaign.status)
+  /// campaign.advertising_channel_type — SEARCH / PERFORMANCE_MAX / DISPLAY /
+  /// VIDEO / SHOPPING / DEMAND_GEN …
+  ///
+  /// Google has NO field equivalent to Meta's objective: a Search campaign can
+  /// pursue leads or sales depending on its conversion actions, which live on a
+  /// different resource. Channel type is the honest, available approximation and
+  /// is labelled as the channel it is rather than being dressed up as an
+  /// objective. Nullable for rows synced before this column existed.
+  advertisingChannelType String?
   date             DateTime @db.Date
   spend            Decimal  @db.Decimal(12, 2) // cost_micros / 1_000_000
   impressions      Int
