@@ -47,7 +47,7 @@ export default async function HotelDashboardPage({
   // this lookup is what decides whether the page exists AT ALL for this member.
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
     where: { id },
-    select: { id: true, name: true, websiteUrl: true, lastSyncedAt: true },
+    select: { id: true, name: true, websiteUrl: true, lastSyncedAt: true, timezone: true },
   });
   if (!hotel) notFound();
 
@@ -83,11 +83,10 @@ export default async function HotelDashboardPage({
     Array.isArray(v) ? v[0] : v;
   // Resolved here only to drive DateRangeSelector's current selection; the
   // dashboard resolves the same params itself from the same helper.
-  const range = resolveRange({
-    range: one(sp.range),
-    from: one(sp.from),
-    to: one(sp.to),
-  });
+  const range = resolveRange(
+    { range: one(sp.range), from: one(sp.from), to: one(sp.to) },
+    { timezone: hotel.timezone },
+  );
 
   // Header strip — hotel + last sync (left), period selector + actions (right).
   const header = (

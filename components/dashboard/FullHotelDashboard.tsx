@@ -86,6 +86,7 @@ import {
   loadGooglePaidPerformance,
 } from "@/lib/metrics/paid-performance";
 import { AvailableFundsCard } from "@/components/dashboard/funds/AvailableFundsCard";
+import { PeriodSelector } from "@/components/dashboard/PeriodSelector";
 import { loadAdFunds } from "@/lib/metrics/funds";
 import { SocialContentTable } from "@/components/dashboard/social/SocialContentTable";
 import { loadSocialPerformance } from "@/lib/metrics/social-performance";
@@ -323,6 +324,8 @@ async function renderDashboard({
       lastEventAt: true,
       lastSyncedAt: true,
       showAdSpendToHotel: true,
+      // Every day boundary derived from an event timestamp is cut in this zone.
+      timezone: true,
     },
   });
   if (!hotel) notFound();
@@ -375,7 +378,22 @@ async function renderDashboard({
     budgetResetDay: hotel.budgetResetDay,
   });
 
-  const range = resolveRange({ range: rangeParam, from: fromParam, to: toParam });
+  // THE reporting period for this request. Resolved once, on the server, in the
+  // property's timezone, and passed down — no section computes its own window.
+  //
+  // `earliest` clamps a custom `from` to the first thing ever recorded here, so
+  // a hand-edited URL cannot produce a report claiming to cover months in which
+  // nothing was measured. One indexed read; the composite index on
+  // (hotelClientId, eventType, createdAt) serves it.
+  const firstEvent = await agencyScoped(prisma.trackingEvent).findFirst({
+    where: { hotelClientId: hotel.id },
+    orderBy: { createdAt: "asc" },
+    select: { createdAt: true },
+  });
+  const range = resolveRange(
+    { range: rangeParam, from: fromParam, to: toParam },
+    { timezone: hotel.timezone, earliest: firstEvent?.createdAt ?? null },
+  );
   const postType: PostType | null =
     postTypeParam && (POST_TYPES as readonly string[]).includes(postTypeParam)
       ? (postTypeParam as PostType)
@@ -417,6 +435,11 @@ async function renderDashboard({
     return (
       <div className="space-y-6">
         {headerSlot}
+        <PeriodSelector
+          basePath={basePath}
+          range={range}
+          preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam }}
+        />
         <SourceSelector current={source} />
         <Ga4WebsiteTraffic data={ga4} manageHref={manageHref} />
         <CustomerIntentPanel
@@ -817,15 +840,17 @@ async function renderDashboard({
       }),
     ]);
 
-  // ── Stories: last 30 days only (older stories disappear from the Graph API,
-  //    but we still keep their snapshots — query window is a UX cap, not data
-  //    retention). ────────────────────────────────────────────────────────
-  const storyWindowStart = new Date(Date.now() - 30 * DAY_MS);
+  // ── Stories: THE reporting period, like every other section. This used to be
+  //    a hardcoded `Date.now() - 30 days`, so on a 7-day or 90-day report the
+  //    stories block silently showed a different month from the panel beside it
+  //    — the exact defect one resolved period exists to remove. Older stories
+  //    disappear from the Graph API, but their snapshots are kept, so a long
+  //    range still reads correctly from our own rows. ─────────────────────────
   const [recentStories, storyAgg] = await Promise.all([
     agencyScoped(prisma.storySnapshot).findMany({
       where: {
         hotelClientId: hotel.id,
-        postedAt: { gte: storyWindowStart },
+        postedAt: { gte: range.since, lte: range.until },
       },
       orderBy: { postedAt: "desc" },
       take: 20,
@@ -1447,6 +1472,14 @@ async function renderDashboard({
   return (
     <div className="space-y-6">
       {headerSlot}
+
+      {/* ONE period control, rendered from the ONE resolved period. Both
+          surfaces used to build their own chip list from the raw URL. */}
+      <PeriodSelector
+        basePath={basePath}
+        range={range}
+        preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam }}
+      />
 
       {/* Backfill nudge. Agency-only: reconnecting Meta is their action, on a
           page the hotel cannot open. It lives here rather than in the header

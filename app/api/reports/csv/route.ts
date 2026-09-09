@@ -28,11 +28,11 @@ export async function GET(request: Request) {
 
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
     where: { id: hotelId },
-    select: { id: true, name: true },
+    select: { id: true, name: true, timezone: true },
   });
   if (!hotel) return Response.json({ error: "Not found" }, { status: 404 });
 
-  const range = resolveRange({ from, to });
+  const range = resolveRange({ from, to }, { timezone: hotel.timezone });
 
   const [content, events] = await Promise.all([
     agencyScoped(prisma.contentPiece).findMany({

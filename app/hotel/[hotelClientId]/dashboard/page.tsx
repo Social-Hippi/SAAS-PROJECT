@@ -96,6 +96,7 @@ export default async function HotelOwnerDashboard({
     <HotelDashboardBody
       hotelId={hotel.id}
       hotelName={hotel.name}
+      timezone={hotel.timezone}
       agencyId={hotel.agencyId}
       agencyName={hotel.agency.name}
       snippetStatus={hotel.snippetStatus}

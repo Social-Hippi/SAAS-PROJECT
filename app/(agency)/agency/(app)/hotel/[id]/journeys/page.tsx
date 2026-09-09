@@ -46,14 +46,17 @@ export default async function HotelJourneysPage({
 
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
     where: { id },
-    select: { id: true, name: true, websiteUrl: true },
+    select: { id: true, name: true, websiteUrl: true, timezone: true },
   });
   if (!hotel) notFound();
 
   const sp = await searchParams;
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
   // Default range for journeys is the last 7 days.
-  const range = resolveRange({ range: one(sp.range) ?? "7", from: one(sp.from), to: one(sp.to) });
+  const range = resolveRange(
+    { range: one(sp.range) ?? "7", from: one(sp.from), to: one(sp.to) },
+    { timezone: hotel.timezone },
+  );
   const convertedOnly = one(sp.converted) === "1";
   const identifiedOnly = one(sp.identified) === "1";
   const utmSource = one(sp.utmSource) || null;

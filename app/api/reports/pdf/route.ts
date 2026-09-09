@@ -32,7 +32,7 @@ export async function GET(request: Request) {
   // Ownership guard — the report can only ever be generated for THIS agency's hotel.
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
     where: { id: hotelId },
-    select: { id: true, name: true, websiteUrl: true, funnelStageRules: true },
+    select: { id: true, name: true, websiteUrl: true, funnelStageRules: true, timezone: true },
   });
   if (!hotel) return Response.json({ error: "Not found" }, { status: 404 });
 
@@ -42,7 +42,7 @@ export async function GET(request: Request) {
     select: { name: true, contactEmail: true, mobile: true, websiteUrl: true },
   });
 
-  const range = resolveRange({ from, to });
+  const range = resolveRange({ from, to }, { timezone: hotel.timezone });
 
   const pdf = await generateHotelReportPdf({
     agencyId: member.agencyId,

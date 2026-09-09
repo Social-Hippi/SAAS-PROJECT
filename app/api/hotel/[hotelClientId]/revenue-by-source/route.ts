@@ -3,6 +3,8 @@ import { runWithAgencyScope } from "@/lib/tenant";
 import { isGranularity, type Granularity } from "@/lib/revenue-by-source";
 import { isSourceType, type SourceType } from "@/lib/source-classifier";
 import { computeRevenueBySource } from "@/lib/revenue-by-source-loader";
+import { propertyTimezone } from "@/lib/property-timezone";
+import { parseZonedDayEnd, parseZonedDayStart } from "@/lib/timezone";
 
 // GET /api/hotel/[hotelClientId]/revenue-by-source — hotel-owner mirror of the
 // agency revenue-by-source route. Same 3-way granularity (source / source+medium /
@@ -18,12 +20,10 @@ const MODELS = new Set(["first_touch", "last_touch", "u_shaped"]);
 
 // Parse a YYYY-MM-DD (or full ISO) into a UTC instant. `endOfDay` pushes a
 // date-only value to 23:59:59.999 so the range is inclusive of that whole day.
-function parseDate(raw: string | null, endOfDay: boolean): Date | null {
+function parseDate(raw: string | null, endOfDay: boolean, timezone: string): Date | null {
   if (!raw) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    const [y, m, d] = raw.split("-").map(Number);
-    return new Date(Date.UTC(y, m - 1, d, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0));
-  }
+  const zoned = endOfDay ? parseZonedDayEnd(raw, timezone) : parseZonedDayStart(raw, timezone);
+  if (zoned) return zoned;
   const t = Date.parse(raw);
   return Number.isFinite(t) ? new Date(t) : null;
 }
@@ -43,8 +43,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ hote
   const requestedModel = MODELS.has(modelParam) ? modelParam : "first_touch";
 
   const now = new Date();
-  const end = parseDate(url.searchParams.get("endDate"), true) ?? now;
-  const start = parseDate(url.searchParams.get("startDate"), false) ?? new Date(now.getTime() - 30 * DAY_MS);
+  const timezone = await propertyTimezone(access.agencyId, hotelClientId);
+  const end = parseDate(url.searchParams.get("endDate"), true, timezone) ?? now;
+  const start =
+    parseDate(url.searchParams.get("startDate"), false, timezone) ?? new Date(now.getTime() - 30 * DAY_MS);
 
   const sourceTypesRaw = url.searchParams.get("sourceTypes");
   const sourceTypeFilter: Set<SourceType> | null =

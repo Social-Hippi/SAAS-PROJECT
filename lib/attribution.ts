@@ -13,8 +13,34 @@
 import { UTM_CONTENT_PREFIX } from "@/lib/utm";
 import { paidBookingsOf, paidRevenueOf, type CanonicalRow } from "@/lib/metrics/canonical";
 import type { ClickIds } from "@/lib/click-ids";
+import {
+  DEFAULT_TIMEZONE,
+  addZonedDays,
+  endOfZonedDay,
+  parseZonedDayEnd,
+  parseZonedDayStart,
+  safeTimeZone,
+  startOfZonedDay,
+  startOfZonedMonth,
+  zonedDayString,
+  zonedDaySpan,
+} from "@/lib/timezone";
 
 const DAY_MS = 86_400_000;
+
+/**
+ * The calendar day of a PLATFORM-DAY column (`@db.Date`), read in UTC.
+ *
+ * Deliberately NOT timezone-converted. Google and Meta deliver rows already
+ * bucketed into their own account day; Prisma hands a `@db.Date` back as
+ * UTC-midnight, so slicing the ISO string returns the platform's own date
+ * unchanged. Running it through the property timezone would shift every row a
+ * day earlier and invent a precision the data does not carry. Property-day
+ * boundaries — anything derived from an event TIMESTAMP — use lib/timezone.ts.
+ */
+function ymd(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Date range
@@ -25,17 +51,46 @@ export type ResolvedRange = {
   until: Date;
   /** A RANGE_PRESET id or "custom" — drives the active state of the selector. */
   key: string;
+  /** The preset's name ("Last 30 days"), or "Custom range". */
   label: string;
-  /** YYYY-MM-DD values to prefill the custom date inputs. */
+  /** YYYY-MM-DD values to prefill the custom date inputs, in `timezone`. */
   fromInput: string;
   toInput: string;
+  /** The property timezone every boundary above was computed in. */
+  timezone: string;
+  /**
+   * The window as literal dates — "1 Aug – 9 Sep 2026".
+   *
+   * Rendered ALWAYS, including for presets. A report is read weeks after it is
+   * sent; "Last 30 days" alone does not say which thirty.
+   */
+  dateLabel: string;
+  /**
+   * What the server changed about the requested window, in words a client can
+   * read. Empty when the request was honoured exactly. The UI must surface
+   * these — a silently clamped range is a wrong report with no signal.
+   */
+  adjustments: string[];
 };
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** The URL parameters this resolves. */
+export type RangeParams = { range?: string; from?: string; to?: string };
 
-function ymd(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
+export type RangeOptions = {
+  /** Injectable clock, so calendar presets are testable without freezing time. */
+  now?: Date;
+  /** Property timezone. Falls back to Asia/Kolkata when absent or unknown. */
+  timezone?: string;
+  /**
+   * Earliest recorded event for this property. `from` is clamped to it, so a
+   * range cannot claim to cover months for which nothing was ever measured.
+   * Null/absent disables the clamp.
+   */
+  earliest?: Date | null;
+};
+
+/** A year plus a day, so a leap year is never truncated by an off-by-one. */
+export const MAX_RANGE_DAYS = 366;
 
 /**
  * The selectable windows, in display order.
@@ -56,106 +111,188 @@ export const RANGE_PRESETS = [
 
 export type RangePresetKey = (typeof RANGE_PRESETS)[number]["key"];
 
-/** Start-of-day / end-of-day in UTC, matching how every snapshot date is stored. */
-function startOfDay(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "9 Sep 2026", read in the property timezone. */
+function longDay(d: Date, tz: string): string {
+  const [y, m, day] = zonedDayString(d, tz).split("-").map(Number);
+  return `${day} ${MONTHS[m - 1]} ${y}`;
 }
-function endOfDay(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
-}
-function startOfMonth(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0));
+
+/**
+ * "1 Aug – 9 Sep 2026", collapsing the repeated year and month where it reads
+ * naturally. A single day renders as just that day.
+ */
+export function formatDateRange(since: Date, until: Date, tz: string): string {
+  const a = zonedDayString(since, tz).split("-").map(Number);
+  const b = zonedDayString(until, tz).split("-").map(Number);
+  const [ay, am, ad] = a;
+  const [by, bm, bd] = b;
+  if (ay === by && am === bm && ad === bd) return longDay(since, tz);
+  if (ay === by && am === bm) return `${ad}–${bd} ${MONTHS[am - 1]} ${ay}`;
+  if (ay === by) return `${ad} ${MONTHS[am - 1]} – ${bd} ${MONTHS[bm - 1]} ${ay}`;
+  return `${longDay(since, tz)} – ${longDay(until, tz)}`;
 }
 
 /**
  * Resolves the dashboard date range from URL search params.
  *
- * Supports the rolling windows (`range=7|30|90`), the calendar presets
- * (`today | yesterday | this_month | prev_month`) and a custom range
- * (`from`/`to` as YYYY-MM-DD). Defaults to the last 30 days.
+ * EVERY BOUNDARY IS COMPUTED IN THE PROPERTY TIMEZONE. This used to be UTC, so
+ * "Today" for an Asia/Kolkata property began at 05:30 local and ended at 05:29
+ * the next morning. Every figure a client read under the Today and Yesterday
+ * chips was shifted by five and a half hours.
  *
- * `now` is injectable so the calendar presets are testable without freezing the
- * clock — the rolling windows were always relative, but "this month" is not.
+ * PRECEDENCE, exactly as specified: a valid `from`+`to` pair wins, else `range`,
+ * else the last 30 days. BOTH custom bounds must parse — one valid and one
+ * malformed is not half a request, it is a broken URL, and the honest response
+ * is the default window rather than a window the caller did not ask for.
+ *
+ * THE URL IS PUBLIC, FORWARDABLE AND MISTYPABLE. Nothing here throws. The
+ * previous implementation shape-tested with /^\d{4}-\d{2}-\d{2}$/, which
+ * accepts "2026-13-45"; that became an Invalid Date and threw RangeError out of
+ * toISOString(), i.e. a 500 on a link a client had been sent. Parsing is now
+ * strict and every out-of-bounds request is clamped and REPORTED via
+ * `adjustments`, never rejected and never silently honoured.
  */
-export function resolveRange(
-  sp: { range?: string; from?: string; to?: string },
-  now: Date = new Date(),
-): ResolvedRange {
-  const from = sp.from && DATE_RE.test(sp.from) ? sp.from : null;
-  const to = sp.to && DATE_RE.test(sp.to) ? sp.to : null;
+export function resolveRange(sp: RangeParams, options: RangeOptions = {}): ResolvedRange {
+  const tz = safeTimeZone(options.timezone);
+  const now = options.now ?? new Date();
+  const adjustments: string[] = [];
 
-  if (from || to) {
-    const since = from
-      ? new Date(`${from}T00:00:00.000Z`)
-      : new Date(now.getTime() - 30 * DAY_MS);
-    const until = to ? new Date(`${to}T23:59:59.999Z`) : now;
-    return {
-      since,
-      until,
-      key: "custom",
-      label: "Custom range",
-      fromInput: ymd(since),
-      toInput: ymd(until),
-    };
-  }
+  // The ceiling for every window: no report may extend past the end of today.
+  const ceiling = endOfZonedDay(now, tz);
+  const floor = options.earliest ? startOfZonedDay(options.earliest, tz) : null;
 
-  const build = (since: Date, until: Date, key: string, label: string): ResolvedRange => ({
+  const finish = (since: Date, until: Date, key: string, label: string): ResolvedRange => ({
     since,
     until,
     key,
     label,
-    fromInput: ymd(since),
-    toInput: ymd(until),
+    fromInput: zonedDayString(since, tz),
+    toInput: zonedDayString(until, tz),
+    timezone: tz,
+    dateLabel: formatDateRange(since, until, tz),
+    adjustments,
   });
 
-  switch (sp.range) {
-    case "today":
-      return build(startOfDay(now), now, "today", "Today");
-    case "yesterday": {
-      const y = new Date(now.getTime() - DAY_MS);
-      return build(startOfDay(y), endOfDay(y), "yesterday", "Yesterday");
+  // ── Custom range ────────────────────────────────────────────────────────────
+  const askedCustom = Boolean(sp.from || sp.to);
+  if (askedCustom) {
+    const parsedFrom = parseZonedDayStart(sp.from, tz);
+    const parsedTo = parseZonedDayEnd(sp.to, tz);
+
+    if (parsedFrom && parsedTo) {
+      let since = parsedFrom;
+      let until = parsedTo;
+
+      // 1 · Reversed bounds are a typo, not a request for an empty report.
+      if (since.getTime() > until.getTime()) {
+        [since, until] = [until, since];
+        // Re-snap: the swapped values were a day-END and a day-START.
+        since = startOfZonedDay(since, tz);
+        until = endOfZonedDay(until, tz);
+        adjustments.push("The start and end dates were the wrong way round, so they were swapped.");
+      }
+
+      // 2 · No future. Nothing has been measured there.
+      if (until.getTime() > ceiling.getTime()) {
+        until = ceiling;
+        adjustments.push(`The end date was in the future, so it was moved to today (${longDay(ceiling, tz)}).`);
+      }
+
+      // 3 · No claiming coverage that predates the first thing ever recorded.
+      if (floor && since.getTime() < floor.getTime()) {
+        since = floor;
+        adjustments.push(
+          `The start date was before this property's first recorded activity, so it was moved to ${longDay(floor, tz)}.`,
+        );
+      }
+
+      // 4 · Cap the span. Clamp FORWARD — the start moves later, keeping the
+      //     most recent MAX_RANGE_DAYS, which is what someone asking for "up to
+      //     today" over too long a window actually wants.
+      if (zonedDaySpan(since, until) + 1 > MAX_RANGE_DAYS) {
+        since = addZonedDays(until, -(MAX_RANGE_DAYS - 1), tz);
+        adjustments.push(
+          `The requested window was longer than ${MAX_RANGE_DAYS} days, so it starts at ${longDay(since, tz)}.`,
+        );
+      }
+
+      // A swap plus a clamp can still leave since > until (e.g. both bounds in
+      // the future). Fall back rather than render an inverted, empty window.
+      if (since.getTime() <= until.getTime()) {
+        return finish(since, until, "custom", "Custom range");
+      }
+      adjustments.length = 0;
     }
-    case "this_month":
-      return build(startOfMonth(now), now, "this_month", "This month");
+    // Unparseable, or unrecoverable after clamping: fall through to the preset
+    // path silently, exactly as specified. No error page.
+  }
+
+  // ── Presets ─────────────────────────────────────────────────────────────────
+  const capped = (since: Date, until: Date): [Date, Date] => [
+    floor && since.getTime() < floor.getTime() ? floor : since,
+    until.getTime() > ceiling.getTime() ? ceiling : until,
+  ];
+
+  switch (sp.range) {
+    case "today": {
+      const [a, b] = capped(startOfZonedDay(now, tz), ceiling);
+      return finish(a, b, "today", "Today");
+    }
+    case "yesterday": {
+      const y = addZonedDays(startOfZonedDay(now, tz), -1, tz);
+      const [a, b] = capped(y, endOfZonedDay(y, tz));
+      return finish(a, b, "yesterday", "Yesterday");
+    }
+    case "this_month": {
+      const [a, b] = capped(startOfZonedMonth(now, tz), ceiling);
+      return finish(a, b, "this_month", "This month");
+    }
     case "prev_month": {
-      const firstOfThis = startOfMonth(now);
+      const firstOfThis = startOfZonedMonth(now, tz);
       const inPrev = new Date(firstOfThis.getTime() - DAY_MS);
-      return build(
-        startOfMonth(inPrev),
-        endOfDay(inPrev),
-        "prev_month",
-        "Previous month",
-      );
+      const [a, b] = capped(startOfZonedMonth(inPrev, tz), endOfZonedDay(inPrev, tz));
+      return finish(a, b, "prev_month", "Previous month");
     }
     default: {
+      // Rolling windows now cover WHOLE property days — "last 30 days" is today
+      // plus the 29 before it, not a 30×24h slice ending mid-afternoon. A report
+      // that states literal dates has to mean whole ones.
       const days = sp.range === "7" ? 7 : sp.range === "90" ? 90 : 30;
-      const since = new Date(now.getTime() - days * DAY_MS);
-      return build(since, now, String(days), `Last ${days} days`);
+      const [a, b] = capped(addZonedDays(startOfZonedDay(now, tz), -(days - 1), tz), ceiling);
+      return finish(a, b, String(days), `Last ${days} days`);
     }
   }
 }
 
 /**
  * The equivalent window immediately before `range`, for period-over-period
- * comparison.
+ * comparison, carrying its own literal-date label.
  *
  * Calendar presets get the previous CALENDAR period, not a same-length slice:
  * the month before a 31-day month is 28-31 days long, and comparing March
  * against "the 31 days before March" would silently include two days of
- * February twice. Rolling windows and custom ranges get a same-length window,
- * which is what "vs previous period" already meant on the agency dashboard.
+ * February twice. Rolling windows and custom ranges get a same-length window.
+ *
+ * The label is literal dates, never "previous period" — a comparison the reader
+ * cannot date is a comparison they cannot check.
  */
-export function previousRangeOf(range: ResolvedRange): { since: Date; until: Date } {
+export function previousRangeOf(range: ResolvedRange): { since: Date; until: Date; label: string } {
+  const tz = range.timezone || DEFAULT_TIMEZONE;
+
   if (range.key === "this_month" || range.key === "prev_month") {
-    const firstOfThis = startOfMonth(range.since);
+    const firstOfThis = startOfZonedMonth(range.since, tz);
     const inPrev = new Date(firstOfThis.getTime() - DAY_MS);
-    return { since: startOfMonth(inPrev), until: endOfDay(inPrev) };
+    const since = startOfZonedMonth(inPrev, tz);
+    const until = endOfZonedDay(inPrev, tz);
+    return { since, until, label: formatDateRange(since, until, tz) };
   }
+
   const span = range.until.getTime() - range.since.getTime();
-  return {
-    since: new Date(range.since.getTime() - span),
-    until: range.since,
-  };
+  const until = new Date(range.since.getTime() - 1);
+  const since = new Date(range.since.getTime() - span - 1);
+  return { since, until, label: formatDateRange(since, until, tz) };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
