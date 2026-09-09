@@ -5,7 +5,6 @@ import { resolveRange } from "@/lib/attribution";
 import { computeFunnel, stageRank, STAGE_LABEL } from "@/lib/funnel";
 import { isChannelKey, type ChannelKey } from "@/lib/channel-view";
 import { formatDuration, formatNumber, formatPercent } from "@/lib/format";
-import { OwnerSummaryCard } from "@/components/dashboard/OwnerSummaryCard";
 import { PerformanceOverview } from "@/components/dashboard/PerformanceOverview";
 import { ChannelSelector } from "@/components/dashboard/ChannelSelector";
 import { ChannelView } from "@/components/dashboard/ChannelView";
@@ -263,9 +262,6 @@ export async function HotelDashboardBody({
           zero. It speaks up only when a figure below would otherwise be read as
           a business result when it is actually a measurement gap. */}
       <DataHealthBanner health={tracking} audience="hotel" agencyName={agencyName} />
-
-      {/* Plain-English performance summary (own period toggle). */}
-      <OwnerSummaryCard hotelId={hotelId} apiBase={apiBase} shareToken={shareToken} />
 
       {/* Full KPI set: marketing spend, cost/booking, ROAS, conversion rate,
           new-vs-returning, device split, bounce, time-on-site, top campaigns. */}

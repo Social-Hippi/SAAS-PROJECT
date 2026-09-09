@@ -13,6 +13,8 @@ import { isGoogleAdsClick, type ClickIds } from "./click-ids";
 export const SOURCE_TYPES = [
   "meta_ads",
   "google_ads",
+  "google_hotel_ads",
+  "ai_assistant",
   "instagram_organic",
   "facebook_organic",
   "influencer",
@@ -26,6 +28,8 @@ export type SourceType = (typeof SOURCE_TYPES)[number];
 export const SOURCE_TYPE_LABEL: Record<SourceType, string> = {
   meta_ads: "Meta Ads",
   google_ads: "Google Ads",
+  google_hotel_ads: "Google Hotel Ads",
+  ai_assistant: "AI assistants",
   instagram_organic: "Instagram Organic",
   facebook_organic: "Facebook Organic",
   influencer: "Influencer",
@@ -48,11 +52,49 @@ export function isSourceType(v: unknown): v is SourceType {
  * Single source of truth: lib/attribution.ts, lib/owner-metrics.ts and the
  * agency overview route all classify "paid" through here, so the definition can
  * never drift between surfaces.
+ *
+ * google_hotel_ads is deliberately NOT here despite being paid media. No Hotel
+ * Ads spend is synced into AdSnapshot or GoogleAdsCampaignSnapshot, so counting
+ * its revenue in the ROAS numerator against a denominator that does not include
+ * its cost would inflate the ratio. If Hotel Ads spend turns out to be inside the
+ * synced Google Ads account totals, the correct fix is to add it here — one line.
+ * See Open Decisions.
+ *
+ * ai_assistant is organic referral traffic; no spend buys it.
  */
 export const PAID_SOURCE_TYPES = ["meta_ads", "google_ads"] as const satisfies readonly SourceType[];
 
 export function isPaidSourceType(t: SourceType): boolean {
   return (PAID_SOURCE_TYPES as readonly SourceType[]).includes(t);
+}
+
+/**
+ * Hosts that appear as utm_source when an AI assistant refers a visit.
+ *
+ * Matched on the SOURCE, not the referrer, because that is what the snippet
+ * records. Sub-domains count: a source of "www.perplexity.ai" is the same
+ * channel as "perplexity.ai".
+ */
+export const AI_ASSISTANT_SOURCES = [
+  "chatgpt.com",
+  "chat.openai.com",
+  "openai.com",
+  "perplexity.ai",
+  "copilot.com",
+  "copilot.microsoft.com",
+  "gemini.google.com",
+  "claude.ai",
+  "you.com",
+] as const;
+
+function isAiAssistantSource(source: string): boolean {
+  const s = source.trim().toLowerCase().replace(/^www\./, "");
+  return AI_ASSISTANT_SOURCES.some((h) => s === h || s.endsWith(`.${h}`));
+}
+
+/** Google Hotel Ads is identified by its medium, case-insensitively. */
+function isGoogleHotelAds(medium: string): boolean {
+  return medium.trim().toLowerCase().replace(/[\s-]+/g, "_") === "google_hotel_ads";
 }
 
 // A medium is "paid" if it looks like an ad medium (cpc / paid / ads / ppc).
@@ -137,8 +179,25 @@ export function classifySourceType(utm: ClassifiableUtm): SourceType {
   const source = normalizeSource(utm.utmSource);
   const medium = normalizeMedium(utm.utmMedium);
 
+  // Google Hotel Ads is identified by its MEDIUM alone, so it is checked before
+  // both the direct branch and the paid-medium branches. The order is load
+  // bearing in both directions:
+  //
+  //   • before `direct`, because Hotel Ads links do not always carry a source,
+  //     and one that does not is still Hotel Ads traffic, not direct;
+  //   • before the paid branches, because normalizeMedium("Google_Hotel_Ads")
+  //     contains "ads" and so matches PAID_MEDIUM (/(cpc|paid|ppc|ads?)/) — with
+  //     utm_source=google every Hotel Ads visit was classified `google_ads`,
+  //     folded into Search and counted as Google Ads paid revenue.
+  if (isGoogleHotelAds(medium)) return "google_hotel_ads";
+
   // No source at all → direct (nothing else can apply).
   if (source === DIRECT_SOURCE) return "direct";
+
+  // Referrals from AI assistants. Their share is material (Aster: 4.6% of 90-day
+  // traffic, ahead of Meta and Instagram combined) and they were invisible,
+  // swallowed into `other` alongside every untagged referral.
+  if (isAiAssistantSource(source)) return "ai_assistant";
 
   const paid = isPaidMedium(medium);
 

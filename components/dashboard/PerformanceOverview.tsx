@@ -27,6 +27,8 @@ import type { OwnerMetrics } from "@/lib/owner-metrics";
 const SOURCE_COLOR: Record<SourceType, string> = {
   meta_ads: "#3b82f6",
   google_ads: "#ef4444",
+  google_hotel_ads: "#f97316",
+  ai_assistant: "#0ea5e9",
   instagram_organic: "#ec4899",
   facebook_organic: "#6366f1",
   influencer: "#f59e0b",

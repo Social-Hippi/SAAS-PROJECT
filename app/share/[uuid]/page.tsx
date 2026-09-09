@@ -137,9 +137,10 @@ export default async function SharePage({
         <h1 className="mt-2 text-2xl font-semibold tracking-tight text-ink">
           {link.hotelName}
         </h1>
-        <p className="mt-0.5 text-sm text-ink-tertiary">
-          Report shared by {link.agencyName} · {link.websiteUrl}
-        </p>
+        {/* The agency attribution line is gone: this is the HOTEL's report about
+            the hotel's own performance, and leading with who sent it framed it
+            as the agency's document. The property and its domain identify it. */}
+        <p className="mt-0.5 text-sm text-ink-tertiary">{link.websiteUrl}</p>
       </div>
     </div>
   );

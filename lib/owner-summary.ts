@@ -229,6 +229,15 @@ export async function generateSummary(
   const igFollowers = socialSnaps.length > 0 ? socialSnaps[socialSnaps.length - 1].followers : 0;
   const plural = (n: number) => (n === 1 ? "" : "s");
 
+  // A bookings count of ZERO here is not a measurement of zero — it is the
+  // absence of a measurement. Every booking table is empty because confirmations
+  // are not linked back to sessions, so "drove 0 bookings (₹0)" asserted a
+  // result nobody ever took. Where there is nothing measured, say that instead.
+  const outcome = (bookings: number, revenue: number): string =>
+    bookings > 0
+      ? `driving ${bookings} booking${plural(bookings)} (${fmt(revenue)})`
+      : "though booking confirmations are not connected yet, so bookings from it are not measured";
+
   const highlights: string[] = [];
   // 1 — Meta Ads. Phase 0: this said "Meta Ads: spent <X> at <Y>x ROAS" using
   // the COMBINED spend and the blended ROAS. Both are now Meta-specific.
@@ -238,8 +247,8 @@ export async function generateSummary(
       ? hideSpend
         // Outcome only: the bookings and revenue Meta drove are still the point,
         // and neither one lets the reader back out the spend.
-        ? `Meta Ads: drove ${meta.bookings} booking${plural(meta.bookings)} (${fmt(meta.revenue)}).`
-        : `Meta Ads: spent ${fmt(paidSpend.meta)}${metaRoas != null ? ` at ${metaRoas.toFixed(1)}x ROAS` : ""}, driving ${meta.bookings} booking${plural(meta.bookings)} (${fmt(meta.revenue)}).`
+        ? `Meta Ads: ${outcome(meta.bookings, meta.revenue)}.`
+        : `Meta Ads: spent ${fmt(paidSpend.meta)}${metaRoas != null ? ` at ${metaRoas.toFixed(1)}x ROAS` : ""}, ${outcome(meta.bookings, meta.revenue)}.`
       : forAgency
         ? `Meta Ads: not connected — connect a Meta ad account to track spend and ROAS.`
         : `Meta Ads: no ad account is connected for this hotel yet.`,
@@ -251,8 +260,8 @@ export async function generateSummary(
     googleAdsConnections > 0
       ? paidSpend.google > 0
         ? hideSpend
-          ? `Google Ads: drove ${google.bookings} booking${plural(google.bookings)} (${fmt(google.revenue)}).`
-          : `Google Ads: spent ${fmt(paidSpend.google)}, driving ${google.bookings} booking${plural(google.bookings)} (${fmt(google.revenue)}).`
+          ? `Google Ads: ${outcome(google.bookings, google.revenue)}.`
+          : `Google Ads: spent ${fmt(paidSpend.google)}, ${outcome(google.bookings, google.revenue)}.`
         : hideSpend
           // "no spend recorded" is itself a statement about spend.
           ? `Google Ads: connected, but no activity in this period.`

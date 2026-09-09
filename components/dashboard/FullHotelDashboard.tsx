@@ -68,7 +68,6 @@ import { missingAdDays } from "@/lib/backfill";
 import { computeFunnel, stageRank, STAGE_LABEL } from "@/lib/funnel";
 import { RevenueBySource } from "@/components/dashboard/RevenueBySource";
 import { CommissionSavings } from "@/components/dashboard/CommissionSavings";
-import { OwnerSummaryCard } from "@/components/dashboard/OwnerSummaryCard";
 import { PerformanceOverview } from "@/components/dashboard/PerformanceOverview";
 import { loadInfluencerPerformance } from "@/lib/influencer-dashboard";
 import { InfluencerPerformance } from "@/components/dashboard/InfluencerPerformance";
@@ -1407,6 +1406,21 @@ async function renderDashboard({
       exitPath: true,
     },
   });
+  // The SHARE surface gets this instead of the per-visitor list below: journey
+  // SHAPES by frequency, with no visitor id, no session id and no single
+  // person's path. /share/<uuid> is unauthenticated and forwardable, so a
+  // visitor identifier on it is a person-level disclosure to anyone the link
+  // reaches — including in a title attribute, which is where the untruncated
+  // value used to sit. Scoped to the resolved period like everything else.
+  const journeyShapes = await agencyScoped(prisma.session).groupBy({
+    by: ["landingPath", "exitPath"],
+    where: { hotelClientId: hotel.id, startedAt: { gte: range.since, lte: range.until } },
+    _count: { _all: true },
+    orderBy: { _count: { landingPath: "desc" } },
+    take: 8,
+  });
+  const journeyShapeTotal = journeyShapes.reduce((n, g) => n + g._count._all, 0);
+
   const recentSessionIds = recentSessions.map((s) => s.id);
   const convertedSessionIds =
     recentSessionIds.length > 0
@@ -1526,18 +1540,15 @@ async function renderDashboard({
         />
       )}
 
-      {/* Owner Summary — glanceable plain-English read of recent performance,
-          at the very top of the dashboard (above all sections). */}
-      <OwnerSummaryCard
-        hotelId={hotel.id}
-        pageRangeKey={range.key}
-        apiBase={apiBase}
-        shareToken={shareToken}
-      />
+      {/* The Performance Summary block was DELETED here, not hidden. It carried
+          its own Yesterday / 7-day / 30-day toggle independent of the page
+          period — so a client reading a 90-day report was shown a 30-day
+          summary beside 90-day figures — and it was the source of "Meta Ads:
+          drove 0 bookings (₹0)", which asserts a measurement nobody took. The
+          period narrative below replaces it, on the page's own period. */}
 
       {/* Performance Overview (Tier A) — 10 owner-overview metrics over the same
-          date range as the page. Read-only on existing data; sits between the
-          Owner Summary and Revenue by Source. */}
+          date range as the page. */}
       <PerformanceOverview
         hotelId={hotel.id}
         from={range.fromInput}
@@ -1818,7 +1829,7 @@ async function renderDashboard({
             <>
               {showAdSpend && (
                 <div className="p-4">
-                  <CampaignGrid cards={campaignCards} />
+                  <CampaignGrid cards={campaignCards} bookingsLinked={matchedBookings > 0} />
                 </div>
               )}
               {showAdSpend && (
@@ -1868,7 +1879,7 @@ async function renderDashboard({
             <p className="px-4 pt-4 text-xs font-medium uppercase tracking-wide text-ink-tertiary">
               Recent tracked bookings
             </p>
-            <ConversionJourneys journeys={journeys} />
+            <ConversionJourneys journeys={journeys} viewer={viewer} />
           </div>
         </SectionCard>
       )}
@@ -1911,7 +1922,36 @@ async function renderDashboard({
               </div>
             </div>
           )}
-          {recentSessions.length === 0 ? (
+          {viewer === "share" ? (
+            journeyShapes.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-ink-tertiary">
+                No visitor journeys recorded in this period.
+              </p>
+            ) : (
+              <ul className="divide-y divide-line">
+                {journeyShapes.map((g) => (
+                  <li
+                    key={`${g.landingPath}→${g.exitPath ?? ""}`}
+                    className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-sm"
+                  >
+                    <span className="min-w-0 truncate text-ink-secondary">
+                      {g.landingPath}
+                      {g.exitPath && g.exitPath !== g.landingPath ? ` → ${g.exitPath}` : ""}
+                    </span>
+                    <span className="tabular-nums text-ink-tertiary">
+                      {formatNumber(g._count._all)}{" "}
+                      {g._count._all === 1 ? "visit" : "visits"}
+                      {journeyShapeTotal > 0 && (
+                        <span className="text-ink-disabled">
+                          {" "}· {formatPercent(g._count._all / journeyShapeTotal)}
+                        </span>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : recentSessions.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-ink-tertiary">
               No visitor journeys yet. They appear once this hotel installs the v2
               tracking snippet and visitors browse the site.
