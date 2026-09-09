@@ -352,3 +352,45 @@ textarea:focus-visible,
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PRINT.
+
+   The client-facing report is printed and PDF'd far more often than anyone
+   admits, and a collapsed <details> that prints as a bare heading loses the very
+   panel that explains where the numbers came from. `open` is an HTML attribute,
+   not a CSS property, so it cannot be forced from a utility class — this expands
+   the content instead.
+   ───────────────────────────────────────────────────────────────────────────── */
+@media print {
+  /* Expand every disclosure, including the methodology panel. */
+  details > *:not(summary) {
+    display: block !important;
+  }
+  details > summary {
+    list-style: none;
+  }
+
+  /* Ink on paper: the dark surfaces cost a fortune in toner and read worse. */
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  /* Nothing that only works by hovering or clicking belongs on paper. */
+  [data-print-hide] {
+    display: none !important;
+  }
+
+  /* Keep a block and its heading together where the page break allows. */
+  section,
+  table {
+    break-inside: avoid;
+  }
+
+  /* A horizontally-scrolling container cannot scroll on paper. */
+  .overflow-x-auto {
+    overflow: visible !important;
+  }
+}

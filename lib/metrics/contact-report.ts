@@ -64,10 +64,16 @@ function freshnessOf(args: {
   const { label, connected, needsReconnect, lastUpdatedAt, range, now } = args;
   const health = platformHealth({ label, connected, needsReconnect, lastSyncedAt: lastUpdatedAt, now });
 
-  // The period's end, or now if the period is still running — a period ending
-  // tomorrow cannot make today's data stale.
-  const coverageDeadline = Math.min(range.until.getTime(), now.getTime());
-  const staleForPeriod = lastUpdatedAt != null && lastUpdatedAt.getTime() < coverageDeadline;
+  // Compared at DAY granularity, in the property's timezone, NOT by timestamp.
+  //
+  // A millisecond comparison flags a source that synced at 14:00 today as stale
+  // for a period ending at 23:59 today — which is every source, on every report,
+  // every day. "Stale" has to mean "its newest DAY is earlier than the period's
+  // last DAY", or the warning is noise and the reader learns to ignore it.
+  const deadline = new Date(Math.min(range.until.getTime(), now.getTime()));
+  const staleForPeriod =
+    lastUpdatedAt != null &&
+    zonedDayString(lastUpdatedAt, range.timezone) < zonedDayString(deadline, range.timezone);
 
   return {
     label,

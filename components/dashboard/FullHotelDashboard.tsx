@@ -94,6 +94,10 @@ import { classifyVisit, classifyConversion, UNASSIGNED_SEGMENT, type SegmentRule
 import { composeDemand } from "@/lib/metrics/demand-source";
 import { loadBlockA, loadBlockB, blendedCostPerContact } from "@/lib/metrics/contact-report";
 import { ok as mvOk, unavailable as mvUnavailable } from "@/lib/metrics/metric-value";
+import { buildPeriodNarrative, buildRecommendedActions, type NarrativeFacts } from "@/lib/summary-templates";
+import { PeriodNarrative } from "@/components/dashboard/PeriodNarrative";
+import { MethodologyPanel, type MetricDefinition } from "@/components/dashboard/MethodologyPanel";
+import { zonedDayString } from "@/lib/timezone";
 import { loadAdFunds } from "@/lib/metrics/funds";
 import { SocialContentTable } from "@/components/dashboard/social/SocialContentTable";
 import { loadSocialPerformance } from "@/lib/metrics/social-performance";
@@ -1604,6 +1608,100 @@ async function renderDashboard({
     "Advertising spend is not available for this period — the ad accounts report in different currencies, or none is connected.",
   ) : mvOk(kpis.spend);
   const blendedCost = blendedCostPerContact(totalPaidSpendMetric, blockA.summary.recordedContacts);
+
+  // ── 9.3 · spend with no recorded OUTCOME ───────────────────────────────────
+  // Deliberately not called wasted spend. A campaign may be producing calls the
+  // system cannot see — that is the whole finding of this project — so the claim
+  // is about what was RECORDED, not about value. The caveat sits on the block.
+  const noOutcomeAgg = new Map<string, { name: string; spend: number; clicks: number; conversions: number }>();
+  for (const snap of metaCampaignSnaps) {
+    const row = noOutcomeAgg.get(snap.metaCampaignId) ?? {
+      name: snap.campaignName, spend: 0, clicks: 0, conversions: 0,
+    };
+    row.spend += Number(snap.spend);
+    row.clicks += snap.clicks;
+    row.conversions += snap.conversions;
+    noOutcomeAgg.set(snap.metaCampaignId, row);
+  }
+  const noOutcomeCampaigns = [...noOutcomeAgg.values()]
+    .filter((c) => c.spend > 0 && (c.clicks === 0 || c.conversions === 0))
+    .sort((a, b) => b.spend - a.spend)
+    .slice(0, 10);
+
+  // ── 6 + 9.6 · the period in words, and what to do about it ─────────────────
+  const demandByBucket = new Map(demand.rows.map((r) => [r.bucket, r]));
+  const staleSources = [
+    blockA.freshness,
+    ...platformBlocks.map((b) => b.freshness),
+  ]
+    .filter((f) => f.staleForPeriod && f.lastUpdatedAt)
+    .map((f) => ({ label: f.label, lastUpdated: zonedDayString(f.lastUpdatedAt!, range.timezone) }));
+
+  const prevVisitCount = inScope(prevVisitRowsAll).length;
+  const topDemand = demand.rows[0] ?? null;
+  const lostShare = blockA.summary.dispositionShare.lost_to_availability_or_rate;
+
+  const narrativeFacts: NarrativeFacts = {
+    periodLabel: range.dateLabel,
+    comparisonLabel: previousRangeOf(range).label,
+    propertyName: blockA.segmentName,
+    visits: demand.totalVisits,
+    previousVisits: prevVisitCount === 0 ? null : prevVisitCount,
+    visitChange:
+      prevVisitCount === 0 ? null : (demand.totalVisits - prevVisitCount) / prevVisitCount,
+    topSourceLabel: topDemand?.label ?? null,
+    topSourceVisits: topDemand?.visits ?? null,
+    topSourceShare: topDemand?.share ?? null,
+    noSourceShare: demandByBucket.get("no_source")?.share ?? null,
+    aiAssistantVisits: demandByBucket.get("ai_assistants")?.visits ?? null,
+    metaVisits: demandByBucket.get("meta_instagram")?.visits ?? null,
+    unassignedShare:
+      demand.totalVisits > 0 && selectedSegmentId == null
+        ? unassignedVisits / visitRowsAll.length
+        : null,
+    recordedContacts: blockA.summary.recordedContacts.state === "ok"
+      ? blockA.summary.recordedContacts.value
+      : null,
+    roomNightsConfirmed: blockA.summary.roomNightsConfirmed.state === "ok"
+      ? blockA.summary.roomNightsConfirmed.value
+      : null,
+    trackerCompleteThrough: blockA.summary.completeThrough,
+    trackerDaysMissing: blockA.summary.daysMissing,
+    propertiesMissingData: blockA.propertiesMissingData,
+    measuredBookings: scopedConversions.length,
+    staleSources,
+    lostToAvailabilityShare: lostShare.state === "ok" ? lostShare.value : null,
+    // Needs the comparison period's disposition mix, which is a second tracker
+    // read. Left null rather than approximated — an action must never fire on a
+    // figure that was estimated. See Open Decisions.
+    junkShareDeltaPoints: null,
+    topNoOutcomeCampaign: noOutcomeCampaigns[0]
+      ? { name: noOutcomeCampaigns[0].name, spend: formatCurrency(noOutcomeCampaigns[0].spend) }
+      : null,
+  };
+  const narrativeSentences = buildPeriodNarrative(narrativeFacts);
+  const recommendedActions = buildRecommendedActions(narrativeFacts);
+
+  // ── 9.5 · every metric on this page, defined ───────────────────────────────
+  const stamp = (d: Date | null) => (d ? zonedDayString(d, range.timezone) : "never received");
+  const methodology: MetricDefinition[] = [
+    { metric: "Website visits", definition: "Tracked page views recorded by the HotelTrack snippet on the property's own site.", source: "HotelTrack tracking snippet", lastUpdated: stamp(hotel.lastEventAt), channelAttributable: "partly" },
+    { metric: "Sessions", definition: "Distinct browsing sessions among those visits.", source: "HotelTrack tracking snippet", lastUpdated: stamp(hotel.lastEventAt), channelAttributable: "partly" },
+    { metric: "Website conversions", definition: "Bookings the snippet detected on the site itself. Not linked to confirmations in the booking engine.", source: "HotelTrack tracking snippet", lastUpdated: stamp(hotel.lastEventAt), channelAttributable: "partly" },
+    { metric: "Calls received", definition: "Calls the property's own team logged that day.", source: "Operations tracker (property-maintained spreadsheet)", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    { metric: "Genuine enquiries", definition: "Contacts the property judged to be real new demand.", source: "Operations tracker", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    { metric: "WhatsApp leads", definition: "WhatsApp enquiries the property logged.", source: "Operations tracker", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    { metric: "Room nights confirmed", definition: "NIGHTS confirmed, not bookings — one booking can be several nights.", source: "Operations tracker", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    { metric: "Room nights per recorded contact", definition: "Room nights divided by calls plus WhatsApp leads. A yield figure, not a conversion rate; it can exceed 1.", source: "Operations tracker (computed from components)", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    ...platformBlocks.flatMap((b): MetricDefinition[] => [
+      { metric: `${b.label} impressions`, definition: `Impressions as ${b.label} counts them, in its own daily buckets.`, source: b.label, lastUpdated: stamp(b.freshness.lastUpdatedAt), channelAttributable: "yes" },
+      { metric: `${b.label} clicks`, definition: `Clicks as ${b.label} counts them.`, source: b.label, lastUpdated: stamp(b.freshness.lastUpdatedAt), channelAttributable: "yes" },
+      { metric: `${b.label} spend`, definition: `Spend as ${b.label} reports it, in its own currency and daily buckets.`, source: b.label, lastUpdated: stamp(b.freshness.lastUpdatedAt), channelAttributable: "yes" },
+      { metric: `${b.label} reported conversions`, definition: "The platform's own conversion count, on its own definition and attribution window. The action type is not recorded, so what it counts is unknown.", source: b.label, lastUpdated: stamp(b.freshness.lastUpdatedAt), channelAttributable: "yes" },
+    ]),
+    { metric: "Blended cost per contact", definition: "Total ad spend divided by every recorded contact. Not a cost per lead for any channel.", source: "Ad platforms ÷ operations tracker", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    { metric: "Traffic source buckets", definition: "Each visit assigned to one bucket, first match wins, from its click identifiers and UTM tags.", source: "HotelTrack tracking snippet", lastUpdated: stamp(hotel.lastEventAt), channelAttributable: "partly" },
+  ];
   const qualifiedCost = blendedCostPerContact(totalPaidSpendMetric, blockA.summary.qualifiedNewDemand);
 
   return (
@@ -1625,6 +1723,15 @@ async function renderDashboard({
         options={propertyOptions}
         current={selectedSegmentId}
         preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam }}
+      />
+
+      {/* The period in words, and what to do about it. Templates with computed
+          values and threshold conditions — never a model call at render time. */}
+      <PeriodNarrative
+        sentences={narrativeSentences}
+        actions={recommendedActions}
+        periodLabel={range.dateLabel}
+        scopeLabel={scopeLabel}
       />
 
       {/* Backfill nudge. Agency-only: reconnecting Meta is their action, on a
@@ -1770,6 +1877,30 @@ async function renderDashboard({
           {metaConnected && <MetaVsRealityHero data={metaVsReality} />}
           <AttributionPanel byModel={channelByModel} showRoas={showAdSpend} />
         </div>
+      )}
+
+      {noOutcomeCampaigns.length > 0 && showAdSpend && (
+        <section className="rounded-card border border-line bg-card p-4 shadow-card sm:p-5">
+          <h2 className="font-medium text-ink">Spend with no recorded outcome in this window</h2>
+          {/* The caveat is ON the block, not in a footnote. */}
+          <p className="mt-1 text-sm text-ink-tertiary">
+            These campaigns spent money in {range.dateLabel} with no click or no platform-reported
+            conversion recorded against them. That is a statement about what was RECORDED, not
+            about value — a campaign may be producing calls the system cannot see, which is the
+            central finding of this report. Check before pausing anything.
+          </p>
+          <ul className="mt-3 divide-y divide-line">
+            {noOutcomeCampaigns.map((c) => (
+              <li key={c.name} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-2 text-sm">
+                <span className="min-w-0 truncate text-ink-secondary">{c.name}</span>
+                <span className="tabular-nums text-ink-tertiary">
+                  <span className="font-semibold text-ink">{formatCurrency(c.spend)}</span>
+                  {" · "}{formatNumber(c.clicks)} clicks · {formatNumber(c.conversions)} conversions
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {/* Customer contact — three blocks that are never added together. */}
@@ -2544,6 +2675,10 @@ async function renderDashboard({
         canEdit={canEditAgencyContact}
         viewerIsAgency={isAgencyViewer}
       />
+
+      {/* How we count — every metric on the page, its source, its freshness and
+          whether it can be credited to a channel. Closed by default. */}
+      <MethodologyPanel definitions={methodology} timezone={range.timezone} />
 
       {footerSlot}
     </div>
