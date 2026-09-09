@@ -5,6 +5,7 @@ import { agencyScopedFor } from "@/lib/tenant";
 import { TtlLruCache } from "@/lib/lru-cache";
 import type { ConversionRow } from "@/lib/revenue-by-source";
 import { NO_CLICK_IDS } from "@/lib/source-classifier";
+import { parseZonedDayEnd, parseZonedDayStart } from "@/lib/timezone";
 
 // Agency-wide revenue loader (Phase R3) — fetches every conversion across ALL of
 // an agency's non-deleted hotels (plus manual influencer redemptions, which have
@@ -25,11 +26,29 @@ export type AgencyRevenueRows = {
 const DAY_MS = 86_400_000;
 export const AGENCY_MAX_WINDOW_DAYS = 92;
 
-function parseDate(raw: string | null, endOfDay: boolean): Date | null {
+/**
+ * Parse a window bound.
+ *
+ * `timezone` is the PROPERTY timezone and must be passed by every hotel-scoped
+ * caller. Without it a bare "2026-09-01" is cut at UTC midnight, while the page
+ * that produced the string cut it at midnight IST — a 5h30m disagreement at each
+ * end, which put the Revenue-by-Source and Commission-Saved panels on a
+ * different window from the KPI band directly above them, on the same page,
+ * from the same query string.
+ *
+ * Agency-level callers span many properties with no single timezone, so they
+ * pass nothing and keep the UTC reading, which is the only defensible one there.
+ */
+function parseDate(raw: string | null, endOfDay: boolean, timezone?: string): Date | null {
   if (!raw) return null;
+  if (timezone) {
+    const zoned = endOfDay ? parseZonedDayEnd(raw, timezone) : parseZonedDayStart(raw, timezone);
+    if (zoned) return zoned;
+  }
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     const [y, m, d] = raw.split("-").map(Number);
-    return new Date(Date.UTC(y, m - 1, d, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0));
+    const asUtc = new Date(Date.UTC(y, m - 1, d, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0));
+    return Number.isNaN(asUtc.getTime()) ? null : asUtc;
   }
   const t = Date.parse(raw);
   return Number.isFinite(t) ? new Date(t) : null;
@@ -37,10 +56,13 @@ function parseDate(raw: string | null, endOfDay: boolean): Date | null {
 
 /** Resolve the [start, end] window from query params (default last 30 days,
  *  span clamped to AGENCY_MAX_WINDOW_DAYS). Shared by all agency endpoints. */
-export function parseAgencyWindow(params: URLSearchParams): { start: Date; end: Date } {
+export function parseAgencyWindow(
+  params: URLSearchParams,
+  timezone?: string,
+): { start: Date; end: Date } {
   const now = new Date();
-  let end = parseDate(params.get("endDate"), true) ?? now;
-  let start = parseDate(params.get("startDate"), false) ?? new Date(now.getTime() - 30 * DAY_MS);
+  let end = parseDate(params.get("endDate"), true, timezone) ?? now;
+  let start = parseDate(params.get("startDate"), false, timezone) ?? new Date(now.getTime() - 30 * DAY_MS);
   if (start > end) [start, end] = [end, start];
   if (end.getTime() - start.getTime() > AGENCY_MAX_WINDOW_DAYS * DAY_MS) {
     start = new Date(end.getTime() - AGENCY_MAX_WINDOW_DAYS * DAY_MS);

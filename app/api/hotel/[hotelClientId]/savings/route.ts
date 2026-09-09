@@ -1,6 +1,7 @@
 import { requireReadAccess } from "@/lib/hotel-auth";
 import { runWithAgencyScope } from "@/lib/tenant";
 import { parseAgencyWindow } from "@/lib/agency-revenue";
+import { propertyTimezone } from "@/lib/property-timezone";
 import { calculateHotelSavings, hotelMonthlyTrend, lastNMonths } from "@/lib/savings";
 
 // GET /api/hotel/[hotelClientId]/savings — hotel-owner mirror of the agency savings
@@ -17,7 +18,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ hote
   if (!auth.ok) return Response.json({ error: auth.status === 404 ? "Not found" : "Forbidden" }, { status: auth.status });
   const access = auth.access;
 
-  const { start, end } = parseAgencyWindow(new URL(request.url).searchParams);
+  // Cut the window in the PROPERTY's timezone, exactly as the page did when it
+  // produced these date strings. Parsing them in UTC put this panel on a
+  // different window from the KPI band above it.
+  const timezone = await propertyTimezone(access.agencyId, hotelClientId);
+  const { start, end } = parseAgencyWindow(new URL(request.url).searchParams, timezone);
 
   try {
     return await runWithAgencyScope(access.agencyId, async () => {

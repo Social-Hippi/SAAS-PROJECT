@@ -127,6 +127,9 @@ model Agency {
   // cancelled | completed | expired. Only `active` unlocks the dashboard.
   subscriptionStatus     String    @default("inactive")
   plan                   String    @default("starter") // starter | growth | agency
+  // As HotelClient.isFixture — a test agency sitting in production must never
+  // contribute to a client-facing aggregate.
+  isFixture              Boolean   @default(false)
   subscriptionExpiresAt  DateTime?
   // Set by a super admin to suspend the agency, independent of Razorpay billing.
   // When set, access to the agency dashboard is blocked (see the agency layout).
@@ -283,6 +286,19 @@ model HotelClient {
   // that started on the hotel's own site instead of appearing as a new visitor.
   // Empty = no handoff (behaviour identical to before).
   bookingDomains          String[]         @default([])
+  // IANA zone the PROPERTY operates in. Every day boundary derived from an event
+  // TIMESTAMP is computed in it (lib/timezone.ts). Event rows are UTC, and the
+  // dashboard used to cut days in UTC too — so for an Asia/Kolkata property
+  // "Today" ran 05:30 to 05:29 local and every figure under the Today and
+  // Yesterday chips was shifted by five and a half hours.
+  //
+  // NOT applied to platform-day columns: Google and Meta deliver rows already
+  // bucketed into their own account day (`date @db.Date`), which cannot be
+  // re-derived from a bare calendar date. Those are read as given.
+  timezone                String           @default("Asia/Kolkata")
+  // Seed/demo rows that live in the production database. Excluded from every
+  // agency-level rollup so a fixture can never reach a client-facing aggregate.
+  isFixture               Boolean          @default(false)
   // ── Soft delete (admin-only; reversible via restoreHotel) ──
   // deletedAt null = active. When set, the hotel is hidden everywhere and all
   // syncing stops, but every row (tokens, events, attribution, snapshots) is
@@ -350,6 +366,11 @@ model HotelClient {
   userInvites                HotelUserInvite[]
 
   @@index([agencyId])
+  // Created by 20260611140000_add_hotel_soft_delete but never declared here, so
+  // the schema and the database had drifted since June: every `prisma migrate
+  // dev` since then proposed DROPPING it. It backs the agency-scoped hotel
+  // lookup (agencyId + deletedAt: null) that runs on every dashboard request.
+  @@index([agencyId, deletedAt])
   @@index([createdByUserId]) // hotel-owner → their hotel lookup
 }
 

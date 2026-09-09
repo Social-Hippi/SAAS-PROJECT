@@ -104,6 +104,8 @@ async function loadJourneyPreview(
 export type HotelDashboardBodyProps = {
   hotelId: string;
   hotelName: string;
+  /** Property timezone; every day boundary is cut in it. */
+  timezone: string;
   agencyId: string;
   agencyName: string;
   snippetStatus: string;
@@ -151,6 +153,7 @@ export type HotelDashboardBodyProps = {
 export async function HotelDashboardBody({
   hotelId,
   hotelName,
+  timezone,
   agencyId,
   agencyName,
   snippetStatus,
@@ -169,7 +172,7 @@ export async function HotelDashboardBody({
   canViewGuestDetails,
   ownerSlot,
 }: HotelDashboardBodyProps) {
-  const range = resolveRange({ range: rangeParam, from: fromParam, to: toParam });
+  const range = resolveRange({ range: rangeParam, from: fromParam, to: toParam }, { timezone });
 
   // ── Channel deep-dive view (Meta Ads / Instagram / Influencer / …) ──
   const channel: ChannelKey = isChannelKey(channelParam) ? channelParam : "all";

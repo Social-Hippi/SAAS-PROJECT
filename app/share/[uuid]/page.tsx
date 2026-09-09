@@ -3,7 +3,6 @@ import { headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, clientIpFromHeaders } from "@/lib/ratelimit";
 import { resolveShareLink } from "@/lib/share-link-access";
-import { RANGE_PRESETS } from "@/lib/attribution";
 import { FullHotelDashboard } from "@/components/dashboard/FullHotelDashboard";
 import { PasswordGate } from "./PasswordGate";
 
@@ -125,8 +124,10 @@ export default async function SharePage({
 
   const sp = await searchParams;
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
-  const rangeKey = one(sp.range) ?? "30";
 
+  // Identity only. The period control lives in <FullHotelDashboard>, rendered
+  // from the ONE resolved range — this page used to build a second chip list
+  // from the raw URL, which is how two controls end up disagreeing.
   const header = (
     <div className="space-y-4">
       <div>
@@ -139,31 +140,6 @@ export default async function SharePage({
         <p className="mt-0.5 text-sm text-ink-tertiary">
           Report shared by {link.agencyName} · {link.websiteUrl}
         </p>
-      </div>
-      {/* Period selector. Plain links rather than the agency's DateRangeSelector:
-          they survive with JavaScript off, they keep the chosen source in the
-          URL, and every option is one tap on a phone. */}
-      <div className="flex flex-wrap gap-2">
-        {RANGE_PRESETS.map((r) => {
-          const params = new URLSearchParams();
-          if (r.key !== "30") params.set("range", r.key);
-          const src = one(sp.source);
-          if (src) params.set("source", src);
-          const qs = params.toString();
-          return (
-            <a
-              key={r.key}
-              href={qs ? `/share/${uuid}?${qs}` : `/share/${uuid}`}
-              className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
-                r.key === rangeKey
-                  ? "border-brand bg-brand text-white"
-                  : "border-line-strong bg-elevated text-ink-secondary hover:bg-line-strong"
-              }`}
-            >
-              {r.label}
-            </a>
-          );
-        })}
       </div>
     </div>
   );
@@ -185,6 +161,12 @@ export default async function SharePage({
           apiBase="/api/hotel"
           shareToken={uuid}
           rangeParam={one(sp.range)}
+          // Custom range on the public report. Safe to accept only because
+          // resolveRange now parses strictly and clamps server-side: the old
+          // shape-only guard accepted "2026-13-45", which became an Invalid
+          // Date and threw RangeError — a 500 on a link a client had been sent.
+          fromParam={one(sp.from)}
+          toParam={one(sp.to)}
           postTypeParam={one(sp.postType)}
           channelParam={one(sp.channel)}
           sourceParam={one(sp.source)}

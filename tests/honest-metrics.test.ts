@@ -192,79 +192,102 @@ describe("5. click-target classification is conservative", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("6. date ranges", () => {
+  // 12:00Z is 17:30 on 17 March in Asia/Kolkata, the default property timezone.
+  // Every boundary below is therefore an IST day expressed as a UTC instant:
+  // local midnight is 18:30Z on the PREVIOUS date.
   const now = new Date("2026-03-17T12:00:00.000Z");
+  const at = (now: Date) => ({ now });
 
   test("the existing preset ids still resolve exactly as before", () => {
     // Live share links, exports and bookmarks carry these.
     for (const key of ["7", "30", "90"]) {
-      const r = resolveRange({ range: key }, now);
+      const r = resolveRange({ range: key }, at(now));
       expect(r.key, key).toBe(key);
       expect(r.label, key).toBe(`Last ${key} days`);
-      expect(r.until.toISOString(), key).toBe(now.toISOString());
+      // Whole property days: the window ends at the end of today IST.
+      expect(r.until.toISOString(), key).toBe("2026-03-17T18:29:59.999Z");
     }
   });
 
+  test("rolling windows cover whole property days, inclusive of today", () => {
+    const r = resolveRange({ range: "7" }, at(now));
+    // 7 days = today plus the six before it.
+    expect(r.since.toISOString()).toBe("2026-03-10T18:30:00.000Z");
+    expect(r.dateLabel).toBe("11–17 Mar 2026");
+  });
+
   test("an unknown range falls back to 30 days, not to an empty window", () => {
-    expect(resolveRange({ range: "nonsense" }, now).key).toBe("30");
+    expect(resolveRange({ range: "nonsense" }, at(now)).key).toBe("30");
   });
 
-  test("today starts at midnight UTC and ends now", () => {
-    const r = resolveRange({ range: "today" }, now);
-    expect(r.since.toISOString()).toBe("2026-03-17T00:00:00.000Z");
-    expect(r.until.toISOString()).toBe(now.toISOString());
+  test("today is the property's day, not the UTC day", () => {
+    // The defect this fixes: under UTC, "Today" for an IST property began at
+    // 05:30 local and ended at 05:29 the next morning.
+    const r = resolveRange({ range: "today" }, at(now));
+    expect(r.since.toISOString()).toBe("2026-03-16T18:30:00.000Z");
+    expect(r.until.toISOString()).toBe("2026-03-17T18:29:59.999Z");
   });
 
-  test("yesterday is a whole day, not a rolling 24 hours", () => {
-    const r = resolveRange({ range: "yesterday" }, now);
-    expect(r.since.toISOString()).toBe("2026-03-16T00:00:00.000Z");
-    expect(r.until.toISOString()).toBe("2026-03-16T23:59:59.999Z");
+  test("yesterday is a whole property day, not a rolling 24 hours", () => {
+    const r = resolveRange({ range: "yesterday" }, at(now));
+    expect(r.since.toISOString()).toBe("2026-03-15T18:30:00.000Z");
+    expect(r.until.toISOString()).toBe("2026-03-16T18:29:59.999Z");
   });
 
-  test("this month runs from the 1st", () => {
-    const r = resolveRange({ range: "this_month" }, now);
-    expect(r.since.toISOString()).toBe("2026-03-01T00:00:00.000Z");
+  test("this month runs from the 1st, in the property timezone", () => {
+    const r = resolveRange({ range: "this_month" }, at(now));
+    expect(r.since.toISOString()).toBe("2026-02-28T18:30:00.000Z");
   });
 
-  test("previous month is the whole calendar month", () => {
-    const r = resolveRange({ range: "prev_month" }, now);
-    expect(r.since.toISOString()).toBe("2026-02-01T00:00:00.000Z");
-    expect(r.until.toISOString()).toBe("2026-02-28T23:59:59.999Z");
+  test("previous month is the whole calendar month, in the property timezone", () => {
+    const r = resolveRange({ range: "prev_month" }, at(now));
+    expect(r.since.toISOString()).toBe("2026-01-31T18:30:00.000Z");
+    expect(r.until.toISOString()).toBe("2026-02-28T18:29:59.999Z");
   });
 
   test("every preset in the selector actually resolves to itself", () => {
     for (const p of RANGE_PRESETS) {
-      expect(resolveRange({ range: p.key }, now).key, p.key).toBe(p.key);
+      expect(resolveRange({ range: p.key }, at(now)).key, p.key).toBe(p.key);
     }
   });
 
   test("a custom range wins over a preset", () => {
-    const r = resolveRange({ range: "7", from: "2026-01-01", to: "2026-01-31" }, now);
+    const r = resolveRange({ range: "7", from: "2026-01-01", to: "2026-01-31" }, at(now));
     expect(r.key).toBe("custom");
     expect(r.fromInput).toBe("2026-01-01");
     expect(r.toInput).toBe("2026-01-31");
   });
 
   test("a rolling window compares against an equal-length window immediately before", () => {
-    const r = resolveRange({ range: "30" }, now);
+    const r = resolveRange({ range: "30" }, at(now));
     const prev = previousRangeOf(r);
-    expect(prev.until.toISOString()).toBe(r.since.toISOString());
-    expect(r.until.getTime() - r.since.getTime()).toBe(prev.until.getTime() - prev.since.getTime());
+    // Abutting, not overlapping: the comparison ends 1ms before the range starts.
+    expect(prev.until.getTime()).toBe(r.since.getTime() - 1);
+    expect(prev.until.getTime() - prev.since.getTime()).toBe(r.until.getTime() - r.since.getTime());
   });
 
   test("a calendar month compares against the previous CALENDAR month", () => {
     // A same-length window would double-count two days of February against a
     // 31-day March, which is the classic silent reporting bug.
-    const r = resolveRange({ range: "this_month" }, now);
+    const r = resolveRange({ range: "this_month" }, at(now));
     const prev = previousRangeOf(r);
-    expect(prev.since.toISOString()).toBe("2026-02-01T00:00:00.000Z");
-    expect(prev.until.toISOString()).toBe("2026-02-28T23:59:59.999Z");
+    expect(prev.since.toISOString()).toBe("2026-01-31T18:30:00.000Z");
+    expect(prev.until.toISOString()).toBe("2026-02-28T18:29:59.999Z");
   });
 
   test("month comparison holds across a year boundary", () => {
     const jan = new Date("2026-01-09T09:00:00.000Z");
-    const prev = previousRangeOf(resolveRange({ range: "this_month" }, jan));
-    expect(prev.since.toISOString()).toBe("2025-12-01T00:00:00.000Z");
-    expect(prev.until.toISOString()).toBe("2025-12-31T23:59:59.999Z");
+    const prev = previousRangeOf(resolveRange({ range: "this_month" }, at(jan)));
+    expect(prev.since.toISOString()).toBe("2025-11-30T18:30:00.000Z");
+    expect(prev.until.toISOString()).toBe("2025-12-31T18:29:59.999Z");
+  });
+
+  test("every comparison is labelled with literal dates, never 'previous period'", () => {
+    for (const key of ["7", "30", "this_month", "prev_month", "today"]) {
+      const prev = previousRangeOf(resolveRange({ range: key }, at(now)));
+      expect(prev.label, key).toMatch(/\d/);
+      expect(prev.label.toLowerCase(), key).not.toContain("previous period");
+    }
   });
 });
 

@@ -69,6 +69,8 @@ export type HotelViewerHotel = {
   websiteUrl: string;
   siteId: string;
   snippetStatus: string;
+  /** IANA zone the property operates in; every day boundary is cut in it. */
+  timezone: string;
   lastEventAt: Date | null;
   lastSyncedAt: Date | null;
   showAdSpendToHotel: boolean;
@@ -114,6 +116,7 @@ export async function resolveHotelForViewer(hotelClientId: string): Promise<Hote
     where: { id: hotelClientId, deletedAt: null },
     select: {
       id: true, agencyId: true, name: true, websiteUrl: true, siteId: true, snippetStatus: true,
+      timezone: true,
       lastEventAt: true, lastSyncedAt: true, showAdSpendToHotel: true, createdByUserId: true,
       contactName: true, contactEmail: true, contactPhone: true, address: true,
       whatsappNumber: true, roomCount: true, channelManager: true, otaCommissionRate: true,
