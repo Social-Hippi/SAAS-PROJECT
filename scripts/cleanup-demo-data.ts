@@ -3,7 +3,7 @@
 // had nothing to inspect. A safety check that cannot see the connection string
 // is not a safety check.
 import "./load-env";
-import { databaseHost, isProductionDatabase } from "../lib/db-environment";
+import { databaseHost, destructiveRunRefusal } from "../lib/db-environment";
 import { prisma } from "../lib/prisma";
 
 // One-off cleanup agreed with the owner on 2026-06-06:
@@ -25,10 +25,10 @@ import { prisma } from "../lib/prisma";
 //   1. an explicit --agency-id, so the target is never inferred from a name.
 //      Agency names are not unique — two live tenants share "Social Hippi", and
 //      this very script created that collision by renaming one of them;
-//   2. a DATABASE_URL that is NOT the production Neon endpoint.
-//
-// Refusing to GUESS was not enough. A script that deletes hotels should be
-// incapable of running against production at all, not merely careful about it.
+//   2. a LOCAL DATABASE_URL. Not "not the production endpoint" — that was the
+//      first attempt and it failed open against real production, because the
+//      endpoint id it matched came from a stale comment. Anything not confirmed
+//      local is refused, including hosts this file has never heard of.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const KEEP_AGENCY = "Coastal Digital Agency";
@@ -43,12 +43,9 @@ async function main() {
   const idFlag = argv.indexOf("--agency-id");
   const agencyId = idFlag >= 0 ? argv[idFlag + 1] : undefined;
 
-  if (isProductionDatabase(process.env.DATABASE_URL)) {
-    console.error(
-      `REFUSING TO RUN: DATABASE_URL points at the production database ` +
-        `(${databaseHost(process.env.DATABASE_URL)}). This script deletes hotels and agency ` +
-        `history. Nothing was read and nothing was deleted.`,
-    );
+  const refusal = destructiveRunRefusal(process.env.DATABASE_URL);
+  if (refusal) {
+    console.error(`REFUSING TO RUN: ${refusal} Nothing was read and nothing was deleted.`);
     process.exit(1);
   }
 
