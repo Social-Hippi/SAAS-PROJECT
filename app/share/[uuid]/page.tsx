@@ -171,6 +171,7 @@ export default async function SharePage({
           postTypeParam={one(sp.postType)}
           channelParam={one(sp.channel)}
           sourceParam={one(sp.source)}
+          propertyParam={one(sp.property)}
           headerSlot={header}
         />
         <p className="pt-6 text-center text-xs text-ink-disabled">

@@ -20,6 +20,7 @@ import {
   type EventInput,
   type RedemptionInput,
   type TouchpointInput,
+  previousRangeOf,
 } from "@/lib/attribution";
 import {
   formatCurrency,
@@ -86,6 +87,13 @@ import {
 } from "@/lib/metrics/paid-performance";
 import { AvailableFundsCard } from "@/components/dashboard/funds/AvailableFundsCard";
 import { PeriodSelector } from "@/components/dashboard/PeriodSelector";
+import { PropertySelector, propertyLabel } from "@/components/dashboard/PropertySelector";
+import { DemandComposition } from "@/components/dashboard/DemandComposition";
+import { ContactReport } from "@/components/dashboard/contact/ContactReport";
+import { classifyVisit, classifyConversion, UNASSIGNED_SEGMENT, type SegmentRule } from "@/lib/segments";
+import { composeDemand } from "@/lib/metrics/demand-source";
+import { loadBlockA, loadBlockB, blendedCostPerContact } from "@/lib/metrics/contact-report";
+import { ok as mvOk, unavailable as mvUnavailable } from "@/lib/metrics/metric-value";
 import { loadAdFunds } from "@/lib/metrics/funds";
 import { SocialContentTable } from "@/components/dashboard/social/SocialContentTable";
 import { loadSocialPerformance } from "@/lib/metrics/social-performance";
@@ -250,6 +258,8 @@ export type FullHotelDashboardProps = {
    * social views rather than duplicating them.
    */
   sourceParam?: string;
+  /** ?property=<segmentId> — which of a group's properties to describe. */
+  propertyParam?: string;
   /** Agency-only: the edit affordance on the agency contact card. */
   canEditAgencyContact?: boolean;
   /** Rendered above the dashboard on the "all channels" view. */
@@ -297,6 +307,7 @@ async function renderDashboard({
   postTypeParam,
   channelParam,
   sourceParam,
+  propertyParam,
   canEditAgencyContact = false,
   headerSlot,
   footerSlot,
@@ -393,6 +404,22 @@ async function renderDashboard({
     { range: rangeParam, from: fromParam, to: toParam },
     { timezone: hotel.timezone, earliest: firstEvent?.createdAt ?? null },
   );
+  // ── PROPERTY SEGMENTS ───────────────────────────────────────────────────────
+  // A group (Aster) has more than one property under one HotelClient. Every
+  // segmentable figure below is cut by the selected one; group-level figures
+  // (ad spend) stay group-level and say so, because campaign rows carry no
+  // property signal that can be trusted.
+  const segments = await agencyScoped(prisma.propertySegment).findMany({
+    where: { hotelClientId: hotel.id, isActive: true },
+    orderBy: { displayOrder: "asc" },
+    select: { id: true, name: true, slug: true, displayOrder: true, pathPrefixes: true, bookingHosts: true },
+  });
+  const selectedSegmentId =
+    propertyParam && segments.some((sg) => sg.id === propertyParam) ? propertyParam : null;
+  const segmentRules: SegmentRule[] = segments;
+  const propertyOptions = segments.map((sg) => ({ id: sg.id, name: sg.name }));
+  const scopeLabel = propertyLabel(selectedSegmentId, propertyOptions);
+
   const postType: PostType | null =
     postTypeParam && (POST_TYPES as readonly string[]).includes(postTypeParam)
       ? (postTypeParam as PostType)
@@ -1483,6 +1510,102 @@ async function renderDashboard({
   // too rather than leaking the same information under a different heading.
   const funds = showAdSpend ? await loadAdFunds(hotel.id) : null;
 
+  // ── PHASES 3 + 4 · demand composition and the three contact blocks ──────────
+  //
+  // Visits carry pageUrl so they can be segmented, and the UTM + click-id
+  // columns so they can be bucketed. Both are REQUIRED projections: an omitted
+  // click id reads as undefined and silently reclassifies an auto-tagged visit
+  // as "no source attached".
+  const prevRange = previousRangeOf(range);
+  const visitSelect = {
+    utmSource: true, utmMedium: true, utmContent: true,
+    gclid: true, gbraid: true, wbraid: true, fbclid: true,
+    sessionId: true, pageUrl: true,
+  } as const;
+
+  const [visitRowsAll, prevVisitRowsAll] = pixelMode
+    ? [[], []]
+    : await Promise.all([
+        agencyScoped(prisma.trackingEvent).findMany({
+          where: { hotelClientId: hotel.id, eventType: "visit", createdAt: { gte: range.since, lte: range.until } },
+          select: visitSelect,
+        }),
+        agencyScoped(prisma.trackingEvent).findMany({
+          where: { hotelClientId: hotel.id, eventType: "visit", createdAt: { gte: prevRange.since, lte: prevRange.until } },
+          select: visitSelect,
+        }),
+      ]);
+
+  // Segment filtering happens HERE, not in SQL: the rules are page-path prefixes
+  // held as data, and classifyVisit is the single place that interprets them.
+  const inScope = <T extends { pageUrl: string | null }>(rows: T[]): T[] =>
+    selectedSegmentId == null
+      ? rows
+      : rows.filter((r) => classifyVisit(r.pageUrl, segmentRules) === selectedSegmentId);
+
+  const demand = composeDemand(inScope(visitRowsAll), inScope(prevVisitRowsAll));
+
+  // Unassigned is always visible in the group view: those visits are on pages
+  // shared by both properties and belong to neither. They are NEVER distributed.
+  const unassignedVisits = visitRowsAll.filter(
+    (r) => classifyVisit(r.pageUrl, segmentRules) === UNASSIGNED_SEGMENT,
+  ).length;
+
+  const [blockA, platformBlocks] = await Promise.all([
+    loadBlockA({ hotelClientId: hotel.id, range, segmentId: selectedSegmentId }),
+    loadBlockB({
+      hotelClientId: hotel.id,
+      range,
+      metaConnected,
+      metaNeedsReconnect: integrationStatus.meta === "expired",
+    }),
+  ]);
+
+  // Block C — what we measured ourselves. "Attributed" requires POSITIVE
+  // evidence (a UTM, a click id or a coupon); everything else is Unattributed
+  // and is never pushed into a channel to make the split look tidier.
+  // Its own projection: attrConvRows omits pageUrl, utmMedium, the click ids and
+  // the coupon, and every one of those is load bearing here. An omitted click id
+  // reads as undefined and silently reclassifies an attributed booking as
+  // unattributed.
+  const blockCConversions = await agencyScoped(prisma.trackingEvent).findMany({
+    where: { hotelClientId: hotel.id, eventType: "conversion", createdAt: { gte: range.since, lte: range.until } },
+    select: {
+      pageUrl: true, utmSource: true, utmMedium: true, couponCodeUsed: true,
+      gclid: true, gbraid: true, wbraid: true, fbclid: true,
+    },
+  });
+  const scopedConversions = blockCConversions.filter((c) =>
+    selectedSegmentId == null
+      ? true
+      : classifyConversion(c.pageUrl, segmentRules) === selectedSegmentId,
+  );
+  const attributedCount = scopedConversions.filter(
+    (c) => c.utmSource || c.utmMedium || c.gclid || c.gbraid || c.wbraid || c.fbclid || c.couponCodeUsed,
+  ).length;
+
+  const scopedVisits = inScope(visitRowsAll);
+  const blockC = {
+    visits: mvOk(scopedVisits.length),
+    sessions: mvOk(new Set(scopedVisits.map((v) => v.sessionId).filter(Boolean)).size),
+    websiteConversions: mvOk(scopedConversions.length),
+    attributed: mvOk(attributedCount),
+    unattributed: mvOk(scopedConversions.length - attributedCount),
+    freshness: {
+      label: "HotelTrack tracking snippet",
+      health: tracking,
+      lastUpdatedAt: hotel.lastEventAt,
+      staleForPeriod: false,
+      staleNote: null,
+    },
+  };
+
+  const totalPaidSpendMetric = kpis.spend == null ? mvUnavailable(
+    "Advertising spend is not available for this period — the ad accounts report in different currencies, or none is connected.",
+  ) : mvOk(kpis.spend);
+  const blendedCost = blendedCostPerContact(totalPaidSpendMetric, blockA.summary.recordedContacts);
+  const qualifiedCost = blendedCostPerContact(totalPaidSpendMetric, blockA.summary.qualifiedNewDemand);
+
   return (
     <div className="space-y-6">
       {headerSlot}
@@ -1492,6 +1615,15 @@ async function renderDashboard({
       <PeriodSelector
         basePath={basePath}
         range={range}
+        preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam, property: propertyParam }}
+      />
+
+      {/* Which property. Rendered only for a group with more than one — a
+          single-property hotel has nothing to choose. */}
+      <PropertySelector
+        basePath={basePath}
+        options={propertyOptions}
+        current={selectedSegmentId}
         preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam }}
       />
 
@@ -1613,10 +1745,42 @@ async function renderDashboard({
       {!pixelMode && (
         <div className="space-y-6">
           <KpiStrip cards={kpiCards} />
+
+          {/* Where demand came from — directly under the KPI band, because it is
+              the first question the band provokes. */}
+          <DemandComposition
+            rows={demand.rows}
+            totalVisits={demand.totalVisits}
+            periodLabel={range.dateLabel}
+            comparisonLabel={previousRangeOf(range).label}
+            scopeLabel={scopeLabel}
+          />
+
+          {/* Shared pages belong to the group, not to a property. Shown as its
+              own row and never distributed across the two by ratio. */}
+          {selectedSegmentId == null && propertyOptions.length > 1 && unassignedVisits > 0 && (
+            <p className="rounded-card border border-line bg-card px-4 py-3 text-sm text-ink-tertiary shadow-card">
+              {formatNumber(unassignedVisits)} of these visits were on pages shared by both
+              properties — the home page, the blog and similar — so they belong to the group
+              rather than to Coffeeberry Hills or Three Hills. They are counted once, here, and
+              are never split between the two.
+            </p>
+          )}
+
           {metaConnected && <MetaVsRealityHero data={metaVsReality} />}
           <AttributionPanel byModel={channelByModel} showRoas={showAdSpend} />
         </div>
       )}
+
+      {/* Customer contact — three blocks that are never added together. */}
+      <ContactReport
+        blockA={blockA}
+        platforms={platformBlocks}
+        measured={blockC}
+        blendedCostPerContact={blendedCost}
+        costPerQualifiedContact={qualifiedCost}
+        periodLabel={range.dateLabel}
+      />
 
       {/* Section 2 — Content performance (attribution-dependent; hidden in pixel mode) */}
       {!pixelMode && (
