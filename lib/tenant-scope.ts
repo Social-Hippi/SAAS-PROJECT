@@ -42,6 +42,29 @@ function withSoftDeleteFilter(prop: string, args: AnyArgs): AnyArgs {
   return { ...rest, where: { ...where, deletedAt: null } };
 }
 
+// For HotelClient reads, default-exclude FIXTURE rows (isFixture: false) unless
+// the caller passes { includeFixtures: true } or already constrains isFixture.
+// The flag is stripped before the args reach Prisma.
+//
+// WHY THIS IS HERE AND NOT AT THE CALL SITES. Seed and demo rows live in the
+// production database — "Test Agency", "HotelTrack Test Resort" and friends —
+// and a fixture hotel sitting inside a REAL agency contaminates that agency's
+// rollups: its revenue, its savings, its hotel picker. There are a dozen such
+// queries and the next one has not been written yet, so filtering at each of
+// them is a rule someone will forget. Filtering in the wrapper is a rule that
+// cannot be forgotten, exactly as the soft-delete default above is.
+//
+// The escape hatch exists because the platform owner's admin surface has a
+// legitimate need to SEE fixtures in order to manage them.
+function withFixtureFilter(prop: string, args: AnyArgs): AnyArgs {
+  if (!HOTEL_READ_OPS.has(prop)) return args;
+  const { includeFixtures, ...rest } = args as AnyArgs & { includeFixtures?: boolean };
+  if (includeFixtures) return rest;
+  const where = (rest.where ?? {}) as Record<string, unknown>;
+  if ("isFixture" in where) return rest;
+  return { ...rest, where: { ...where, isFixture: false } };
+}
+
 type AnyArgs = Record<string, unknown> & {
   where?: Record<string, unknown>;
   data?: Record<string, unknown> | Record<string, unknown>[];
@@ -107,7 +130,10 @@ export function agencyScopedFor<D>(agencyId: string, model: D): D {
 
       return (rawArgs: AnyArgs = {}) => {
         // HotelClient reads default to active hotels only (soft-delete aware).
-        const args = isHotelClient ? withSoftDeleteFilter(prop, rawArgs) : rawArgs;
+        // HotelClient reads default to active, non-fixture hotels only.
+        const args = isHotelClient
+          ? withFixtureFilter(prop, withSoftDeleteFilter(prop, rawArgs))
+          : rawArgs;
         switch (prop) {
           // Unique lookups can't carry a non-unique filter — reroute to findFirst.
           case "findUnique":

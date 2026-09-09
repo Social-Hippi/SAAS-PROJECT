@@ -29,14 +29,24 @@ function roasColor(roas: number | null): string {
   return "text-danger";
 }
 
+const NOT_LINKED =
+  "Booking confirmations are not linked to sessions yet, so bookings from this campaign have not been measured. This is not a measurement of zero.";
+
 /** "Meta says" cell: Meta's claim + how far it is from our measured bookings. */
-function metaVerdict(row: CampaignRow): {
-  text: string;
-  badge: "ok" | "warn" | null;
-} {
+function metaVerdict(
+  row: CampaignRow,
+  bookingsLinked: boolean,
+): { text: string; badge: "ok" | "warn" | null } {
   const meta = row.metaConversions;
   const real = row.realBookings;
   const claim = `"${formatNumber(meta)} booking${meta === 1 ? "" : "s"}"`;
+
+  // With no booking link there is nothing to check Meta's claim AGAINST. Saying
+  // "none tracked on-site" would read as a contradiction of Meta when it is
+  // really the absence of our own measurement.
+  if (!bookingsLinked) {
+    return { text: `${claim} — not yet checkable against confirmed bookings`, badge: null };
+  }
 
   if (real === 0) {
     if (meta === 0) return { text: claim, badge: "ok" };
@@ -53,7 +63,21 @@ function metaVerdict(row: CampaignRow): {
   return { text: `${claim} (${Math.round(-diffPct)}% lower)`, badge: null };
 }
 
-export function CampaignPerformanceTable({ rows }: { rows: CampaignRow[] }) {
+export function CampaignPerformanceTable({
+  rows,
+  bookingsLinked,
+}: {
+  rows: CampaignRow[];
+  /**
+   * Whether booking confirmations are linked back to campaigns at all.
+   *
+   * When false, realBookings / realRevenue / realRoas are NOT zero — they are
+   * unmeasured, because no confirmation has ever been joined to a session. A
+   * literal 0 and a −100% variance in these columns asserted a result nobody
+   * took, on every campaign, permanently.
+   */
+  bookingsLinked: boolean;
+}) {
   const [sortKey, setSortKey] = useState<SortKey>("realRoas");
   const [dir, setDir] = useState<1 | -1>(-1); // default: highest True ROAS first
 
@@ -115,7 +139,7 @@ export function CampaignPerformanceTable({ rows }: { rows: CampaignRow[] }) {
         </thead>
         <tbody>
           {sorted.map((r) => {
-            const verdict = r.unattributed ? null : metaVerdict(r);
+            const verdict = r.unattributed ? null : metaVerdict(r, bookingsLinked);
             return (
               <tr
                 key={r.campaignKey}
@@ -133,15 +157,31 @@ export function CampaignPerformanceTable({ rows }: { rows: CampaignRow[] }) {
                   {r.unattributed ? "—" : formatCurrency(r.spend)}
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums">
-                  {formatNumber(r.realBookings)}
+                  {bookingsLinked ? (
+                    formatNumber(r.realBookings)
+                  ) : (
+                    <span className="text-ink-disabled" title={NOT_LINKED}>—</span>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums">
-                  {formatCurrency(r.realRevenue)}
+                  {bookingsLinked ? (
+                    formatCurrency(r.realRevenue)
+                  ) : (
+                    <span className="text-ink-disabled" title={NOT_LINKED}>—</span>
+                  )}
                 </td>
                 <td
-                  className={`px-4 py-3 text-right font-semibold tabular-nums ${r.unattributed ? "" : roasColor(r.realRoas)}`}
+                  className={`px-4 py-3 text-right font-semibold tabular-nums ${
+                    r.unattributed || !bookingsLinked ? "" : roasColor(r.realRoas)
+                  }`}
                 >
-                  {r.unattributed ? "—" : formatMultiple(r.realRoas)}
+                  {!bookingsLinked ? (
+                    <span className="text-ink-disabled" title={NOT_LINKED}>—</span>
+                  ) : r.unattributed ? (
+                    "—"
+                  ) : (
+                    formatMultiple(r.realRoas)
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   {verdict == null ? (

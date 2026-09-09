@@ -79,9 +79,22 @@ const REASON_LABEL: Record<string, string> = {
   unattributed: "no campaign tag or ad click id on any visit in this session",
 };
 
-export function ConversionJourneys({ journeys }: { journeys: ConversionJourney[] }) {
+export function ConversionJourneys({
+  journeys,
+  viewer = "agency",
+}: {
+  journeys: ConversionJourney[];
+  /**
+   * On the public /share report the per-booking drill-down is withheld. The
+   * booking itself STAYS — its date, value and attribution state are the point
+   * — but the journey behind it is one identifiable person's path through the
+   * site, and /share/<uuid> is unauthenticated and forwardable.
+   */
+  viewer?: "agency" | "share";
+}) {
   const [openId, setOpenId] = useState<string | null>(null);
-  const open = journeys.find((j) => j.id === openId) ?? null;
+  const canDrillDown = viewer !== "share";
+  const open = canDrillDown ? (journeys.find((j) => j.id === openId) ?? null) : null;
 
   if (journeys.length === 0) {
     return (
@@ -112,13 +125,15 @@ export function ConversionJourneys({ journeys }: { journeys: ConversionJourney[]
                 </td>
                 <td className="px-4 py-2">{j.attributedTo}</td>
                 <td className="px-4 py-2 text-right">
-                  <button
-                    type="button"
-                    onClick={() => setOpenId(j.id)}
-                    className="text-sm font-medium text-brand hover:underline"
-                  >
-                    View journey
-                  </button>
+                  {canDrillDown && (
+                    <button
+                      type="button"
+                      onClick={() => setOpenId(j.id)}
+                      className="text-sm font-medium text-brand hover:underline"
+                    >
+                      View journey
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

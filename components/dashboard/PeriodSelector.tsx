@@ -64,7 +64,7 @@ export function PeriodSelector({
           <form
             method="get"
             action={basePath}
-            className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-line bg-card p-3 shadow-card sm:absolute sm:z-10 sm:mt-2"
+            className="mt-2 flex flex-wrap items-end gap-2 rounded-lg border border-line bg-card p-3 shadow-card sm:absolute sm:right-0 sm:z-10 sm:mt-2 sm:w-max sm:max-w-[min(22rem,calc(100vw-2rem))]"
           >
             {kept.map(([k, v]) => (
               <input key={k} type="hidden" name={k} value={v} />

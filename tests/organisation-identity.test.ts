@@ -207,7 +207,6 @@ describe("6. the hotel dashboard has a single date context", () => {
   const HOTEL_PAGE = readCode("components/dashboard/FullHotelDashboard.tsx");
   const SAVINGS = readCode("components/dashboard/CommissionSavings.tsx");
   const RBS = readCode("components/dashboard/RevenueBySource.tsx");
-  const SUMMARY = readCode("components/dashboard/OwnerSummaryCard.tsx");
 
   test("the page selector is propagated to the panels that used to ignore it", () => {
     // CommissionSavings and RevenueBySource each owned a 7/30/90 toggle
@@ -230,15 +229,12 @@ describe("6. the hotel dashboard has a single date context", () => {
     }
   });
 
-  test("OwnerSummaryCard starts on the page's period where it can", () => {
-    // Its API supports a FIXED set of periods, so it cannot follow an arbitrary
-    // range — but it must not silently default to 7 days while the page says 30.
-    expect(HOTEL_PAGE).toMatch(/<OwnerSummaryCard[^>]*pageRangeKey=\{range\.key\}/);
-    expect(SUMMARY).toMatch(/pageRangeKey === "7" \? "7d"/);
-  });
-
-  test("OwnerSummaryCard always states which period it is showing", () => {
-    // The remaining mismatch (90 / custom -> 30d) is then visible, not silent.
-    expect(SUMMARY).toMatch(/TABS\.find\(\(t\) => t\.key === period\)\?\.label/);
+  test("no panel carries its own period toggle any more", () => {
+    // OwnerSummaryCard was the last one, and it is DELETED rather than fixed:
+    // its API only ever supported a fixed 1d/7d/30d set, so on a 90-day or
+    // custom report it silently showed a 30-day summary beside 90-day figures.
+    // The two assertions it used to carry are replaced by its absence.
+    expect(HOTEL_PAGE).not.toContain("OwnerSummaryCard");
+    expect(HOTEL_PAGE).not.toContain("pageRangeKey");
   });
 });

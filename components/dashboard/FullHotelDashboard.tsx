@@ -20,6 +20,7 @@ import {
   type EventInput,
   type RedemptionInput,
   type TouchpointInput,
+  previousRangeOf,
 } from "@/lib/attribution";
 import {
   formatCurrency,
@@ -68,7 +69,6 @@ import { missingAdDays } from "@/lib/backfill";
 import { computeFunnel, stageRank, STAGE_LABEL } from "@/lib/funnel";
 import { RevenueBySource } from "@/components/dashboard/RevenueBySource";
 import { CommissionSavings } from "@/components/dashboard/CommissionSavings";
-import { OwnerSummaryCard } from "@/components/dashboard/OwnerSummaryCard";
 import { PerformanceOverview } from "@/components/dashboard/PerformanceOverview";
 import { loadInfluencerPerformance } from "@/lib/influencer-dashboard";
 import { InfluencerPerformance } from "@/components/dashboard/InfluencerPerformance";
@@ -87,6 +87,20 @@ import {
 } from "@/lib/metrics/paid-performance";
 import { AvailableFundsCard } from "@/components/dashboard/funds/AvailableFundsCard";
 import { PeriodSelector } from "@/components/dashboard/PeriodSelector";
+import { PropertySelector, propertyLabel } from "@/components/dashboard/PropertySelector";
+import { DemandComposition } from "@/components/dashboard/DemandComposition";
+import { ContactReport } from "@/components/dashboard/contact/ContactReport";
+import { classifyVisit, classifyConversion, UNASSIGNED_SEGMENT, type SegmentRule } from "@/lib/segments";
+import { composeDemand } from "@/lib/metrics/demand-source";
+import { loadBlockA, loadBlockB, blendedCostPerContact } from "@/lib/metrics/contact-report";
+import { ok as mvOk, unavailable as mvUnavailable } from "@/lib/metrics/metric-value";
+import { buildPeriodNarrative, buildRecommendedActions, type NarrativeFacts } from "@/lib/summary-templates";
+import { PeriodNarrative } from "@/components/dashboard/PeriodNarrative";
+import { DemandRhythm } from "@/components/dashboard/DemandRhythm";
+import { contactsByWeekday } from "@/lib/ops-tracker/metrics";
+import { MethodologyPanel, type MetricDefinition } from "@/components/dashboard/MethodologyPanel";
+import { zonedDayString } from "@/lib/timezone";
+import { whenMigrated } from "@/lib/missing-table";
 import { loadAdFunds } from "@/lib/metrics/funds";
 import { SocialContentTable } from "@/components/dashboard/social/SocialContentTable";
 import { loadSocialPerformance } from "@/lib/metrics/social-performance";
@@ -251,6 +265,8 @@ export type FullHotelDashboardProps = {
    * social views rather than duplicating them.
    */
   sourceParam?: string;
+  /** ?property=<segmentId> — which of a group's properties to describe. */
+  propertyParam?: string;
   /** Agency-only: the edit affordance on the agency contact card. */
   canEditAgencyContact?: boolean;
   /** Rendered above the dashboard on the "all channels" view. */
@@ -298,6 +314,7 @@ async function renderDashboard({
   postTypeParam,
   channelParam,
   sourceParam,
+  propertyParam,
   canEditAgencyContact = false,
   headerSlot,
   footerSlot,
@@ -394,6 +411,29 @@ async function renderDashboard({
     { range: rangeParam, from: fromParam, to: toParam },
     { timezone: hotel.timezone, earliest: firstEvent?.createdAt ?? null },
   );
+  // ── PROPERTY SEGMENTS ───────────────────────────────────────────────────────
+  // A group (Aster) has more than one property under one HotelClient. Every
+  // segmentable figure below is cut by the selected one; group-level figures
+  // (ad spend) stay group-level and say so, because campaign rows carry no
+  // property signal that can be trusted.
+  // Tolerates a pending migration: no PropertySegment table means no property
+  // split, not a broken page. See lib/missing-table.ts.
+  const segments = await whenMigrated("property segments", [] as {
+    id: string; name: string; slug: string; displayOrder: number;
+    pathPrefixes: string[]; bookingHosts: string[];
+  }[], () =>
+    agencyScoped(prisma.propertySegment).findMany({
+      where: { hotelClientId: hotel.id, isActive: true },
+      orderBy: { displayOrder: "asc" },
+      select: { id: true, name: true, slug: true, displayOrder: true, pathPrefixes: true, bookingHosts: true },
+    }),
+  );
+  const selectedSegmentId =
+    propertyParam && segments.some((sg) => sg.id === propertyParam) ? propertyParam : null;
+  const segmentRules: SegmentRule[] = segments;
+  const propertyOptions = segments.map((sg) => ({ id: sg.id, name: sg.name }));
+  const scopeLabel = propertyLabel(selectedSegmentId, propertyOptions);
+
   const postType: PostType | null =
     postTypeParam && (POST_TYPES as readonly string[]).includes(postTypeParam)
       ? (postTypeParam as PostType)
@@ -1407,6 +1447,21 @@ async function renderDashboard({
       exitPath: true,
     },
   });
+  // The SHARE surface gets this instead of the per-visitor list below: journey
+  // SHAPES by frequency, with no visitor id, no session id and no single
+  // person's path. /share/<uuid> is unauthenticated and forwardable, so a
+  // visitor identifier on it is a person-level disclosure to anyone the link
+  // reaches — including in a title attribute, which is where the untruncated
+  // value used to sit. Scoped to the resolved period like everything else.
+  const journeyShapes = await agencyScoped(prisma.session).groupBy({
+    by: ["landingPath", "exitPath"],
+    where: { hotelClientId: hotel.id, startedAt: { gte: range.since, lte: range.until } },
+    _count: { _all: true },
+    orderBy: { _count: { landingPath: "desc" } },
+    take: 8,
+  });
+  const journeyShapeTotal = journeyShapes.reduce((n, g) => n + g._count._all, 0);
+
   const recentSessionIds = recentSessions.map((s) => s.id);
   const convertedSessionIds =
     recentSessionIds.length > 0
@@ -1469,6 +1524,207 @@ async function renderDashboard({
   // too rather than leaking the same information under a different heading.
   const funds = showAdSpend ? await loadAdFunds(hotel.id) : null;
 
+  // ── PHASES 3 + 4 · demand composition and the three contact blocks ──────────
+  //
+  // Visits carry pageUrl so they can be segmented, and the UTM + click-id
+  // columns so they can be bucketed. Both are REQUIRED projections: an omitted
+  // click id reads as undefined and silently reclassifies an auto-tagged visit
+  // as "no source attached".
+  const prevRange = previousRangeOf(range);
+  const visitSelect = {
+    utmSource: true, utmMedium: true, utmContent: true,
+    gclid: true, gbraid: true, wbraid: true, fbclid: true,
+    sessionId: true, pageUrl: true, createdAt: true,
+  } as const;
+
+  const [visitRowsAll, prevVisitRowsAll] = pixelMode
+    ? [[], []]
+    : await Promise.all([
+        agencyScoped(prisma.trackingEvent).findMany({
+          where: { hotelClientId: hotel.id, eventType: "visit", createdAt: { gte: range.since, lte: range.until } },
+          select: visitSelect,
+        }),
+        agencyScoped(prisma.trackingEvent).findMany({
+          where: { hotelClientId: hotel.id, eventType: "visit", createdAt: { gte: prevRange.since, lte: prevRange.until } },
+          select: visitSelect,
+        }),
+      ]);
+
+  // Segment filtering happens HERE, not in SQL: the rules are page-path prefixes
+  // held as data, and classifyVisit is the single place that interprets them.
+  const inScope = <T extends { pageUrl: string | null }>(rows: T[]): T[] =>
+    selectedSegmentId == null
+      ? rows
+      : rows.filter((r) => classifyVisit(r.pageUrl, segmentRules) === selectedSegmentId);
+
+  const demand = composeDemand(inScope(visitRowsAll), inScope(prevVisitRowsAll));
+
+  // Unassigned is always visible in the group view: those visits are on pages
+  // shared by both properties and belong to neither. They are NEVER distributed.
+  const unassignedVisits = visitRowsAll.filter(
+    (r) => classifyVisit(r.pageUrl, segmentRules) === UNASSIGNED_SEGMENT,
+  ).length;
+
+  const [blockA, platformBlocks] = await Promise.all([
+    loadBlockA({ hotelClientId: hotel.id, range, segmentId: selectedSegmentId }),
+    loadBlockB({
+      hotelClientId: hotel.id,
+      range,
+      metaConnected,
+      metaNeedsReconnect: integrationStatus.meta === "expired",
+    }),
+  ]);
+
+  // Block C — what we measured ourselves. "Attributed" requires POSITIVE
+  // evidence (a UTM, a click id or a coupon); everything else is Unattributed
+  // and is never pushed into a channel to make the split look tidier.
+  // Its own projection: attrConvRows omits pageUrl, utmMedium, the click ids and
+  // the coupon, and every one of those is load bearing here. An omitted click id
+  // reads as undefined and silently reclassifies an attributed booking as
+  // unattributed.
+  const blockCConversions = await agencyScoped(prisma.trackingEvent).findMany({
+    where: { hotelClientId: hotel.id, eventType: "conversion", createdAt: { gte: range.since, lte: range.until } },
+    select: {
+      pageUrl: true, utmSource: true, utmMedium: true, couponCodeUsed: true,
+      gclid: true, gbraid: true, wbraid: true, fbclid: true,
+    },
+  });
+  const scopedConversions = blockCConversions.filter((c) =>
+    selectedSegmentId == null
+      ? true
+      : classifyConversion(c.pageUrl, segmentRules) === selectedSegmentId,
+  );
+  const attributedCount = scopedConversions.filter(
+    (c) => c.utmSource || c.utmMedium || c.gclid || c.gbraid || c.wbraid || c.fbclid || c.couponCodeUsed,
+  ).length;
+
+  const scopedVisits = inScope(visitRowsAll);
+  const blockC = {
+    visits: mvOk(scopedVisits.length),
+    sessions: mvOk(new Set(scopedVisits.map((v) => v.sessionId).filter(Boolean)).size),
+    websiteConversions: mvOk(scopedConversions.length),
+    attributed: mvOk(attributedCount),
+    unattributed: mvOk(scopedConversions.length - attributedCount),
+    freshness: {
+      label: "HotelTrack tracking snippet",
+      health: tracking,
+      lastUpdatedAt: hotel.lastEventAt,
+      staleForPeriod: false,
+      staleNote: null,
+    },
+  };
+
+  const totalPaidSpendMetric = kpis.spend == null ? mvUnavailable(
+    "Advertising spend is not available for this period — the ad accounts report in different currencies, or none is connected.",
+  ) : mvOk(kpis.spend);
+  const blendedCost = blendedCostPerContact(totalPaidSpendMetric, blockA.summary.recordedContacts);
+
+  // ── 9.3 · spend with no recorded OUTCOME ───────────────────────────────────
+  // Deliberately not called wasted spend. A campaign may be producing calls the
+  // system cannot see — that is the whole finding of this project — so the claim
+  // is about what was RECORDED, not about value. The caveat sits on the block.
+  const noOutcomeAgg = new Map<string, { name: string; spend: number; clicks: number; conversions: number }>();
+  for (const snap of metaCampaignSnaps) {
+    const row = noOutcomeAgg.get(snap.metaCampaignId) ?? {
+      name: snap.campaignName, spend: 0, clicks: 0, conversions: 0,
+    };
+    row.spend += Number(snap.spend);
+    row.clicks += snap.clicks;
+    row.conversions += snap.conversions;
+    noOutcomeAgg.set(snap.metaCampaignId, row);
+  }
+  const noOutcomeCampaigns = [...noOutcomeAgg.values()]
+    .filter((c) => c.spend > 0 && (c.clicks === 0 || c.conversions === 0))
+    .sort((a, b) => b.spend - a.spend)
+    .slice(0, 10);
+
+  // ── 6 + 9.6 · the period in words, and what to do about it ─────────────────
+  const demandByBucket = new Map(demand.rows.map((r) => [r.bucket, r]));
+  const staleSources = [
+    blockA.freshness,
+    ...platformBlocks.map((b) => b.freshness),
+  ]
+    .filter((f) => f.staleForPeriod && f.lastUpdatedAt)
+    .map((f) => ({ label: f.label, lastUpdated: zonedDayString(f.lastUpdatedAt!, range.timezone) }));
+
+  const prevVisitCount = inScope(prevVisitRowsAll).length;
+  const topDemand = demand.rows[0] ?? null;
+  const lostShare = blockA.summary.dispositionShare.lost_to_availability_or_rate;
+
+  const narrativeFacts: NarrativeFacts = {
+    periodLabel: range.dateLabel,
+    comparisonLabel: previousRangeOf(range).label,
+    propertyName: blockA.segmentName,
+    visits: demand.totalVisits,
+    previousVisits: prevVisitCount === 0 ? null : prevVisitCount,
+    visitChange:
+      prevVisitCount === 0 ? null : (demand.totalVisits - prevVisitCount) / prevVisitCount,
+    topSourceLabel: topDemand?.label ?? null,
+    topSourceVisits: topDemand?.visits ?? null,
+    topSourceShare: topDemand?.share ?? null,
+    noSourceShare: demandByBucket.get("no_source")?.share ?? null,
+    aiAssistantVisits: demandByBucket.get("ai_assistants")?.visits ?? null,
+    metaVisits: demandByBucket.get("meta_instagram")?.visits ?? null,
+    unassignedShare:
+      demand.totalVisits > 0 && selectedSegmentId == null
+        ? unassignedVisits / visitRowsAll.length
+        : null,
+    recordedContacts: blockA.summary.recordedContacts.state === "ok"
+      ? blockA.summary.recordedContacts.value
+      : null,
+    roomNightsConfirmed: blockA.summary.roomNightsConfirmed.state === "ok"
+      ? blockA.summary.roomNightsConfirmed.value
+      : null,
+    trackerCompleteThrough: blockA.summary.completeThrough,
+    trackerDaysMissing: blockA.summary.daysMissing,
+    propertiesMissingData: blockA.propertiesMissingData,
+    measuredBookings: scopedConversions.length,
+    staleSources,
+    lostToAvailabilityShare: lostShare.state === "ok" ? lostShare.value : null,
+    // Needs the comparison period's disposition mix, which is a second tracker
+    // read. Left null rather than approximated — an action must never fire on a
+    // figure that was estimated. See Open Decisions.
+    junkShareDeltaPoints: null,
+    topNoOutcomeCampaign: noOutcomeCampaigns[0]
+      ? { name: noOutcomeCampaigns[0].name, spend: formatCurrency(noOutcomeCampaigns[0].spend) }
+      : null,
+  };
+  // ── 9.4 · demand rhythm ────────────────────────────────────────────────────
+  // Visits bucketed by the PROPERTY's weekday, not UTC's: an evening booking in
+  // Kolkata is the same day to a hotelier and the next day to a UTC clock, and
+  // a staffing signal that is a day out is worse than none.
+  const visitsWeekday: (number | null)[] = Array.from({ length: 7 }, () => null);
+  for (const v of scopedVisits) {
+    const day = new Date(`${zonedDayString(v.createdAt, range.timezone)}T00:00:00.000Z`).getUTCDay();
+    visitsWeekday[day] = (visitsWeekday[day] ?? 0) + 1;
+  }
+  const contactsWeekday = contactsByWeekday(blockA.days);
+
+  const narrativeSentences = buildPeriodNarrative(narrativeFacts);
+  const recommendedActions = buildRecommendedActions(narrativeFacts);
+
+  // ── 9.5 · every metric on this page, defined ───────────────────────────────
+  const stamp = (d: Date | null) => (d ? zonedDayString(d, range.timezone) : "never received");
+  const methodology: MetricDefinition[] = [
+    { metric: "Website visits", definition: "Tracked page views recorded by the HotelTrack snippet on the property's own site.", source: "HotelTrack tracking snippet", lastUpdated: stamp(hotel.lastEventAt), channelAttributable: "partly" },
+    { metric: "Sessions", definition: "Distinct browsing sessions among those visits.", source: "HotelTrack tracking snippet", lastUpdated: stamp(hotel.lastEventAt), channelAttributable: "partly" },
+    { metric: "Website conversions", definition: "Bookings the snippet detected on the site itself. Not linked to confirmations in the booking engine.", source: "HotelTrack tracking snippet", lastUpdated: stamp(hotel.lastEventAt), channelAttributable: "partly" },
+    { metric: "Calls received", definition: "Calls the property's own team logged that day.", source: "Operations tracker (property-maintained spreadsheet)", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    { metric: "Genuine enquiries", definition: "Contacts the property judged to be real new demand.", source: "Operations tracker", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    { metric: "WhatsApp leads", definition: "WhatsApp enquiries the property logged.", source: "Operations tracker", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    { metric: "Room nights confirmed", definition: "NIGHTS confirmed, not bookings — one booking can be several nights.", source: "Operations tracker", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    { metric: "Room nights per recorded contact", definition: "Room nights divided by calls plus WhatsApp leads. A yield figure, not a conversion rate; it can exceed 1.", source: "Operations tracker (computed from components)", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    ...platformBlocks.flatMap((b): MetricDefinition[] => [
+      { metric: `${b.label} impressions`, definition: `Impressions as ${b.label} counts them, in its own daily buckets.`, source: b.label, lastUpdated: stamp(b.freshness.lastUpdatedAt), channelAttributable: "yes" },
+      { metric: `${b.label} clicks`, definition: `Clicks as ${b.label} counts them.`, source: b.label, lastUpdated: stamp(b.freshness.lastUpdatedAt), channelAttributable: "yes" },
+      { metric: `${b.label} spend`, definition: `Spend as ${b.label} reports it, in its own currency and daily buckets.`, source: b.label, lastUpdated: stamp(b.freshness.lastUpdatedAt), channelAttributable: "yes" },
+      { metric: `${b.label} reported conversions`, definition: "The platform's own conversion count, on its own definition and attribution window. The action type is not recorded, so what it counts is unknown.", source: b.label, lastUpdated: stamp(b.freshness.lastUpdatedAt), channelAttributable: "yes" },
+    ]),
+    { metric: "Blended cost per contact", definition: "Total ad spend divided by every recorded contact. Not a cost per lead for any channel.", source: "Ad platforms ÷ operations tracker", lastUpdated: stamp(blockA.freshness.lastUpdatedAt), channelAttributable: "no" },
+    { metric: "Traffic source buckets", definition: "Each visit assigned to one bucket, first match wins, from its click identifiers and UTM tags.", source: "HotelTrack tracking snippet", lastUpdated: stamp(hotel.lastEventAt), channelAttributable: "partly" },
+  ];
+  const qualifiedCost = blendedCostPerContact(totalPaidSpendMetric, blockA.summary.qualifiedNewDemand);
+
   return (
     <div className="space-y-6">
       {headerSlot}
@@ -1478,7 +1734,25 @@ async function renderDashboard({
       <PeriodSelector
         basePath={basePath}
         range={range}
+        preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam, property: propertyParam }}
+      />
+
+      {/* Which property. Rendered only for a group with more than one — a
+          single-property hotel has nothing to choose. */}
+      <PropertySelector
+        basePath={basePath}
+        options={propertyOptions}
+        current={selectedSegmentId}
         preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam }}
+      />
+
+      {/* The period in words, and what to do about it. Templates with computed
+          values and threshold conditions — never a model call at render time. */}
+      <PeriodNarrative
+        sentences={narrativeSentences}
+        actions={recommendedActions}
+        periodLabel={range.dateLabel}
+        scopeLabel={scopeLabel}
       />
 
       {/* Backfill nudge. Agency-only: reconnecting Meta is their action, on a
@@ -1526,18 +1800,15 @@ async function renderDashboard({
         />
       )}
 
-      {/* Owner Summary — glanceable plain-English read of recent performance,
-          at the very top of the dashboard (above all sections). */}
-      <OwnerSummaryCard
-        hotelId={hotel.id}
-        pageRangeKey={range.key}
-        apiBase={apiBase}
-        shareToken={shareToken}
-      />
+      {/* The Performance Summary block was DELETED here, not hidden. It carried
+          its own Yesterday / 7-day / 30-day toggle independent of the page
+          period — so a client reading a 90-day report was shown a 30-day
+          summary beside 90-day figures — and it was the source of "Meta Ads:
+          drove 0 bookings (₹0)", which asserts a measurement nobody took. The
+          period narrative below replaces it, on the page's own period. */}
 
       {/* Performance Overview (Tier A) — 10 owner-overview metrics over the same
-          date range as the page. Read-only on existing data; sits between the
-          Owner Summary and Revenue by Source. */}
+          date range as the page. */}
       <PerformanceOverview
         hotelId={hotel.id}
         from={range.fromInput}
@@ -1602,10 +1873,73 @@ async function renderDashboard({
       {!pixelMode && (
         <div className="space-y-6">
           <KpiStrip cards={kpiCards} />
+
+          {/* Where demand came from — directly under the KPI band, because it is
+              the first question the band provokes. */}
+          <DemandComposition
+            rows={demand.rows}
+            totalVisits={demand.totalVisits}
+            periodLabel={range.dateLabel}
+            comparisonLabel={previousRangeOf(range).label}
+            scopeLabel={scopeLabel}
+          />
+
+          {/* Shared pages belong to the group, not to a property. Shown as its
+              own row and never distributed across the two by ratio. */}
+          {selectedSegmentId == null && propertyOptions.length > 1 && unassignedVisits > 0 && (
+            <p className="rounded-card border border-line bg-card px-4 py-3 text-sm text-ink-tertiary shadow-card">
+              {formatNumber(unassignedVisits)} of these visits were on pages shared by both
+              properties — the home page, the blog and similar — so they belong to the group
+              rather than to Coffeeberry Hills or Three Hills. They are counted once, here, and
+              are never split between the two.
+            </p>
+          )}
+
           {metaConnected && <MetaVsRealityHero data={metaVsReality} />}
           <AttributionPanel byModel={channelByModel} showRoas={showAdSpend} />
         </div>
       )}
+
+      {noOutcomeCampaigns.length > 0 && showAdSpend && (
+        <section className="rounded-card border border-line bg-card p-4 shadow-card sm:p-5">
+          <h2 className="font-medium text-ink">Spend with no recorded outcome in this window</h2>
+          {/* The caveat is ON the block, not in a footnote. */}
+          <p className="mt-1 text-sm text-ink-tertiary">
+            These campaigns spent money in {range.dateLabel} with no click or no platform-reported
+            conversion recorded against them. That is a statement about what was RECORDED, not
+            about value — a campaign may be producing calls the system cannot see, which is the
+            central finding of this report. Check before pausing anything.
+          </p>
+          <ul className="mt-3 divide-y divide-line">
+            {noOutcomeCampaigns.map((c) => (
+              <li key={c.name} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-2 text-sm">
+                <span className="min-w-0 truncate text-ink-secondary">{c.name}</span>
+                <span className="tabular-nums text-ink-tertiary">
+                  <span className="font-semibold text-ink">{formatCurrency(c.spend)}</span>
+                  {" · "}{formatNumber(c.clicks)} clicks · {formatNumber(c.conversions)} conversions
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <DemandRhythm
+        contactsByWeekday={contactsWeekday}
+        visitsByWeekday={visitsWeekday}
+        periodLabel={range.dateLabel}
+        scopeLabel={scopeLabel}
+      />
+
+      {/* Customer contact — three blocks that are never added together. */}
+      <ContactReport
+        blockA={blockA}
+        platforms={platformBlocks}
+        measured={blockC}
+        blendedCostPerContact={blendedCost}
+        costPerQualifiedContact={qualifiedCost}
+        periodLabel={range.dateLabel}
+      />
 
       {/* Section 2 — Content performance (attribution-dependent; hidden in pixel mode) */}
       {!pixelMode && (
@@ -1818,7 +2152,7 @@ async function renderDashboard({
             <>
               {showAdSpend && (
                 <div className="p-4">
-                  <CampaignGrid cards={campaignCards} />
+                  <CampaignGrid cards={campaignCards} bookingsLinked={matchedBookings > 0} />
                 </div>
               )}
               {showAdSpend && (
@@ -1868,7 +2202,7 @@ async function renderDashboard({
             <p className="px-4 pt-4 text-xs font-medium uppercase tracking-wide text-ink-tertiary">
               Recent tracked bookings
             </p>
-            <ConversionJourneys journeys={journeys} />
+            <ConversionJourneys journeys={journeys} viewer={viewer} />
           </div>
         </SectionCard>
       )}
@@ -1911,7 +2245,36 @@ async function renderDashboard({
               </div>
             </div>
           )}
-          {recentSessions.length === 0 ? (
+          {viewer === "share" ? (
+            journeyShapes.length === 0 ? (
+              <p className="px-4 py-8 text-center text-sm text-ink-tertiary">
+                No visitor journeys recorded in this period.
+              </p>
+            ) : (
+              <ul className="divide-y divide-line">
+                {journeyShapes.map((g) => (
+                  <li
+                    key={`${g.landingPath}→${g.exitPath ?? ""}`}
+                    className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-3 text-sm"
+                  >
+                    <span className="min-w-0 truncate text-ink-secondary">
+                      {g.landingPath}
+                      {g.exitPath && g.exitPath !== g.landingPath ? ` → ${g.exitPath}` : ""}
+                    </span>
+                    <span className="tabular-nums text-ink-tertiary">
+                      {formatNumber(g._count._all)}{" "}
+                      {g._count._all === 1 ? "visit" : "visits"}
+                      {journeyShapeTotal > 0 && (
+                        <span className="text-ink-disabled">
+                          {" "}· {formatPercent(g._count._all / journeyShapeTotal)}
+                        </span>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : recentSessions.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-ink-tertiary">
               No visitor journeys yet. They appear once this hotel installs the v2
               tracking snippet and visitors browse the site.
@@ -2340,6 +2703,10 @@ async function renderDashboard({
         canEdit={canEditAgencyContact}
         viewerIsAgency={isAgencyViewer}
       />
+
+      {/* How we count — every metric on the page, its source, its freshness and
+          whether it can be credited to a channel. Closed by default. */}
+      <MethodologyPanel definitions={methodology} timezone={range.timezone} />
 
       {footerSlot}
     </div>

@@ -40,7 +40,33 @@ function roasColor(roas: number | null): string {
   return "text-danger";
 }
 
-export function CampaignGrid({ cards }: { cards: CampaignCard[] }) {
+const NOT_LINKED =
+  "Booking confirmations are not linked to sessions yet, so bookings from this campaign have not been measured. This is not a measurement of zero.";
+
+/** A designed unavailable state: legible, neutral, and carrying its reason. */
+function Unmeasured() {
+  return (
+    <span className="text-sm font-medium text-ink-disabled" title={NOT_LINKED}>
+      Not measured
+    </span>
+  );
+}
+
+export function CampaignGrid({
+  cards,
+  bookingsLinked,
+}: {
+  cards: CampaignCard[];
+  /**
+   * Whether any booking confirmation has ever been joined to a campaign.
+   *
+   * When false, realBookings / realRevenue / realRoas / variancePct are NOT
+   * zero — they are unmeasured. Rendering "0 real bookings" and "−100% vs Meta"
+   * on every campaign asserted, permanently and on every period, a measurement
+   * that was never taken.
+   */
+  bookingsLinked: boolean;
+}) {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const open = cards.find((c) => c.campaignKey === openKey) ?? null;
 
@@ -93,7 +119,11 @@ export function CampaignGrid({ cards }: { cards: CampaignCard[] }) {
                 </div>
                 <div>
                   <p className="text-[11px] font-medium uppercase tracking-wide text-ink-tertiary">Real bookings</p>
-                  <p className="text-sm font-semibold tabular-nums text-ink">{formatNumber(c.realBookings)}</p>
+                  {bookingsLinked ? (
+                    <p className="text-sm font-semibold tabular-nums text-ink">{formatNumber(c.realBookings)}</p>
+                  ) : (
+                    <Unmeasured />
+                  )}
                 </div>
               </div>
             </button>
@@ -130,14 +160,22 @@ export function CampaignGrid({ cards }: { cards: CampaignCard[] }) {
             <div className="mt-5 rounded-card bg-card p-4 text-center">
               <p className="text-[11px] font-medium uppercase tracking-wide text-ink-tertiary">True ROAS</p>
               <p className={`text-5xl font-semibold tracking-tight tabular-nums ${roasColor(open.realRoas)}`}>
-                {formatMultiple(open.realRoas)}
+                {bookingsLinked ? formatMultiple(open.realRoas) : <Unmeasured />}
               </p>
             </div>
 
             <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-4 text-sm">
               <Detail label="Spend" value={formatCurrency(open.spend)} />
-              <Detail label="Real revenue" value={formatCurrency(open.realRevenue)} />
-              <Detail label="Real bookings" value={formatNumber(open.realBookings)} />
+              <Detail
+                label="Real revenue"
+                value={bookingsLinked ? formatCurrency(open.realRevenue) : "Not measured"}
+                valueClass={bookingsLinked ? undefined : "text-ink-disabled"}
+              />
+              <Detail
+                label="Real bookings"
+                value={bookingsLinked ? formatNumber(open.realBookings) : "Not measured"}
+                valueClass={bookingsLinked ? undefined : "text-ink-disabled"}
+              />
               <Detail label="Meta-claimed bookings" value={formatNumber(open.metaBookings)} />
               <Detail label="Impressions" value={formatNumber(open.impressions)} />
               <Detail label="Clicks" value={formatNumber(open.clicks)} />
@@ -145,12 +183,18 @@ export function CampaignGrid({ cards }: { cards: CampaignCard[] }) {
               <Detail
                 label="Meta vs real"
                 value={
-                  open.variancePct == null
-                    ? "—"
-                    : `${open.variancePct > 0 ? "+" : ""}${Math.round(open.variancePct)}%`
+                  !bookingsLinked
+                    ? "Not measured"
+                    : open.variancePct == null
+                      ? "—"
+                      : `${open.variancePct > 0 ? "+" : ""}${Math.round(open.variancePct)}%`
                 }
                 valueClass={
-                  open.variancePct != null && open.variancePct > 50 ? "text-danger" : "text-ink"
+                  !bookingsLinked
+                    ? "text-ink-disabled"
+                    : open.variancePct != null && open.variancePct > 50
+                      ? "text-danger"
+                      : "text-ink"
                 }
               />
             </dl>

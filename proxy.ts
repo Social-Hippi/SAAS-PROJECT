@@ -96,6 +96,13 @@ const isPublicRoute = createRouteMatcher([
   "/api/budget/check(.*)",
   // Daily ad-funds refresh + low-balance reminder cron, same CRON_SECRET guard.
   "/api/balance/check(.*)",
+  // Operations-tracker ingest, called by a Google Apps Script bound to a
+  // property's workbook. Apps Script carries no Clerk session, so middleware
+  // must not redirect it to /sign-in — the route enforces its own shared-secret
+  // check (constant-time) and is a POST-only handler.
+  "/api/integrations/ops-tracker(.*)",
+  // Scheduled reconciliation for the same import, CRON_SECRET-gated in-route.
+  "/api/cron/ops-tracker-sync(.*)",
   // Daily GA4 (OAuth) sync cron, gated by CRON_SECRET inside the route.
   "/api/ga4/sync(.*)",
   // GA4 OAuth callback: the browser arrives from accounts.google.com; the signed

@@ -18,6 +18,7 @@ const SOURCE_TYPE_COLOR: Record<SourceType, string> = {
   meta_ads: "#3b82f6", google_ads: "#ef4444", instagram_organic: "#ec4899",
   facebook_organic: "#6366f1", influencer: "#f59e0b", email: "#14b8a6",
   whatsapp: "#22c55e", direct: "#9ca3af", other: "#8b5cf6",
+  google_hotel_ads: "#f97316", ai_assistant: "#0ea5e9",
 };
 const GRAN_LABEL: Record<Granularity, string> = {
   source: "Source", source_medium: "Source + Medium", source_medium_campaign: "Source + Medium + Campaign",

@@ -40,14 +40,27 @@ async function main() {
     process.exit(1);
   }
 
-  const agency = await prisma.agency.findFirst({
+  // Resolved by NAME, and two live tenants now share the name "Social Hippi"
+  // deliberately. findFirst would silently attach this person to whichever row
+  // Prisma returned first — and a member on the wrong tenant sees another
+  // client's data. Refuse and make the caller pass an id instead.
+  const matches = await prisma.agency.findMany({
     where: { name: agencyName },
-    select: { id: true, plan: true },
+    select: { id: true, plan: true, email: true },
   });
-  if (!agency) {
+  if (matches.length === 0) {
     console.error(`No agency named "${agencyName}". Run \`npm run seed\` first.`);
     process.exit(1);
   }
+  if (matches.length > 1) {
+    console.error(
+      `"${agencyName}" matches ${matches.length} agencies — refusing to guess which one.\n` +
+        matches.map((m) => `  ${m.id}  (${m.email})`).join("\n") +
+        `\nRe-run with the agency ID instead of the name.`,
+    );
+    process.exit(1);
+  }
+  const agency = matches[0]!;
 
   // Enforce the plan's team-member cap (same rule the app enforces for hotels).
   // Only blocks when this would be a NEW membership; re-attaching an existing

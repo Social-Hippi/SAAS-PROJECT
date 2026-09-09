@@ -54,6 +54,12 @@ export const POLICIES = {
   joinSignup: { limit: 10, window: "60 s", failOpen: false },
   // Expensive authenticated PDF/xlsx/csv exports, per signed-in member.
   export: { limit: 20, window: "60 s", failOpen: true },
+  // Operations-tracker ingest. The shared secret is the real auth; this bounds a
+  // misconfigured onChange trigger firing on every keystroke commit, per IP.
+  // Generous, because the endpoint is idempotent and a legitimate burst during
+  // a bulk paste is normal — fails OPEN so a store outage cannot stop a property
+  // recording its own day's calls.
+  opsTrackerIngest: { limit: 60, window: "60 s", failOpen: true },
   // Razorpay webhook (HMAC is the real auth) — generous defense-in-depth, per IP.
   webhook: { limit: 100, window: "60 s", failOpen: true },
   // OAuth callbacks (signed state is the real auth) — slow brute-force, per IP.

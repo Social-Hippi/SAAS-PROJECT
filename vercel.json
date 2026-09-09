@@ -48,6 +48,10 @@
     {
       "path": "/api/balance/check",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/ops-tracker-sync",
+      "schedule": "0 7 * * *"
     }
   ]
 }

@@ -174,6 +174,8 @@ model Agency {
   shareLinks                 ShareLink[]
   adAccountBalances          AdAccountBalance[]
   lowBalanceReminders        LowBalanceReminder[]
+  propertySegments           PropertySegment[]
+  manualLeadDays             ManualLeadDaily[]
   instagramConnections       InstagramConnection[]
   socialSnapshots            SocialSnapshot[]
   postSnapshots              PostSnapshot[]
@@ -338,6 +340,8 @@ model HotelClient {
   shareLinks                 ShareLink[]
   adAccountBalances          AdAccountBalance[]
   lowBalanceReminders        LowBalanceReminder[]
+  propertySegments           PropertySegment[]
+  manualLeadDays             ManualLeadDaily[]
   instagramConnections       InstagramConnection[]
   socialSnapshots            SocialSnapshot[]
   postSnapshots              PostSnapshot[]
@@ -2157,4 +2161,115 @@ model BookingJourneyMatch {
   @@index([hotelClientId, matchConfidence])
   @@index([visitorId])
   @@index([trackingEventId])
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROPERTY SEGMENTS — more than one property under one HotelClient.
+//
+// Aster Holidays is a GROUP: Coffeeberry Hills and Three Hills share one
+// HotelClient row, one share link, one agency scope and all existing history.
+// Splitting it into two HotelClients would orphan every one of those, so the
+// segment layer sits BENEATH the hotel instead.
+//
+// The matching rules are DATA, not code, because they are exactly the thing that
+// will need editing by someone who cannot deploy. An empty rule set matches
+// nothing, which is the safe failure: traffic falls to Unassigned, which is
+// rendered as its own visible row and never distributed across properties by
+// ratio or any other estimate.
+// ─────────────────────────────────────────────────────────────────────────────
+model PropertySegment {
+  id            String  @id @default(cuid())
+  agencyId      String
+  hotelClientId String
+  name          String // "Coffeeberry Hills"
+  slug          String // "coffeeberry-hills" — the ?property= value
+  displayOrder  Int     @default(0)
+  isActive      Boolean @default(true)
+
+  /// Matched against a visit's page PATH. First match wins; order by displayOrder.
+  pathPrefixes String[] @default([])
+  /// Matched against a conversion pageUrl HOST (the booking engine's own domain).
+  bookingHosts String[] @default([])
+
+  /// The operations workbook + tab this segment's tracker rows arrive from.
+  /// (spreadsheetId, tabName) -> segment is the ingest routing key.
+  sourceSheetId String?
+  sourceTabName String?
+  /// Which column layout that tab uses; see lib/ops-tracker/layouts.ts. The two
+  /// properties genuinely differ (CBH splits Low Budget / Less Room, Three Hills
+  /// combines them and has no Total Leads), so this is not cosmetic.
+  trackerLayout String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agency         Agency            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient    HotelClient       @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  manualLeadDays ManualLeadDaily[]
+
+  @@unique([hotelClientId, slug])
+  @@unique([sourceSheetId, sourceTabName])
+  @@index([agencyId])
+  @@index([hotelClientId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MANUAL LEAD DAILY — one row per property per date, as the property's own team
+// recorded it in their operations workbook.
+//
+// EVERY COLUMN IS STORED AS GIVEN and nullable, because the two workbooks do not
+// share a shape: Coffeeberry Hills splits Low Budget and Less Room into two
+// columns, Three Hills combines them, and Three Hills has no Total Leads column
+// at all. A null here means THE COLUMN DOES NOT EXIST FOR THIS PROPERTY — it
+// does not mean zero, and nothing may render it as zero.
+//
+// storedTotalLeads and storedConversionRate are recorded for auditing and are
+// NEVER rendered. Both are hand-typed and both contradict their own components
+// on sampled rows; the two properties' Conversion Rate columns are not even the
+// same formula. Everything displayed is recomputed from components.
+// ─────────────────────────────────────────────────────────────────────────────
+model ManualLeadDaily {
+  id                String   @id @default(cuid())
+  agencyId          String
+  hotelClientId     String
+  propertySegmentId String?
+  date              DateTime @db.Date
+
+  /// Property-named enquiry column ("CBH Enquiry" / "3Hills Enquiry").
+  enquiries           Int?
+  repeatContacts      Int?
+  roomNightsConfirmed Int? // ROOM NIGHTS, not bookings. One booking can be many.
+  junkSpam            Int?
+  soldOut             Int?
+  inhouse             Int?
+  lowBudget           Int? // CBH only
+  lessRoom            Int? // CBH only
+  lowBudgetLessRoom   Int? // Three Hills only — combined at source, never split
+  whatsappLeads       Int?
+  whatsappConfirmed   Int?
+  totalCallsReceived  Int?
+
+  /// Hand-entered derived values. Audited, never displayed. See lib/ops-tracker.
+  storedTotalLeads      Int?
+  storedConversionRate  Decimal? @db.Decimal(7, 4)
+
+  /// The raw row exactly as received, so a disputed figure can be traced.
+  sourceRow     Json
+  sourceSheetId String
+  sourceTabName String
+  importedAt    DateTime @default(now())
+
+  agency          Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient     HotelClient      @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  propertySegment PropertySegment? @relation(fields: [propertySegmentId], references: [id], onDelete: SetNull)
+
+  /// The source's own natural key. NOT (hotelClientId, date): two properties
+  /// share one HotelClient, so that would collide on every date. Keying on the
+  /// workbook+tab also keeps an UNMAPPED tab idempotent, which (hotelClientId,
+  /// propertySegmentId, date) could not — Postgres treats NULLs as distinct.
+  @@unique([sourceSheetId, sourceTabName, date])
+  @@index([agencyId])
+  @@index([hotelClientId, date])
+  @@index([propertySegmentId, date])
 }

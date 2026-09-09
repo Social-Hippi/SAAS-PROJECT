@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { SyncNowForm, type SyncableHotel } from "./SyncNowForm";
+import { OpsTrackerForm } from "./OpsTrackerForm";
 
 // Super-admin manual Meta sync. Lists hotels across ALL agencies — this is the
 // platform owner's cross-tenant view (the proxy + admin layout gate /admin to
@@ -40,6 +41,18 @@ export default async function AdminSyncNowPage() {
       </div>
 
       <SyncNowForm hotels={hotels} />
+
+      <div className="border-t border-line pt-6">
+        <h2 className="text-sm font-medium text-ink">Operations trackers</h2>
+        <p className="mt-1 text-sm text-ink-tertiary">
+          Re-import every configured property workbook now. The bound Apps Script
+          already pushes on every edit and a daily cron reconciles; this is for
+          when a sheet has just been corrected and you do not want to wait.
+        </p>
+        <div className="mt-3">
+          <OpsTrackerForm />
+        </div>
+      </div>
 
       <div>
         <h2 className="text-sm font-medium text-ink-tertiary">Last synced</h2>
