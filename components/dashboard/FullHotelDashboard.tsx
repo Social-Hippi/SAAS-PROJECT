@@ -32,7 +32,6 @@ import {
 } from "@/lib/format";
 import { PostTypeFilter } from "@/app/(agency)/agency/(app)/hotel/[id]/PostTypeFilter";
 import { ContentPerformanceTable } from "@/components/report/ContentPerformanceTable";
-import { type CampaignRow } from "@/components/dashboard/CampaignPerformanceTable";
 import {
   MetaCampaignBreakdownTable,
   type MetaCampaignRow,
@@ -49,6 +48,8 @@ import {
   attributeConversions,
   UNATTRIBUTED_KEY,
   type CampaignDay,
+  unconfirmedSharePct,
+  type CampaignRow,
 } from "@/lib/campaign-attribution";
 import { SpendChart } from "@/components/report/SpendChart";
 import { FollowerChart } from "@/components/report/FollowerChart";
@@ -1422,7 +1423,7 @@ async function renderDashboard({
         impressions: meta?.impressions ?? 0,
         clicks: meta?.clicks ?? 0,
         ctr: meta?.ctr ?? 0,
-        variancePct: c.realBookings > 0 ? ((c.metaConversions - c.realBookings) / c.realBookings) * 100 : null,
+        variancePct: unconfirmedSharePct(c.metaConversions, c.realBookings),
         spark,
       };
     })

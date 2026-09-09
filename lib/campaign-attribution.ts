@@ -114,6 +114,56 @@ function matchUtms(
  * journey drill-down; pass the same range the conversions came from plus up to
  * 30 days before it.
  */
+/**
+ * One campaign's aggregated performance over a period, as the dashboard shapes
+ * it for display.
+ *
+ * Lived in components/dashboard/CampaignPerformanceTable.tsx until that
+ * component was deleted — it rendered nowhere, and a dead component that
+ * computes client-facing revenue is a liability: someone remounts it in six
+ * months, unreviewed, carrying whatever formula it had. The TYPE is still used,
+ * so it moves here, next to the code that produces the numbers.
+ */
+export type CampaignRow = {
+  campaignKey: string;
+  campaignName: string;
+  /** True for the "Direct / Unattributed" bucket (pinned last, no share shown). */
+  unattributed: boolean;
+  spend: number;
+  realBookings: number;
+  realRevenue: number;
+  /** realRevenue / spend; null when spend is 0. */
+  realRoas: number | null;
+  metaConversions: number;
+};
+
+/**
+ * The share of platform-reported conversions NOT confirmed in the property's own
+ * records, as a percentage.
+ *
+ *     (metaReportedConversions − realBookings) / metaReportedConversions × 100
+ *
+ * Positive means the platform claims more than the property can confirm — which
+ * is the question a client actually asks: "how much of what Meta says is real?"
+ * The denominator is therefore the PLATFORM'S CLAIM, not our own count.
+ *
+ * THE ONLY DEFINITION. There were two, with different denominators AND opposite
+ * signs: this file divided by the platform's claim, while FullHotelDashboard
+ * divided by realBookings, so the same named field meant different things on the
+ * same page. Both call sites now come here.
+ *
+ * NULL when the platform reported nothing. There is no share of zero, and the
+ * previous shape returned −100% for every campaign with no confirmed booking —
+ * a definite-looking figure asserting a measurement nobody took.
+ */
+export function unconfirmedSharePct(
+  metaReportedConversions: number,
+  realBookings: number,
+): number | null {
+  if (!(metaReportedConversions > 0)) return null;
+  return ((metaReportedConversions - realBookings) / metaReportedConversions) * 100;
+}
+
 export function attributeConversions(
   conversions: ConversionEvent[],
   visits: VisitEvent[],
@@ -256,12 +306,7 @@ export function aggregatePerformance(
 
   for (const row of rows.values()) {
     row.realRoas = row.metaSpend > 0 ? row.realBookingValue / row.metaSpend : null;
-    row.variancePct =
-      row.metaReportedConversions > 0
-        ? ((row.realBookings - row.metaReportedConversions) /
-            row.metaReportedConversions) *
-          100
-        : null;
+    row.variancePct = unconfirmedSharePct(row.metaReportedConversions, row.realBookings);
   }
 
   return [...rows.values()];
