@@ -138,10 +138,12 @@ describe("4. agencies are never resolved by a non-unique name", () => {
     expect(src).toMatch(/matches\.length > 1/);
   });
 
-  test("the destructive cleanup script aborts on an ambiguous name", () => {
+  test("the destructive cleanup script does not resolve an agency by name at all", () => {
+    // Stronger than refusing an ambiguous name: it no longer looks a target up
+    // by name in any form, and takes an explicit id instead.
     const src = readCode("scripts/cleanup-demo-data.ts");
-    expect(src).toContain("prisma.agency.findMany");
-    expect(src).toMatch(/candidates\.length > 1/);
-    expect(src).toMatch(/aborting, nothing deleted/);
+    expect(src).not.toMatch(/prisma\.agency\.(findFirst|findMany)/);
+    expect(src).toContain("prisma.agency.findUnique");
+    expect(src).toContain("--agency-id");
   });
 });

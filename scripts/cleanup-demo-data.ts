@@ -1,4 +1,9 @@
-import "dotenv/config";
+// ./load-env, not "dotenv/config": the latter reads only .env, which is empty in
+// this repo, so DATABASE_URL arrived undefined and the production guard below
+// had nothing to inspect. A safety check that cannot see the connection string
+// is not a safety check.
+import "./load-env";
+import { databaseHost, isProductionDatabase } from "../lib/db-environment";
 import { prisma } from "../lib/prisma";
 
 // One-off cleanup agreed with the owner on 2026-06-06:
@@ -11,6 +16,21 @@ import { prisma } from "../lib/prisma";
 //   4. Delete the two empty leftover agencies (revanth's, Talari Sunil's).
 // Token audit logs are kept on purpose (security history of the real token).
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THIS SCRIPT DELETES HOTELS AND AGENCY HISTORY. It is therefore built so that
+// it CANNOT be pointed at live client data by accident.
+//
+// Two independent conditions must both hold before it touches anything:
+//
+//   1. an explicit --agency-id, so the target is never inferred from a name.
+//      Agency names are not unique — two live tenants share "Social Hippi", and
+//      this very script created that collision by renaming one of them;
+//   2. a DATABASE_URL that is NOT the production Neon endpoint.
+//
+// Refusing to GUESS was not enough. A script that deletes hotels should be
+// incapable of running against production at all, not merely careful about it.
+// ─────────────────────────────────────────────────────────────────────────────
+
 const KEEP_AGENCY = "Coastal Digital Agency";
 const NEW_NAME = "Social Hippi";
 const NEW_EMAIL = "ashrith@socialhippi.com";
@@ -18,25 +38,39 @@ const DELETE_AGENCIES = ["revanth's Agency", "Talari Sunil's Agency"];
 const DELETE_HOTELS = ["Taj Backwater Retreat", "Neelakurunji Luxury Plantation Bungalow"];
 
 async function main() {
-  // This script DELETES hotels and agency history, and it picks its target by
-  // NAME. Agency names are not unique — two live tenants share "Social Hippi" —
-  // so findFirst here could delete the wrong tenant's data. It refuses on an
-  // ambiguous match rather than choosing, and nothing is deleted.
-  const candidates = await prisma.agency.findMany({
-    where: { name: KEEP_AGENCY },
-    select: { id: true, email: true },
-  });
-  if (candidates.length === 0) {
-    throw new Error(`Agency "${KEEP_AGENCY}" not found — aborting, nothing deleted.`);
-  }
-  if (candidates.length > 1) {
-    throw new Error(
-      `"${KEEP_AGENCY}" matches ${candidates.length} agencies ` +
-        `(${candidates.map((c) => c.id).join(", ")}) — aborting, nothing deleted. ` +
-        `Agency names are not unique; target this script by id.`,
+  // ── Refuse before any database work ────────────────────────────────────────
+  const argv = process.argv.slice(2);
+  const idFlag = argv.indexOf("--agency-id");
+  const agencyId = idFlag >= 0 ? argv[idFlag + 1] : undefined;
+
+  if (isProductionDatabase(process.env.DATABASE_URL)) {
+    console.error(
+      `REFUSING TO RUN: DATABASE_URL points at the production database ` +
+        `(${databaseHost(process.env.DATABASE_URL)}). This script deletes hotels and agency ` +
+        `history. Nothing was read and nothing was deleted.`,
     );
+    process.exit(1);
   }
-  const agency = candidates[0]!;
+
+  if (!agencyId) {
+    console.error(
+      "REFUSING TO RUN: pass --agency-id <id>. The target is never inferred from a name — " +
+        "agency names are not unique, and this script is what made them collide. " +
+        "Nothing was read and nothing was deleted.",
+    );
+    process.exit(1);
+  }
+
+  // Verify the id names a real agency. No name lookup at all any more.
+  const agency = await prisma.agency.findUnique({
+    where: { id: agencyId },
+    select: { id: true, name: true },
+  });
+  if (!agency) {
+    console.error(`No agency with id "${agencyId}" — aborting, nothing deleted.`);
+    process.exit(1);
+  }
+  console.log(`Target: ${agency.name} (${agency.id}) on ${databaseHost(process.env.DATABASE_URL)}`);
 
   await prisma.$transaction(async (tx) => {
     // 1. Demo hotels (cascade removes all hotel-scoped rows).

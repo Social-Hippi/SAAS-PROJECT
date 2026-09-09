@@ -180,8 +180,11 @@ export function CampaignGrid({
               <Detail label="Impressions" value={formatNumber(open.impressions)} />
               <Detail label="Clicks" value={formatNumber(open.clicks)} />
               <Detail label="CTR" value={formatPercent(open.ctr)} />
+              {/* NOT labelled "variance" — that word means nothing to a hotelier.
+                  The column name stays variancePct; what a client reads is what
+                  the number actually says. */}
               <Detail
-                label="Meta vs real"
+                label="Not confirmed in your records"
                 value={
                   !bookingsLinked
                     ? "Not measured"
@@ -196,6 +199,7 @@ export function CampaignGrid({
                       ? "text-danger"
                       : "text-ink"
                 }
+                hint="The share of the conversions this platform reports that the property's own records do not confirm. Higher means more of the platform's claim is unverified."
               />
             </dl>
 
@@ -210,11 +214,23 @@ export function CampaignGrid({
   );
 }
 
-function Detail({ label, value, valueClass = "text-ink" }: { label: string; value: string; valueClass?: string }) {
+function Detail({
+  label,
+  value,
+  valueClass = "text-ink",
+  hint,
+}: {
+  label: string;
+  value: string;
+  valueClass?: string;
+  /** Rendered under the value, so an unfamiliar metric explains itself in place. */
+  hint?: string;
+}) {
   return (
     <div>
       <dt className="text-[11px] font-medium uppercase tracking-wide text-ink-tertiary">{label}</dt>
       <dd className={`mt-0.5 text-base font-semibold tabular-nums ${valueClass}`}>{value}</dd>
+      {hint && <dd className="mt-0.5 text-[11px] leading-snug text-ink-tertiary">{hint}</dd>}
     </div>
   );
 }
