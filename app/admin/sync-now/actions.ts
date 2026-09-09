@@ -4,6 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { getPlatformRole } from "@/lib/auth";
 import { syncHotelAds } from "@/lib/meta-sync";
+import { reconcileOpsTrackers } from "@/lib/ops-tracker/reconcile";
 
 export type SyncNowState = {
   error: string | null;
@@ -66,5 +67,72 @@ export async function adminSyncNow(
     error: null,
     ok: true,
     message: `${res.hotelName}: wrote ${res.snapshotsWritten} daily snapshot${res.snapshotsWritten === 1 ? "" : "s"} for ${res.range!.since} → ${res.range!.until}.`,
+  };
+}
+
+/**
+ * Run the operations-tracker reconciliation now, instead of waiting for the
+ * daily cron — for when someone has just fixed a sheet and wants it on the
+ * report immediately.
+ *
+ * Same double gate as adminSyncNow, and the SAME import path as both the webhook
+ * and the cron (reconcileOpsTrackers), so a manual run can never accept
+ * something the scheduled one would have refused.
+ */
+export async function adminReconcileOpsTrackers(
+  _prev: SyncNowState,
+  formData: FormData,
+): Promise<SyncNowState> {
+  const role = await getPlatformRole();
+  if (role !== "super_admin") {
+    return { error: "Not authorized.", ok: false, message: null };
+  }
+
+  const configured = process.env.ADMIN_PASSWORD ?? "";
+  if (!configured) {
+    return {
+      error: "ADMIN_PASSWORD is not configured on the server — add it to the environment first.",
+      ok: false,
+      message: null,
+    };
+  }
+  const supplied = ((formData.get("password") as string | null) ?? "").trim();
+  if (!passwordMatches(supplied, configured)) {
+    return { error: "Wrong admin password.", ok: false, message: null };
+  }
+
+  let result;
+  try {
+    result = await reconcileOpsTrackers();
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : "Reconciliation failed.",
+      ok: false,
+      message: null,
+    };
+  }
+
+  if (result.segmentsConsidered === 0) {
+    return {
+      error: null,
+      ok: true,
+      message: "No property segments have a workbook and tab configured, so there was nothing to import.",
+    };
+  }
+
+  // Report per segment, including the failures. A run that could not read three
+  // of four workbooks must not report as a success.
+  const lines = result.results.map((r) =>
+    r.ok
+      ? `${r.segment}: ${r.rowsAccepted ?? 0} row(s) imported, ${r.rowsRejected ?? 0} rejected.`
+      : `${r.segment}: FAILED — ${r.error ?? "unknown error"}`,
+  );
+  const anyFailed = result.results.some((r) => !r.ok);
+
+  revalidatePath("/admin/sync-now");
+  return {
+    error: anyFailed ? lines.join(" ") : null,
+    ok: !anyFailed,
+    message: anyFailed ? null : lines.join(" "),
   };
 }

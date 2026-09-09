@@ -20,6 +20,7 @@
     "seed:phase3-demo": "tsx scripts/seed-phase3-demo.ts",
     "seed:revenue-demo": "tsx scripts/seed-revenue-demo.ts",
     "seed:coupon-demo": "tsx scripts/seed-coupon-demo.ts",
+    "seed:segments": "tsx scripts/seed-property-segments.ts",
     "backfill:funnel": "tsx scripts/backfill-funnel-stages.ts",
     "setup:razorpay": "tsx scripts/setup-razorpay.ts",
     "dev:activate": "tsx scripts/dev-activate-subscription.ts",
