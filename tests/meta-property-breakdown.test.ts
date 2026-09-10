@@ -115,9 +115,11 @@ describe("7. the property's own records are kept apart from the campaigns", () =
     }
   });
 
-  test("the UI says they are not attributable to any campaign", () => {
-    expect(UI).toContain("not");
-    expect(UI).toContain("attributable to any campaign above");
+  test("the recorded figure is marked as the property's, not the campaigns'", () => {
+    // It sits in the same totals strip as campaign metrics, so without this it
+    // reads as one — the strip around it is entirely campaign results.
+    expect(UI).toContain('note: partial');
+    expect(UI).toContain("property-recorded");
   });
 
   test("partial coverage is stated — a missing day is unrecorded, not zero", () => {
@@ -125,12 +127,25 @@ describe("7. the property's own records are kept apart from the campaigns", () =
     // would invite comparing them against a property that filled in all 29.
     expect(LOADER).toContain("daysRecorded");
     expect(LOADER).toContain("daysInPeriod");
-    expect(UI).toContain("missing days are unrecorded, not zero.");
+    // Carried as a compact sub-label rather than a paragraph, but still carried:
+    // 20 confirmations over 23 days is not the same claim as over 30.
+    expect(UI).toContain("recorded.daysRecorded < recorded.daysInPeriod");
+    expect(UI).toContain("of ${recorded.daysInPeriod} days");
   });
 
-  test("Unassigned gets no recorded block — it is not a property", () => {
+  test("Unassigned carries no recorded figure — it is not a property", () => {
     expect(LOADER).toMatch(/recorded: null,/);
-    expect(UI).toContain("{g.recorded && <RecordedBlock");
+    // The tile is added only when there IS a sheet behind it, so the Unassigned
+    // box simply has one fewer tile rather than a blank or a zero.
+    expect(UI).toContain("if (recorded && recorded.whatsappConfirmed != null)");
+  });
+
+  test("room nights and WhatsApp leads are no longer shown", () => {
+    // Asked for: only the confirmation. They stay in the payload for other
+    // surfaces, but this strip shows the one figure that was wanted.
+    expect(UI).not.toContain("Room nights");
+    expect(UI).not.toContain("WhatsApp leads");
+    expect(UI).toContain("WhatsApp confirmed");
   });
 });
 
