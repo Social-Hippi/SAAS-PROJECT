@@ -162,6 +162,7 @@ export async function syncHotelAds(
         purchaseValue: row.purchaseValue.toFixed(2),
         reach: row.reach,
         messagingStarted: row.messagingStarted,
+        calls: row.calls,
         leads: row.leads,
         qualityRanking: row.qualityRanking,
         engagementRateRanking: row.engagementRateRanking,

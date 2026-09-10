@@ -471,6 +471,8 @@ export type DailyCampaignRow = {
   reach: number;
   /** Messaging conversations started — the "messages generated" figure. */
   messagingStarted: number;
+  /** Connected phone calls from click-to-call ads. Never added to messages. */
+  calls: number;
   /** Lead-form and pixel leads. Never added to messagingStarted. */
   leads: number;
   /** Meta delivery rankings, or null while Meta still has too little data. */
@@ -557,6 +559,7 @@ export async function getDailyCampaignInsights(
         purchaseValue: pickFirst(values, PIXEL_MATCHERS.purchase),
         reach: Math.round(toNumber(row.reach)),
         messagingStarted: Math.round(pickFirst(actions, MESSAGING_MATCHERS)),
+        calls: Math.round(pickFirst(actions, CALL_MATCHERS)),
         leads: Math.round(pickFirst(actions, LEAD_MATCHERS)),
         qualityRanking: ranking(row.quality_ranking),
         engagementRateRanking: ranking(row.engagement_rate_ranking),
@@ -631,6 +634,17 @@ export const MESSAGING_MATCHERS = [
   "onsite_conversion.messaging_conversation_started_7d",
   "onsite_conversion.total_messaging_connection",
   "messaging_conversation_started_7d",
+];
+
+/**
+ * Click-to-call actions. Meta reports a call as "confirmed" once it connects,
+ * which is the figure worth reporting — a tap that never connects is not a call.
+ */
+export const CALL_MATCHERS = [
+  "onsite_conversion.call_confirm",
+  "click_to_call_call_confirm",
+  "onsite_conversion.total_call",
+  "phone_call",
 ];
 
 export const LEAD_MATCHERS = [

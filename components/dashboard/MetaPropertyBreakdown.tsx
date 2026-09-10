@@ -3,6 +3,7 @@ import type {
   MetaCampaignBreakdownRow,
   MetaPropertyBreakdown,
   MetaPropertyGroup,
+  PropertyRecorded,
 } from "@/lib/metrics/meta-property-breakdown";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +64,7 @@ function CampaignRows({ rows, spendVisible }: { rows: MetaCampaignBreakdownRow[]
             <Head>Objective</Head>
             <Head right>Clicks</Head>
             <Head right>Messages</Head>
+            <Head right>Calls</Head>
             <Head right>Leads</Head>
             {spendVisible && <Head right>Cost / contact</Head>}
             {spendVisible && <Head right>Spent</Head>}
@@ -85,6 +87,7 @@ function CampaignRows({ rows, spendVisible }: { rows: MetaCampaignBreakdownRow[]
               </Cell>
               <Cell right>{num(r.clicks)}</Cell>
               <Cell right>{num(r.messages)}</Cell>
+              <Cell right>{num(r.calls)}</Cell>
               <Cell right>{num(r.leads)}</Cell>
               {spendVisible && <Cell right>{money(r.costPerContact)}</Cell>}
               {spendVisible && <Cell right>{money(r.spend)}</Cell>}
@@ -96,11 +99,60 @@ function CampaignRows({ rows, spendVisible }: { rows: MetaCampaignBreakdownRow[]
   );
 }
 
+/**
+ * What the property's own team wrote down, from its operations workbook.
+ *
+ * Kept in its own block, visually apart from the campaign figures, because it is
+ * NOT campaign data. The sheet records a WhatsApp lead, a confirmation and a
+ * room night; it does not record which campaign produced any of them. Putting
+ * these in the campaign table would imply an attribution nobody measured.
+ *
+ * Shown beside the Meta figures so the two can be compared — Meta counts
+ * conversations its ads started, the property counts every WhatsApp lead however
+ * it arrived. The gap is real information, not a discrepancy to reconcile away.
+ */
+function RecordedBlock({ recorded, propertyName }: { recorded: PropertyRecorded; propertyName: string }) {
+  const partial = recorded.daysRecorded < recorded.daysInPeriod;
+  const items: [string, string][] = [
+    ["WhatsApp leads", num(recorded.whatsappLeads)],
+    ["WhatsApp confirmed", num(recorded.whatsappConfirmed)],
+    ["Room nights", num(recorded.roomNights)],
+  ];
+  return (
+    <div className="border-t border-line bg-elevated/40 px-4 py-3">
+      <p className="text-[10px] font-medium uppercase tracking-wide text-ink-tertiary">
+        Recorded by {propertyName}
+      </p>
+      <div className="mt-2 flex flex-wrap gap-x-8 gap-y-2">
+        {items.map(([label, value]) => (
+          <div key={label}>
+            <p className="text-xs text-ink-tertiary">{label}</p>
+            <p className="text-sm font-semibold tabular-nums text-ink">{value}</p>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-ink-tertiary">
+        From the property&apos;s own operations sheet. It records these outcomes but not
+        which campaign produced them, so they are <span className="font-medium">not</span>{" "}
+        attributable to any campaign above and are never divided between them.
+        {partial && (
+          <>
+            {" "}
+            Filled in on {recorded.daysRecorded} of {recorded.daysInPeriod} days — the
+            missing days are unrecorded, not zero.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function TotalsStrip({ totals, spendVisible }: { totals: MetaPropertyGroup["totals"]; spendVisible: boolean }) {
   const items: [string, string][] = [
     ["Campaigns", String(totals.campaigns)],
     ["Clicks", num(totals.clicks)],
     ["Messages", num(totals.messages)],
+    ["Calls", num(totals.calls)],
     ["Leads", num(totals.leads)],
     ["Contacts", num(totals.contacts)],
   ];
@@ -109,7 +161,7 @@ function TotalsStrip({ totals, spendVisible }: { totals: MetaPropertyGroup["tota
     items.push(["Total spent", money(totals.spend)]);
   }
   return (
-    <div className="grid grid-cols-2 gap-px border-t border-line bg-line sm:grid-cols-4 lg:grid-cols-7">
+    <div className="grid grid-cols-2 gap-px border-t border-line bg-line sm:grid-cols-4 lg:grid-cols-8">
       {items.map(([label, value]) => (
         <div key={label} className="bg-card px-3 py-2.5">
           <p className="text-[10px] font-medium uppercase tracking-wide text-ink-tertiary">{label}</p>
@@ -266,6 +318,7 @@ export function MetaPropertyBreakdown({ data }: { data: MetaPropertyBreakdown })
           </div>
           <CampaignRows rows={g.campaigns} spendVisible={data.spendVisible} />
           <TotalsStrip totals={g.totals} spendVisible={data.spendVisible} />
+          {g.recorded && <RecordedBlock recorded={g.recorded} propertyName={g.propertyName} />}
         </section>
       ))}
 
@@ -289,7 +342,7 @@ export function MetaPropertyBreakdown({ data }: { data: MetaPropertyBreakdown })
             ))}
         </div>
         <p className="border-t border-line px-4 py-2.5 text-xs text-ink-tertiary">
-          Messages and leads are different events and are shown separately.
+          Messages, calls and leads are different events and are shown separately.
           &ldquo;Contacts&rdquo; adds them, so somebody who both messaged and submitted a
           form is counted in both — it is an upper bound, not a headcount.
         </p>
