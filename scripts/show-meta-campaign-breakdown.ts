@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // READ-ONLY: prints the Meta Campaign Breakdown exactly as the new dashboard

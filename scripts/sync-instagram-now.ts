@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 import { syncInstagramConnection } from "../lib/instagram-sync";
 

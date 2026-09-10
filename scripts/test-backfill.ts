@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // End-to-end test harness for the Meta data-retention + backfill feature.

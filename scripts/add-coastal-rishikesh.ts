@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // One-off: list Coastal Digital's hotels, then create a new "Rishikesh Riverside

@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { encryptToken, decryptToken } from "../lib/encryption";
 
 // Quick sanity check for lib/encryption.ts. Run with: npm run test:encryption

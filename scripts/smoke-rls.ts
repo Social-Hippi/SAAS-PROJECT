@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // Proves the Layer-2 RLS policies actually enforce isolation at the DATABASE

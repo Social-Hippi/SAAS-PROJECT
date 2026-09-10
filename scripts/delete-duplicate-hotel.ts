@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // One-off agreed with the owner on 2026-06-06: delete the duplicate, empty

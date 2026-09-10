@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { createHash, randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 

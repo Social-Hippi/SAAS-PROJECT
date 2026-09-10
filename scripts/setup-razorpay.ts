@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import Razorpay from "razorpay";
 import { PLAN_ORDER, PLANS, type PlanKey } from "../lib/razorpay-plans";
 

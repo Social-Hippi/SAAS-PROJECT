@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 import { decryptToken } from "../lib/encryption";
 import { refreshCampaignPerformance } from "../lib/campaign-attribution";

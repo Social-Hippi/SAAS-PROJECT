@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // Read-only inventory of every agency/hotel and its row counts, used to scope

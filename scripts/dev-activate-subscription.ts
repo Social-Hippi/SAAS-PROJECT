@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // DEV ONLY: marks every agency's subscription active (Agency plan, no limits) so

@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 import { agencyScopedFor } from "../lib/tenant-scope";
 

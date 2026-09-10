@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { createClerkClient } from "@clerk/backend";
 
 // Grants (or revokes) the platform super_admin role for a Clerk user by email,

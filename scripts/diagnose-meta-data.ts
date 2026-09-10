@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // READ-ONLY diagnosis of Meta ads data provenance. Writes nothing.

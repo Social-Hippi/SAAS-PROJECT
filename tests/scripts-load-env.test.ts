@@ -1,57 +1,44 @@
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
+import { isRedactionPlaceholder } from "@/scripts/env-redaction";
 import { readCode } from "./helpers/read-code";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCRIPTS MUST BE ABLE TO REACH A DATABASE.
 //
-// Forty scripts opened with `import "dotenv/config"`, which reads only `.env` —
-// a file this repo does not keep values in. The real values live in
+// Thirty-nine scripts opened with `import "dotenv/config"`, which reads only
+// `.env` — a file this repo does not keep values in. The real values live in
 // `.env.development.local` and `.env.local`. So DATABASE_URL arrived undefined,
-// the Prisma adapter fell back to libpq defaults, and the script failed with
-// "DatabaseDoesNotExist" or hung on a socket that was never there. Every one of
-// them only worked if the caller happened to export DATABASE_URL by hand.
+// the Prisma adapter fell back to libpq defaults, and the script died on
+// "DatabaseDoesNotExist". Each one only worked if the caller happened to export
+// DATABASE_URL by hand first.
 //
-// scripts/load-env.ts already existed to fix exactly this. It was simply never
-// adopted.
+// scripts/load-env.ts already existed to fix this. It was never adopted, and it
+// needed two fixes before adopting it was safe.
 //
-// TWO THINGS THE LOADER ITSELF HAD TO GAIN FIRST, or switching forty scripts to
-// it would have traded one failure for a worse one:
+// ── WHY THE ASSERTIONS ARE SPLIT THE WAY THEY ARE ────────────────────────────
 //
-//   1. REDACTION PLACEHOLDERS MUST NOT BE PROMOTED. `.env.local` is a redacted
-//      `vercel env pull`: 27 of its 49 entries are bracketed placeholders, and
-//      16 of those have no real value shadowing them. Promoting "[SENSITIVE]"
-//      into process.env does not merely fail to configure a thing — it
-//      MISCONFIGURES it. A script guarding with `if (!process.env.META_APP_ID)`
-//      sees a non-empty string, sails past the check, and calls the Graph API
-//      with the literal text. tests/setup-env.ts records the same trap costing
-//      95 tests across 16 suites.
+// The env files this loader reads are gitignored developer files. CI has none of
+// them, so a test that asserts on their CONTENT passes locally and fails in CI —
+// which is exactly what the first version of this file did.
 //
-//   2. PATHS MUST RESOLVE AGAINST THE REPO ROOT. dotenv resolves a relative
-//      `path` against process.cwd(), so the loader silently loaded nothing when
-//      a script was run from a subdirectory.
+// So the RULE is tested purely, through scripts/env-redaction.ts, and runs
+// everywhere. The STRUCTURE is tested by reading source, and runs everywhere.
+// Only the end-to-end behaviour needs real files, and it skips explicitly rather
+// than silently passing on a machine that cannot exercise it.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const REPO_ROOT = join(__dirname, "..");
 const LOADER = readCode("scripts/load-env.ts");
-
-/** Run a snippet through tsx and return its stdout. */
-function runNode(code: string, cwd: string): string {
-  return execFileSync("npx", ["tsx", "-e", code], {
-    cwd,
-    encoding: "utf8",
-    // A real shell export must not leak in and mask what the files provide.
-    env: { ...process.env, INSTAGRAM_APP_ID: undefined, DATABASE_URL: undefined } as NodeJS.ProcessEnv,
-  }).trim();
-}
+const HAS_LOCAL_ENV = existsSync(join(REPO_ROOT, ".env.local"));
 
 describe("1. every script loads env through the shared loader", () => {
   const scripts = readdirSync(join(REPO_ROOT, "scripts"))
-    .filter((f) => f.endsWith(".ts") && f !== "load-env.ts");
+    .filter((f) => f.endsWith(".ts") && f !== "load-env.ts" && f !== "env-redaction.ts");
 
   test("there are scripts to check", () => {
     expect(scripts.length).toBeGreaterThan(30);
@@ -80,69 +67,80 @@ describe("1. every script loads env through the shared loader", () => {
   });
 });
 
-describe("2. the loader does not promote redaction placeholders", () => {
-  test("a bracketed placeholder is skipped; a real value is not", () => {
-    const out = runNode(
-      'import "./scripts/load-env";' +
-        'console.log(JSON.stringify({' +
-        '  placeholder: process.env.INSTAGRAM_APP_ID ?? null,' +
-        '  real: (process.env.DATABASE_URL ?? "").slice(0, 11) || null,' +
-        '}));',
-      REPO_ROOT,
-    );
-    const got = JSON.parse(out.split("\n").at(-1)!);
-
-    // INSTAGRAM_APP_ID is "[SENSITIVE]" in .env.local with nothing shadowing it.
-    expect(got.placeholder).toBeNull();
-    // DATABASE_URL is a real value in the same file and must still arrive.
-    expect(got.real).toBe("postgresql:");
-  });
-
-  test("the loader carries the filter, and it matches the bracketed shape", () => {
-    expect(LOADER).toMatch(/REDACTION_PLACEHOLDER/);
-    const m = LOADER.match(/REDACTION_PLACEHOLDER = (\/.*\/)/);
-    expect(m, "the placeholder pattern should be a literal regex").not.toBeNull();
-
-    const pattern = new RegExp(m![1].slice(1, -1));
-    for (const v of ["[SENSITIVE]", "[REDACTED]", "[NOT SET]"]) {
-      expect(pattern.test(v), v).toBe(true);
-    }
-    // No real credential looks like this, and lower-case bracketed text is not
-    // a placeholder shape this repo produces.
-    for (const v of ["postgresql://x", "pk_live_abc", "[abc]", "sk_test_1", ""]) {
-      expect(pattern.test(v), v).toBe(false);
+describe("2. redaction placeholders are recognised — the rule, tested purely", () => {
+  test("bracketed placeholder shapes are placeholders", () => {
+    for (const v of ["[SENSITIVE]", "[REDACTED]", "[NOT SET]", "  [SENSITIVE]  "]) {
+      expect(isRedactionPlaceholder(v), v).toBe(true);
     }
   });
 
-  test("a real shell export still wins over anything in a file", () => {
-    const out = execFileSync(
-      "npx",
-      ["tsx", "-e", 'import "./scripts/load-env"; console.log(process.env.INSTAGRAM_APP_ID ?? "unset");'],
-      { cwd: REPO_ROOT, encoding: "utf8", env: { ...process.env, INSTAGRAM_APP_ID: "real-from-shell" } },
-    ).trim();
-    expect(out.split("\n").at(-1)).toBe("real-from-shell");
+  test("real credentials are not", () => {
+    for (const v of [
+      "postgresql://user:pw@host/db",
+      "pk_live_abc123",
+      "sk_test_abc123",
+      "[abc]", // lower case is not the shape Vercel emits
+      "SENSITIVE",
+      "",
+      "a".repeat(64),
+    ]) {
+      expect(isRedactionPlaceholder(v), JSON.stringify(v)).toBe(false);
+    }
+  });
+
+  test("the loader applies the rule, and a shell export still wins", () => {
+    expect(LOADER).toContain("isRedactionPlaceholder(value)");
+    // Order matters: the shell check comes first, so an exported placeholder set
+    // deliberately by a developer is still honoured.
+    const shellCheck = LOADER.indexOf("process.env[name] !== undefined");
+    const filter = LOADER.indexOf("isRedactionPlaceholder(value)");
+    expect(shellCheck).toBeGreaterThan(-1);
+    expect(filter).toBeGreaterThan(shellCheck);
   });
 });
 
 describe("3. the loader resolves against the repo root, not the caller's cwd", () => {
-  test("it still loads when a script is run from a subdirectory", () => {
+  test("it computes a root from its own module URL rather than trusting cwd", () => {
     // dotenv resolves a relative `path` against process.cwd(), so the previous
     // implementation silently loaded NOTHING from anywhere but the repo root.
-    const out = runNode(
-      'import "../scripts/load-env"; console.log((process.env.DATABASE_URL ?? "unset").slice(0, 11));',
-      join(REPO_ROOT, "scripts"),
-    );
-    expect(out.split("\n").at(-1)).toBe("postgresql:");
-  });
-
-  test("it computes a root from its own module URL rather than trusting cwd", () => {
     expect(LOADER).toContain("fileURLToPath");
     expect(LOADER).toMatch(/REPO_ROOT/);
     expect(LOADER).toMatch(/path\.join\(REPO_ROOT, file\)/);
   });
+
+  test("it stages before writing, so values can be inspected first", () => {
+    expect(LOADER).toMatch(/processEnv: staged/);
+  });
 });
 
-describe("4. deliberately left alone", () => {
+// End-to-end. Needs the gitignored developer env files, so it is SKIPPED rather
+// than silently vacuous where they do not exist — CI, a fresh clone, a container.
+describe.skipIf(!HAS_LOCAL_ENV)("4. end-to-end, where developer env files exist", () => {
+  const run = (code: string, cwd: string) =>
+    execFileSync("npx", ["tsx", "-e", code], { cwd, encoding: "utf8" }).trim().split("\n").at(-1);
+
+  test("a real value loads and a placeholder does not", () => {
+    const out = run(
+      'import "./scripts/load-env";' +
+        'console.log(JSON.stringify({' +
+        '  placeholder: process.env.INSTAGRAM_APP_ID ?? null,' +
+        '  real: (process.env.DATABASE_URL ?? "").slice(0, 11) || null }));',
+      REPO_ROOT,
+    );
+    const got = JSON.parse(out!);
+    expect(got.placeholder).toBeNull();
+    expect(got.real).toBe("postgresql:");
+  });
+
+  test("it still loads when a script is run from a subdirectory", () => {
+    expect(
+      run('import "../scripts/load-env"; console.log((process.env.DATABASE_URL ?? "unset").slice(0,11));',
+        join(REPO_ROOT, "scripts")),
+    ).toBe("postgresql:");
+  });
+});
+
+describe("5. deliberately left alone", () => {
   test("prisma.config.ts is untouched — it is the path every migration has used", () => {
     expect(readCode("prisma.config.ts")).toContain('import "dotenv/config"');
   });
