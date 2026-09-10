@@ -139,7 +139,7 @@ describe("2. the sum invariant", () => {
 
 const day = (over: Partial<TrackerDay> & { date: string }): TrackerDay => ({
   enquiries: null, repeatContacts: null, roomNightsConfirmed: null, junkSpam: null,
-  soldOut: null, inhouse: null, lowBudget: null, lessRoom: null, lowBudgetLessRoom: null,
+  soldOut: null, inhouse: null, lowBudget: null, lessRoom: null,
   whatsappLeads: null, whatsappConfirmed: null, totalCallsReceived: null,
   storedTotalLeads: null, storedConversionRate: null,
   ...over,
@@ -220,7 +220,7 @@ describe("4. the sheets' own contradictions are detected, not smoothed", () => {
     const severe = summariseTrackerDays(
       [day({
         date: "2026-07-31", totalCallsReceived: 9, whatsappLeads: 2, roomNightsConfirmed: 3,
-        repeatContacts: 6, junkSpam: 4, soldOut: 5, inhouse: 4, lowBudgetLessRoom: 7,
+        repeatContacts: 6, junkSpam: 4, soldOut: 5, inhouse: 4, lowBudget: 4, lessRoom: 3,
       })],
       ["2026-07-31"],
     );
@@ -242,13 +242,24 @@ describe("4. the sheets' own contradictions are detected, not smoothed", () => {
 });
 
 describe("5. disposition groups", () => {
-  test("both column shapes land in the same groups without splitting or duplicating", () => {
+  test("both tabs group by the SAME three columns — no per-property special case", () => {
+    // 3Hills is CBH minus Total Leads. Sold Out, Low Budget and Less Room are
+    // the same three columns on both tabs, so an identical day must group
+    // identically whether or not Total Leads is present. This used to be two
+    // code paths, because 3Hills was believed to combine Low Budget and Less
+    // Room into one column; it does not.
     const cbh = summariseTrackerDays(
-      [day({ date: "2026-08-01", soldOut: 1, lowBudget: 2, lessRoom: 1, totalCallsReceived: 9, whatsappLeads: 1 })],
+      [day({
+        date: "2026-08-01", soldOut: 1, lowBudget: 2, lessRoom: 1,
+        totalCallsReceived: 9, whatsappLeads: 1, storedTotalLeads: 10,
+      })],
       ["2026-08-01"],
     );
     const th = summariseTrackerDays(
-      [day({ date: "2026-08-01", soldOut: 1, lowBudgetLessRoom: 3, totalCallsReceived: 9, whatsappLeads: 1 })],
+      [day({
+        date: "2026-08-01", soldOut: 1, lowBudget: 2, lessRoom: 1,
+        totalCallsReceived: 9, whatsappLeads: 1,   // no Total Leads on this tab
+      })],
       ["2026-08-01"],
     );
     const lost = (s: ReturnType<typeof summariseTrackerDays>) =>

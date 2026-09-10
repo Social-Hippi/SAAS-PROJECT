@@ -8,13 +8,21 @@
 //
 //   • the enquiry column is named for the property — "CBH Enquiry" vs
 //     "3Hills Enquiry";
-//   • Coffeeberry Hills splits Low Budget and Less Room into two columns, while
-//     Three Hills combines them into one "Low Budget Less Room". The combined
-//     value is stored as its OWN field. Splitting it in half, or copying it into
-//     both, would be inventing two numbers from one;
 //   • Three Hills has no "Total Leads" column at all. Anything computed from it
 //     is unavailable for that property — not substituted with Total Calls
 //     Received, which is a different quantity.
+//
+// That is the WHOLE difference: 3Hills is CBH minus Total Leads. 14 columns
+// (B..O) against 13 (B..N).
+//
+// It was previously believed that 3Hills combined Low Budget and Less Room into
+// one "Low Budget Less Room" column, and the layout was built for 12 columns to
+// match. The live tab has them SEPARATE, exactly as CBH does. The import refused
+// the tab rather than accepting it — the column-set assertion in
+// lib/ops-tracker/locate.ts rejected all 13 columns instead of mapping the 11 it
+// still recognised and shifting the rest. That refusal is the only reason this
+// was a corrected spec rather than a month of numbers filed under the wrong
+// disposition.
 //
 // UNKNOWN COLUMNS REJECT THE WHOLE PAYLOAD, not the row. A header we do not
 // recognise means the sheet's shape changed, so no row's mapping can be trusted
@@ -34,7 +42,6 @@ export type TrackerField =
   | "inhouse"
   | "lowBudget"
   | "lessRoom"
-  | "lowBudgetLessRoom"
   | "whatsappLeads"
   | "whatsappConfirmed"
   | "totalCallsReceived"
@@ -51,7 +58,6 @@ export const COUNT_FIELDS = [
   "inhouse",
   "lowBudget",
   "lessRoom",
-  "lowBudgetLessRoom",
   "whatsappLeads",
   "whatsappConfirmed",
   "totalCallsReceived",
@@ -104,7 +110,7 @@ export function normaliseHeader(raw: string): string {
 // reconcile. One declaration cannot disagree with itself.
 //
 // These orders are the sheets' real ones: CBH occupies B..O (14 columns) and
-// 3Hills B..M (12).
+// 3Hills B..N (13).
 // ─────────────────────────────────────────────────────────────────────────────
 
 type ColumnOrder = readonly (readonly [string, TrackerField])[];
@@ -134,15 +140,17 @@ const THREE_HILLS_ORDER: ColumnOrder = [
   ["junk/spam", "junkSpam"],
   ["sold out", "soldOut"],
   ["inhouse", "inhouse"],
-  // Combined at source. Stored whole; never split into lowBudget + lessRoom,
-  // which would be inventing two numbers from one.
-  ["low budget less room", "lowBudgetLessRoom"],
+  // SEPARATE columns, the same as CBH — read off the live tab. Not the single
+  // combined "Low Budget Less Room" this layout was first built for.
+  ["low budget", "lowBudget"],
+  ["less room", "lessRoom"],
   ["whatsapp leads", "whatsappLeads"],
   ["whatsapp confirmed", "whatsappConfirmed"],
   ["total calls received", "totalCallsReceived"],
   // NOTE: no "total leads" column exists for this property. Anything derived
   // from it is unavailable here — never substituted with Total Calls Received,
-  // which is a different quantity.
+  // which is a different quantity. This is the only column CBH has that this
+  // tab does not.
   ["conversion rate", "storedConversionRate"],
 ];
 

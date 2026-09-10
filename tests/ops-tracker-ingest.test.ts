@@ -7,7 +7,7 @@ import { ingestTrackerPayload, secretMatches } from "@/lib/ops-tracker/ingest";
 import { parseTrackerPayload, parseTrackerDate } from "@/lib/ops-tracker/parse";
 import { TRACKER_LAYOUTS, mapHeader, normaliseHeader } from "@/lib/ops-tracker/layouts";
 import { fetchTrackerCsv, parseCsv } from "@/lib/ops-tracker/csv-source";
-import { cbhGrid, thGrid } from "./helpers/tracker-fixtures";
+import { CBH_HEADER, TH_HEADER, cbhGrid, thGrid } from "./helpers/tracker-fixtures";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GATE 2 — the operations-tracker import.
@@ -30,21 +30,12 @@ let agencyId: string;
 let hotelId: string;
 let cbhSegmentId: string;
 
-const CBH_HEADER = [
-  "Date", "CBH Enquiry", "Repeat", "Rm Nts Confirmed", "Junk / Spam", "Sold Out",
-  "Inhouse", "Low Budget", "Less Room", "WhatsApp Leads", "WhatsApp Confirmed",
-  "Total Calls Received", "Total Leads", "Conversion Rate",
-];
-const TH_HEADER = [
-  "Date", "3Hills Enquiry", "Repeat", "Rm Nts Confirmed", "Junk / Spam", "Sold Out",
-  "Inhouse", "Low Budget Less Room", "WhatsApp Leads", "WhatsApp Confirmed",
-  "Total Calls Received", "Conversion Rate",
-];
-
+// Headers come from the fixtures module — one declaration, so this file cannot
+// drift from the shape the layout suite pins.
 const cbhRow = (date: string) =>
   [date, "8", "2", "5", "1", "0", "1", "2", "1", "4", "2", "9", "12", "58.3%"];
 const thRow = (date: string) =>
-  [date, "6", "1", "3", "2", "0", "1", "3", "2", "1", "9", "33.3%"];
+  [date, "6", "1", "3", "2", "0", "1", "2", "1", "2", "1", "9", "33.3%"];
 
 const req = (body: unknown, secret: string | null = SECRET) =>
   new Request("http://localhost/api/integrations/ops-tracker", {
@@ -290,19 +281,17 @@ describe("3. validation", () => {
 // ── 4 · The two layouts genuinely differ ────────────────────────────────────
 
 describe("4. per-property column layouts", () => {
-  test("Three Hills' combined column is stored whole, never split", async () => {
+  test("Three Hills stores Low Budget and Less Room separately, exactly as CBH does", async () => {
     await ingestTrackerPayload({
       spreadsheetId: TH_SHEET, tab: TH_TAB, header: TH_HEADER, rows: [thRow("2026-08-05")],
     });
     const row = await prisma.manualLeadDaily.findFirst({
       where: { hotelClientId: hotelId, sourceTabName: TH_TAB },
-      select: { lowBudgetLessRoom: true, lowBudget: true, lessRoom: true, storedTotalLeads: true },
+      select: { lowBudget: true, lessRoom: true, storedTotalLeads: true },
     });
-    expect(row?.lowBudgetLessRoom).toBe(3);
-    // Splitting the combined value would invent two numbers from one.
-    expect(row?.lowBudget).toBeNull();
-    expect(row?.lessRoom).toBeNull();
-    // Three Hills has no Total Leads column at all.
+    expect(row?.lowBudget).toBe(2);
+    expect(row?.lessRoom).toBe(1);
+    // The ONLY column CBH has that this tab does not.
     expect(row?.storedTotalLeads).toBeNull();
   });
 
@@ -312,11 +301,10 @@ describe("4. per-property column layouts", () => {
     });
     const row = await prisma.manualLeadDaily.findFirst({
       where: { hotelClientId: hotelId, sourceTabName: CBH_TAB },
-      select: { lowBudget: true, lessRoom: true, lowBudgetLessRoom: true, storedTotalLeads: true },
+      select: { lowBudget: true, lessRoom: true, storedTotalLeads: true },
     });
     expect(row?.lowBudget).toBe(2);
     expect(row?.lessRoom).toBe(1);
-    expect(row?.lowBudgetLessRoom).toBeNull();
     expect(row?.storedTotalLeads).toBe(12);
   });
 

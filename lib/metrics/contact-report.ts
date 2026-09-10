@@ -156,7 +156,6 @@ export async function loadBlockA(args: {
     inhouse: r.inhouse,
     lowBudget: r.lowBudget,
     lessRoom: r.lessRoom,
-    lowBudgetLessRoom: r.lowBudgetLessRoom,
     whatsappLeads: r.whatsappLeads,
     whatsappConfirmed: r.whatsappConfirmed,
     totalCallsReceived: r.totalCallsReceived,

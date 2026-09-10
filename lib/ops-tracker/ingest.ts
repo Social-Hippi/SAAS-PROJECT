@@ -236,7 +236,6 @@ export async function ingestTrackerPayload(payload: TrackerPayload): Promise<Ing
       inhouse: v.inhouse ?? null,
       lowBudget: v.lowBudget ?? null,
       lessRoom: v.lessRoom ?? null,
-      lowBudgetLessRoom: v.lowBudgetLessRoom ?? null,
       whatsappLeads: v.whatsappLeads ?? null,
       whatsappConfirmed: v.whatsappConfirmed ?? null,
       totalCallsReceived: v.totalCallsReceived ?? null,
