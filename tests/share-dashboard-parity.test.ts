@@ -8,13 +8,15 @@ import { readCode } from "./helpers/read-code";
 // The public /share/<uuid> report and the agency's /agency/hotel/[id] page used
 // to be different code: one had five panels, the other twenty-odd, and every
 // change to either widened the gap. They are now the same component, and this
-// suite exists to keep it that way — plus to pin the three things that are
+// suite exists to keep it that way — plus to pin the four things that are
 // ALLOWED to differ, so a future change to any of them has to be deliberate:
 //
 //   1. CONTROLS. No link into an agency-only page may render for a share reader.
 //   2. AD SPEND. showAdSpendToHotel still governs the public link, on the
 //      server-rendered half AND the client-fetched half.
-//   3. AUTH. The share reader has no session, so the read routes must be
+//   3. GEOGRAPHY + DEVICES. The GA4 countries/cities/devices row is agency-only:
+//      hidden from clients by request, kept for the agency.
+//   4. AUTH. The share reader has no session, so the read routes must be
 //      reachable without one — while still authenticating every request.
 //
 // These are source assertions: rendering the dashboard needs a database and a
@@ -220,9 +222,46 @@ describe("3. showAdSpendToHotel still governs the public link", () => {
   });
 });
 
-// ── 4. The read routes are reachable without a session, and still guarded ───
+// ── 4. Geography and devices are agency-only ───────────────────────────────
 
-describe("4. the share reader can reach the data routes", () => {
+describe("4. the GA4 geography + device row is hidden from share readers", () => {
+  const GA4 = readCode("components/dashboard/Ga4WebsiteTraffic.tsx");
+
+  test("the panel takes a required viewerIsAgency and never defaults to visible", () => {
+    // Same fail-closed rule as showAdSpend: a new call site that forgets it must
+    // not quietly publish the row to a client. Required means TypeScript stops
+    // that at the call site rather than a reviewer having to catch it.
+    expect(GA4).toMatch(/viewerIsAgency: boolean;/);
+    expect(GA4).not.toMatch(/viewerIsAgency\?: boolean/);
+    expect(GA4).not.toMatch(/viewerIsAgency = true/);
+  });
+
+  test("the row is INSIDE the gate, not merely adjacent to it", () => {
+    // Assert on order: the conditional must open before the markup, or the
+    // headings are rendering unconditionally with a gate sitting nearby.
+    const gate = GA4.indexOf("{viewerIsAgency && (");
+    expect(gate, "expected a viewerIsAgency gate").toBeGreaterThan(-1);
+    for (const heading of ["Top countries", "Top cities", "Devices", "Mobile-heavy traffic"]) {
+      const at = GA4.indexOf(heading);
+      expect(at, heading).toBeGreaterThan(gate);
+    }
+  });
+
+  test("every call site passes the real viewer, not a literal", () => {
+    // `viewerIsAgency={true}` would defeat the whole thing, because the share
+    // page renders this same shared dashboard.
+    const calls = [...DASH.matchAll(/<Ga4WebsiteTraffic[^/]*\/>/g)].map((m) => m[0]);
+    expect(calls.length, "expected Ga4WebsiteTraffic call sites").toBeGreaterThan(0);
+    for (const call of calls) {
+      expect(call).toContain("viewerIsAgency={isAgencyViewer}");
+      expect(call).not.toMatch(/viewerIsAgency=\{true\}/);
+    }
+  });
+});
+
+// ── 5. The read routes are reachable without a session, and still guarded ───
+
+describe("5. the share reader can reach the data routes", () => {
   test("/api/hotel is exempt from the middleware session gate", () => {
     // Without this the report renders and every client panel 307s to /sign-in.
     expect(PROXY).toContain('"/api/hotel(.*)"');
