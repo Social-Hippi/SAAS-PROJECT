@@ -33,6 +33,23 @@ const UPDATE_RULES = args.includes("--update-rules");
 const HOTEL_ID = argOf("--hotel") ?? "cmru6bnmo000004l6yl2ryzh9"; // Aster Holidays
 const AGENCY_ID = argOf("--agency") ?? "cmr3jr4ni000004i5mzd380hb";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BOTH PROPERTIES ARE IN ONE WORKBOOK, on two tabs. Not two workbooks.
+//
+// The names here were previously wrong in a way that could not announce itself:
+// "Aster | Call Reports Tracker" is the FILE's name, not a tab's, and
+// "3hills tracker" is a tab in a DIFFERENT file. (spreadsheetId, tabName) is the
+// ingest routing key, so both would have matched no tab and no segment, and the
+// import would have been a well-formed request that moved zero rows and reported
+// no error. Every layer would have looked healthy.
+//
+// The names below are read off the tab strip and are CASE- AND SPACE-SENSITIVE.
+// tests/ops-tracker-layout.test.ts pins them, and the ingest path now refuses an
+// unmatched tab loudly rather than accounting for it as an empty import.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TRACKER_SPREADSHEET_ID = "1udjgKPY6i5piW627rwV_bWDvp5mjquHTNn_b4I7_QD0";
+
 const SEGMENTS = [
   {
     slug: "coffeeberry-hills",
@@ -43,8 +60,8 @@ const SEGMENTS = [
     // Resolved from the production path inventory over 90 days. Prefix matching
     // catches gallery pages, the ads landing page and #rooms anchors.
     pathPrefixes: ["/coffeeberry-hills"],
-    sourceSheetId: "1udjgKPY6i5piW627rwV_bWDvp5mjquHTNn_b4I7_QD0",
-    sourceTabName: "Aster | Call Reports Tracker",
+    sourceSheetId: TRACKER_SPREADSHEET_ID,
+    sourceTabName: "CBH",
     trackerLayout: "cbh_v1",
   },
   {
@@ -54,8 +71,8 @@ const SEGMENTS = [
     bookingHosts: [] as string[], // unknown — see Open Decisions
     // Both spellings appear in recorded traffic.
     pathPrefixes: ["/three-hills", "/3hills"],
-    sourceSheetId: "143UeHzcX7kJalj1-ar838cPiYt_9CaR3nbsUSW7pw7U",
-    sourceTabName: "3hills tracker",
+    sourceSheetId: TRACKER_SPREADSHEET_ID,
+    sourceTabName: "3Hills",
     trackerLayout: "three_hills_v1",
   },
 ];

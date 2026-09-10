@@ -63,8 +63,11 @@ export async function reconcileOpsTrackers(
       const outcome = await ingestTrackerPayload({
         spreadsheetId,
         tab,
-        header: csv.header,
-        rows: csv.rows,
+        // The raw grid, so the SAME locate-and-validate rule runs here as on the
+        // webhook. Handing over a pre-split header would make this path the
+        // authority on where the table starts, and the two paths could then
+        // disagree about which rows are data.
+        grid: csv.grid,
       });
       results.push({
         segment: seg.name,

@@ -63,8 +63,8 @@ const pad = (n: number) => String(n).padStart(2, "0");
  * instead of guessing at this end.
  *
  * D/M/Y is accepted as a fallback for the published-CSV reconciliation path,
- * which only ever sees display strings. `dayFirst` defaults true because both
- * workbooks are Indian; where the value is genuinely ambiguous (both parts <= 12)
+ * which only ever sees display strings. `dayFirst` defaults true because the
+ * workbook is Indian; where the value is genuinely ambiguous (both parts <= 12)
  * that assumption decides it, and it is recorded under Open Decisions. A value in
  * neither shape is rejected rather than interpreted.
  */
@@ -107,7 +107,7 @@ function parseCount(raw: unknown): { ok: true; value: number | null } | { ok: fa
 }
 
 /**
- * The stored Conversion Rate cell. Audited, never rendered — the two workbooks
+ * The stored Conversion Rate cell. Audited, never rendered — the two tabs
  * compute it by different formulas and neither is a conversion rate (see
  * lib/ops-tracker/metrics.ts). Normalised to a fraction so the two are at least
  * comparable when auditing.
