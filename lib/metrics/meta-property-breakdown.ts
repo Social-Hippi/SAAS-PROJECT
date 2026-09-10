@@ -40,8 +40,10 @@ export type MetaCampaignBreakdownRow = {
   impressions: number;
   reach: number | null;
   messages: number;
+  /** Connected calls from click-to-call ads. */
+  calls: number;
   leads: number;
-  /** messages + leads. An upper bound; see the note above. */
+  /** messages + calls + leads. An upper bound; see the note above. */
   contacts: number;
   /** null when spend is hidden, or when there are no contacts to divide by. */
   spend: number | null;
@@ -54,16 +56,43 @@ export type MetaCampaignBreakdownRow = {
   bookings: number;
 };
 
+/**
+ * What the PROPERTY's own team wrote down, from its operations workbook.
+ *
+ * NOT ATTRIBUTABLE TO A CAMPAIGN, and never divided across them. The sheet
+ * records a WhatsApp lead, a confirmation and a room night; it does not record
+ * which campaign — or which channel at all — produced any of them. Splitting
+ * these across campaigns by spend share, or by message share, would be inventing
+ * an attribution nobody measured.
+ *
+ * They sit beside the Meta figures so the two can be compared, which is the
+ * honest use: Meta counts conversations its ads started, the property counts
+ * every WhatsApp lead however it arrived. The gap between them is real
+ * information — and it is not a discrepancy to be reconciled away.
+ */
+export type PropertyRecorded = {
+  whatsappLeads: number | null;
+  whatsappConfirmed: number | null;
+  roomNights: number | null;
+  /** Days the property actually filled in. A missing day is unrecorded, not 0. */
+  daysRecorded: number;
+  /** Days in the selected period, for comparison against daysRecorded. */
+  daysInPeriod: number;
+};
+
 export type MetaPropertyGroup = {
   segmentKey: string;
   propertyName: string;
   campaigns: MetaCampaignBreakdownRow[];
+  /** Null for the Unassigned bucket, which is not a property and keeps no sheet. */
+  recorded: PropertyRecorded | null;
   totals: {
     campaigns: number;
     clicks: number;
     impressions: number;
     reach: number | null;
     messages: number;
+    calls: number;
     leads: number;
     contacts: number;
     spend: number | null;
@@ -97,7 +126,7 @@ export async function loadMetaPropertyBreakdown(
    */
   selectedSegmentKey: string | null = null,
 ): Promise<MetaPropertyBreakdown> {
-  const [segments, snaps, verifiedRows] = await Promise.all([
+  const [segments, snaps, verifiedRows, trackerRows] = await Promise.all([
     agencyScoped(prisma.propertySegment).findMany({
       where: { hotelClientId, isActive: true },
       orderBy: { displayOrder: "asc" },
@@ -112,14 +141,38 @@ export async function loadMetaPropertyBreakdown(
       select: {
         metaCampaignId: true, campaignName: true, date: true, objective: true,
         spend: true, impressions: true, clicks: true, reach: true,
-        messagingStarted: true, leads: true, conversionRateRanking: true,
+        messagingStarted: true, calls: true, leads: true, conversionRateRanking: true,
       },
     }),
     agencyScoped(prisma.campaignPerformance).findMany({
       where: { hotelClientId, archived: false, date: { gte: range.since, lte: range.until } },
       select: { campaignName: true, realBookings: true },
     }),
+    // The property's OWN operations workbook. Per property per day, and carrying
+    // no campaign — which is exactly how it is presented.
+    agencyScoped(prisma.manualLeadDaily).groupBy({
+      by: ["propertySegmentId"],
+      where: { hotelClientId, date: { gte: range.since, lte: range.until } },
+      _count: { _all: true },
+      _sum: { whatsappLeads: true, whatsappConfirmed: true, roomNightsConfirmed: true },
+    }),
   ]);
+
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  const daysInPeriod =
+    Math.floor((range.until.getTime() - range.since.getTime()) / MS_PER_DAY) + 1;
+
+  const recordedBySegment = new Map<string, PropertyRecorded>();
+  for (const t of trackerRows) {
+    if (!t.propertySegmentId) continue;
+    recordedBySegment.set(t.propertySegmentId, {
+      whatsappLeads: t._sum.whatsappLeads,
+      whatsappConfirmed: t._sum.whatsappConfirmed,
+      roomNights: t._sum.roomNightsConfirmed,
+      daysRecorded: t._count._all,
+      daysInPeriod,
+    });
+  }
 
   const bookingsByName = new Map<string, number>();
   for (const v of verifiedRows) {
@@ -130,7 +183,7 @@ export async function loadMetaPropertyBreakdown(
   type Acc = {
     name: string; names: string[]; objective: string | null; ranking: string | null;
     clicks: number; impressions: number; reach: number | null;
-    messages: number; leads: number; spend: number;
+    messages: number; calls: number; leads: number; spend: number;
     /** messages per YYYY-MM-DD, for the chart. */
     perDay: Map<string, number>;
   };
@@ -139,7 +192,7 @@ export async function loadMetaPropertyBreakdown(
   for (const s of snaps) {
     const a = byCampaign.get(s.metaCampaignId) ?? {
       name: s.campaignName, names: [], objective: null, ranking: null,
-      clicks: 0, impressions: 0, reach: null, messages: 0, leads: 0, spend: 0,
+      clicks: 0, impressions: 0, reach: null, messages: 0, calls: 0, leads: 0, spend: 0,
       perDay: new Map<string, number>(),
     };
     a.name = s.campaignName;
@@ -151,6 +204,7 @@ export async function loadMetaPropertyBreakdown(
     if (s.reach != null) a.reach = (a.reach ?? 0) + s.reach;
     const msg = s.messagingStarted ?? 0;
     a.messages += msg;
+    a.calls += s.calls ?? 0;
     a.leads += s.leads ?? 0;
     a.spend += Number(s.spend);
     const day = s.date.toISOString().slice(0, 10);
@@ -168,7 +222,13 @@ export async function loadMetaPropertyBreakdown(
   // left wondering whether a property was forgotten or simply had no campaigns.
   const groups = new Map<string, MetaPropertyGroup>();
   for (const s of segments) {
-    groups.set(s.id, { segmentKey: s.id, propertyName: s.name, campaigns: [], totals: emptyTotals(showAdSpend) });
+    groups.set(s.id, {
+      segmentKey: s.id,
+      propertyName: s.name,
+      campaigns: [],
+      recorded: recordedBySegment.get(s.id) ?? null,
+      totals: emptyTotals(showAdSpend),
+    });
   }
 
   const daily = new Map<string, Record<string, number>>();
@@ -180,10 +240,12 @@ export async function loadMetaPropertyBreakdown(
         segmentKey,
         propertyName: "Unassigned",
         campaigns: [],
+        // Not a property, so it keeps no workbook and gets no recorded block.
+        recorded: null,
         totals: emptyTotals(showAdSpend),
       });
     }
-    const contacts = a.messages + a.leads;
+    const contacts = a.messages + a.calls + a.leads;
     const bookings = a.names.reduce(
       (t, n) => t + (bookingsByName.get(n.trim().toLowerCase()) ?? 0),
       0,
@@ -199,6 +261,7 @@ export async function loadMetaPropertyBreakdown(
       impressions: a.impressions,
       reach: a.reach,
       messages: a.messages,
+      calls: a.calls,
       leads: a.leads,
       contacts,
       spend: showAdSpend ? a.spend : null,
@@ -224,6 +287,7 @@ export async function loadMetaPropertyBreakdown(
         acc.impressions += c.impressions;
         if (c.reach != null) acc.reach = (acc.reach ?? 0) + c.reach;
         acc.messages += c.messages;
+        acc.calls += c.calls;
         acc.leads += c.leads;
         acc.contacts += c.contacts;
         acc.bookings += c.bookings;
@@ -276,7 +340,7 @@ export async function loadMetaPropertyBreakdown(
 function emptyTotals(showAdSpend: boolean): MetaPropertyGroup["totals"] {
   return {
     campaigns: 0, clicks: 0, impressions: 0, reach: null,
-    messages: 0, leads: 0, contacts: 0,
+    messages: 0, calls: 0, leads: 0, contacts: 0,
     spend: showAdSpend ? 0 : null,
     costPerContact: null, ctr: 0, bookings: 0,
   };

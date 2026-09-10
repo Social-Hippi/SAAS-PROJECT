@@ -70,17 +70,67 @@ describe("2. absent is not zero", () => {
   });
 });
 
-describe("3. messages and leads stay separate", () => {
-  test("they are distinct columns, and 'contacts' is disclosed as an upper bound", () => {
-    // Adding them into one "results" number would double-count anyone who both
-    // messaged and submitted a form, and cost-per-result would be understated.
-    expect(UI).toMatch(/<Head right>Messages<\/Head>/);
-    expect(UI).toMatch(/<Head right>Leads<\/Head>/);
+describe("3. messages, calls and leads stay separate", () => {
+  test("each is its own column, and 'contacts' is disclosed as an upper bound", () => {
+    // Merging them into one "results" number would double-count anyone who both
+    // messaged and called, and cost-per-result would be understated.
+    for (const col of ["Messages", "Calls", "Leads"]) {
+      expect(UI, col).toContain(`<Head right>${col}</Head>`);
+    }
     expect(UI).toContain("upper bound, not a headcount");
   });
 
-  test("contacts is the sum, used only for the cost figure", () => {
-    expect(LOADER).toMatch(/const contacts = a\.messages \+ a\.leads/);
+  test("contacts sums all three, and is used only for the cost figure", () => {
+    expect(LOADER).toContain("const contacts = a.messages + a.calls + a.leads");
+  });
+
+  test("calls come from click-to-call actions, counted only once connected", () => {
+    const META = readCode("lib/meta.ts");
+    expect(META).toContain("CALL_MATCHERS");
+    expect(META).toContain("onsite_conversion.call_confirm");
+    // Several spellings, because Meta returns different ones by placement.
+    expect(META).toContain("click_to_call_call_confirm");
+  });
+});
+
+// ── 7 · What the property wrote down is not campaign data ──────────────────
+
+describe("7. the property's own records are kept apart from the campaigns", () => {
+  test("WhatsApp leads, confirmations and room nights come from the workbook", () => {
+    expect(LOADER).toContain("prisma.manualLeadDaily");
+    expect(LOADER).toMatch(/whatsappLeads: true, whatsappConfirmed: true, roomNightsConfirmed: true/);
+  });
+
+  test("they are grouped by PROPERTY, never by campaign", () => {
+    // The sheet records the outcome but not which campaign produced it.
+    expect(LOADER).toContain('by: ["propertySegmentId"]');
+    // And they are not on the campaign row type at all, so no table can show
+    // them beside a campaign name.
+    // Bound the slice to the ROW type only — PropertyRecorded is declared
+    // between it and MetaPropertyGroup and legitimately holds these fields.
+    const rowStart = LOADER.indexOf("export type MetaCampaignBreakdownRow");
+    const rowType = LOADER.slice(rowStart, LOADER.indexOf("\n};", rowStart));
+    for (const field of ["whatsappLeads", "whatsappConfirmed", "roomNights"]) {
+      expect(rowType, field).not.toContain(field);
+    }
+  });
+
+  test("the UI says they are not attributable to any campaign", () => {
+    expect(UI).toContain("not");
+    expect(UI).toContain("attributable to any campaign above");
+  });
+
+  test("partial coverage is stated — a missing day is unrecorded, not zero", () => {
+    // Coffeeberry filled in 22 of 29 days. Presenting its totals without that
+    // would invite comparing them against a property that filled in all 29.
+    expect(LOADER).toContain("daysRecorded");
+    expect(LOADER).toContain("daysInPeriod");
+    expect(UI).toContain("missing days are unrecorded, not zero.");
+  });
+
+  test("Unassigned gets no recorded block — it is not a property", () => {
+    expect(LOADER).toMatch(/recorded: null,/);
+    expect(UI).toContain("{g.recorded && <RecordedBlock");
   });
 });
 

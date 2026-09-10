@@ -947,6 +947,11 @@ model AdCampaignSnapshot {
   /// This is the "calls / messages generated" figure on the report: for a
   /// WhatsApp lead campaign it is the actual conversation, not a click.
   messagingStarted      Int?
+  /// Phone calls from click-to-call ads. Separate from messagingStarted for the
+  /// same reason that is separate from leads: a call and a WhatsApp conversation
+  /// are different events, and a campaign running both would be double-counted
+  /// by one combined figure.
+  calls                 Int?
   /// Lead-form submissions and pixel leads. Kept SEPARATE from
   /// messagingStarted: a form fill and a WhatsApp conversation are different
   /// events, and adding them would double-count a campaign that produces both.
