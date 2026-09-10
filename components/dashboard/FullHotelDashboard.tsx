@@ -373,6 +373,11 @@ function LandingScopeNote({ scopeLabel }: { scopeLabel: string }) {
         page, the blog — and then reads {scopeLabel} counts under Shared pages, not under
         {" "}{scopeLabel}.
       </p>
+      <p className="mt-2 text-ink-secondary">
+        Visitor counts and website traffic are scoped this way. Booking and enquiry
+        intent below is still counted for the whole group — those are recorded against a
+        session rather than a page, so they cannot be split this way yet.
+      </p>
     </div>
   );
 }
@@ -530,6 +535,12 @@ async function renderDashboard({
   const selectedSegmentId =
     propertyParam && segments.some((sg) => sg.id === propertyParam) ? propertyParam : null;
   const segmentRules: SegmentRule[] = segments;
+  // The selected property's path prefixes, for the loaders that scope by landing
+  // path. Null for "All properties", which scopes nothing.
+  const selectedPrefixes: string[] | null =
+    selectedSegmentId == null
+      ? null
+      : (segments.find((sg) => sg.id === selectedSegmentId)?.pathPrefixes ?? []);
   const propertyOptions = segments.map((sg) => ({ id: sg.id, name: sg.name }));
   const scopeLabel = propertyLabel(selectedSegmentId, propertyOptions);
 
@@ -572,7 +583,9 @@ async function renderDashboard({
         // site, exactly as before.
         segmentKey: selectedSegmentId,
       }),
-      loadSummaryDashboard(hotelId, range),
+      // Same property, same landing-page rule as the GA4 half above, so the two
+      // cards on this page cannot disagree about whose visits these are.
+      loadSummaryDashboard(hotelId, range, selectedPrefixes),
     ]);
     return (
       <div className="space-y-6">

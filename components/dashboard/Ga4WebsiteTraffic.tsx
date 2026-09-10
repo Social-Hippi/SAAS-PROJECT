@@ -193,16 +193,6 @@ export function Ga4WebsiteTraffic({
     );
   }
 
-  if (data.days === 0) {
-    return (
-      <SectionCard title="Website Traffic" subtitle="From Google Analytics 4.">
-        <div className="p-8 text-center text-sm text-ink-tertiary">
-          GA4 is connected — run a sync on the Integrations page to pull the last 30 days.
-        </div>
-      </SectionCard>
-    );
-  }
-
   // A property is selected but nothing has been measured for it in this window.
   // Rendering the card would print a confident 0 into every tile — which reads
   // as "this property had no visitors", a claim nobody has grounds to make.
@@ -224,6 +214,16 @@ export function Ga4WebsiteTraffic({
               site for this period.
             </p>
           )}
+        </div>
+      </SectionCard>
+    );
+  }
+
+  if (data.days === 0) {
+    return (
+      <SectionCard title="Website Traffic" subtitle="From Google Analytics 4.">
+        <div className="p-8 text-center text-sm text-ink-tertiary">
+          GA4 is connected — run a sync on the Integrations page to pull the last 30 days.
         </div>
       </SectionCard>
     );
