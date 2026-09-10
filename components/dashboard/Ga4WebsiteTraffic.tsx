@@ -114,6 +114,7 @@ function MiniTrend({ points }: { points: Ga4Dashboard["trend"] }) {
 export function Ga4WebsiteTraffic({
   data,
   manageHref,
+  viewerIsAgency,
 }: {
   data: Ga4Dashboard;
   /**
@@ -122,6 +123,14 @@ export function Ga4WebsiteTraffic({
    * so a link-holder is told the state without being handed a dead control.
    */
   manageHref: string | null;
+  /**
+   * Whether the reader is the agency rather than a public /share link-holder.
+   *
+   * Gates the geographic + device row, which is agency-only. REQUIRED and not
+   * defaulted, so a new call site cannot publish it to a client by forgetting —
+   * the same fail-closed rule showAdSpend follows.
+   */
+  viewerIsAgency: boolean;
 }) {
   if (!data.connected) {
     return (
@@ -158,6 +167,7 @@ export function Ga4WebsiteTraffic({
   const bounceColor =
     data.bounceRate > 0.6 ? "text-danger" : data.bounceRate >= 0.4 ? "text-warning" : "text-success";
   const channelTotal = CHANNELS.reduce((s, c) => s + data.channels[c.key], 0);
+  const deviceTotal = data.device.mobile + data.device.desktop + data.device.tablet;
   const ctr = data.ads && data.ads.impressions > 0 ? data.ads.clicks / data.ads.impressions : null;
 
   // Cross-validation (snippet vs GA4) — only when the snippet is in use.
@@ -219,6 +229,49 @@ export function Ga4WebsiteTraffic({
               Google Ads conversions are Google-reported — compare with HotelTrack&apos;s
               tracked bookings above.
             </p>
+          </div>
+        )}
+
+        {/* 4. Geographic + 5. Device — AGENCY ONLY.
+
+            Hidden from the public /share report at the hotel's request. This is
+            a DELIBERATE share/agency difference, so it is pinned in
+            tests/share-dashboard-parity.test.ts alongside the ad-spend gate
+            rather than left as an incidental one. */}
+        {viewerIsAgency && (
+          <div className="grid gap-px border-b border-line bg-line last:border-b-0 md:grid-cols-2">
+            <div className="bg-card p-4">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-tertiary">Top countries</p>
+              <GeoTable rows={data.topCountries} />
+              {data.topCities.length > 0 && (
+                <>
+                  <p className="mb-2 mt-4 text-xs font-medium uppercase tracking-wide text-ink-tertiary">Top cities</p>
+                  <GeoTable rows={data.topCities} />
+                </>
+              )}
+            </div>
+            <div className="bg-card p-4">
+              <p className="mb-3 text-xs font-medium uppercase tracking-wide text-ink-tertiary">Devices</p>
+              <ul className="space-y-2 text-sm">
+                {([["Mobile", data.device.mobile], ["Desktop", data.device.desktop], ["Tablet", data.device.tablet]] as const).map(
+                  ([label, v]) => {
+                    const pct = deviceTotal > 0 ? (v / deviceTotal) * 100 : 0;
+                    return (
+                      <li key={label} className="flex items-center gap-3">
+                        <span className="w-16 shrink-0 text-ink-secondary">{label}</span>
+                        <span className="h-2 flex-1 overflow-hidden rounded-full bg-line-strong">
+                          <span className="block h-full rounded-full bg-brand" style={{ width: `${pct}%` }} />
+                        </span>
+                        <span className="w-20 shrink-0 text-right tabular-nums text-ink-tertiary">{pct.toFixed(0)}%</span>
+                      </li>
+                    );
+                  },
+                )}
+              </ul>
+              <p className="mt-3 text-xs text-ink-tertiary">
+                Mobile-heavy traffic? Prioritise the mobile booking experience.
+              </p>
+            </div>
           </div>
         )}
 
@@ -340,3 +393,20 @@ export function Ga4WebsiteTraffic({
   );
 }
 
+function GeoTable({ rows }: { rows: { name: string; sessions: number }[] }) {
+  if (rows.length === 0) return <p className="text-sm text-ink-tertiary">—</p>;
+  const total = rows.reduce((s, r) => s + r.sessions, 0);
+  return (
+    <ul className="space-y-1.5 text-sm">
+      {rows.map((r) => (
+        <li key={r.name} className="flex items-center justify-between gap-2">
+          <span className="truncate text-ink-secondary">{r.name}</span>
+          <span className="shrink-0 tabular-nums text-ink-tertiary">
+            {formatNumber(r.sessions)}
+            {total > 0 && <span className="ml-1 text-ink-disabled">({((r.sessions / total) * 100).toFixed(0)}%)</span>}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
