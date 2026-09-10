@@ -190,3 +190,51 @@ describe("6. a backfill can actually finish", () => {
     expect(before).toContain("try {");
   });
 });
+
+// ── 7 · The other half of the Website view ─────────────────────────────────
+
+describe("7. visitor counts are scoped by the SAME rule as GA4", () => {
+  const SUMMARY = readCode("lib/metrics/summary-dashboard.ts");
+  const DASH = readCode("components/dashboard/FullHotelDashboard.tsx");
+  const UI = readCode("components/dashboard/Ga4WebsiteTraffic.tsx");
+
+  // Reported from production: with the GA4 half split, Customer intent and
+  // Customer journey still showed the same ~6,078 visitors for BOTH properties,
+  // because loadSummaryDashboard took no property at all.
+
+  test("sessions are filtered by the page they landed on", () => {
+    // Session.landingPath is the first pagePath of the session — the same rule
+    // the GA4 split uses, on purpose. Matching "any page the session touched"
+    // would count a visitor who saw both properties in both.
+    expect(SUMMARY).toContain("landingPath");
+    expect(SUMMARY).toMatch(/startsWith: p/);
+    expect(SUMMARY).toMatch(/loadVisitors\(hotelClientId, range, landingPrefixes\)/);
+  });
+
+  test("the comparison period is scoped too, or the change % is nonsense", () => {
+    // Scoping the current period but not the previous one would compare one
+    // property against the whole group and call the difference growth.
+    expect(SUMMARY).toMatch(/loadVisitors\(hotelClientId, previous, landingPrefixes\)/);
+  });
+
+  test("the website view passes the selected property's prefixes", () => {
+    expect(DASH).toMatch(/loadSummaryDashboard\(hotelId, range, selectedPrefixes\)/);
+    expect(DASH).toContain("const selectedPrefixes");
+  });
+
+  test("what is still group-level is disclosed, not left to be assumed scoped", () => {
+    // Intent hangs off click and stage events, keyed to a session rather than a
+    // path. Saying so beats a number that silently means something else.
+    expect(DASH).toContain("still counted for the whole group");
+  });
+
+  test("a property with no rows outranks the generic never-synced message", () => {
+    // "run a sync on the Integrations page" is wrong for a property: the site
+    // HAS synced. The order of these two early returns is the whole difference.
+    const missing = UI.indexOf("data.propertyScoped && data.propertyDataMissing");
+    const neverSynced = UI.indexOf("data.days === 0");
+    expect(missing).toBeGreaterThan(-1);
+    expect(neverSynced).toBeGreaterThan(-1);
+    expect(missing, "the property check must come first").toBeLessThan(neverSynced);
+  });
+});

@@ -77,12 +77,35 @@ export type SummaryDashboard = {
 const ENGAGED_MIN_PAGEVIEWS = 2;
 const ENGAGED_MIN_MS = 15_000;
 
+/**
+ * Restrict sessions to one property, by the page the session LANDED on.
+ *
+ * Session.landingPath is the first pagePath of the session, so this is the same
+ * rule the GA4 split uses (lib/ga4-property-sync.ts) — deliberately, so the two
+ * halves of the Website view cannot disagree about which visits belong to a
+ * property. Matching a session by "any page it touched" instead would count a
+ * visitor who saw both properties in both, and the parts would exceed the whole.
+ */
+function landingPathFilter(prefixes: readonly string[] | null) {
+  if (!prefixes || prefixes.length === 0) return {};
+  return {
+    OR: prefixes.map((p) => ({
+      landingPath: { startsWith: p, mode: "insensitive" as const },
+    })),
+  };
+}
+
 async function loadVisitors(
   hotelClientId: string,
   range: { since: Date; until: Date },
+  landingPrefixes: readonly string[] | null = null,
 ): Promise<{ unique: MetricValue<number>; engaged: MetricValue<number> }> {
   const sessions = await agencyScoped(prisma.session).findMany({
-    where: { hotelClientId, startedAt: { gte: range.since, lte: range.until } },
+    where: {
+      hotelClientId,
+      startedAt: { gte: range.since, lte: range.until },
+      ...landingPathFilter(landingPrefixes),
+    },
     select: { visitorId: true, pageViewCount: true, totalTimeMs: true },
   });
 
@@ -101,13 +124,23 @@ async function loadVisitors(
 export async function loadSummaryDashboard(
   hotelClientId: string,
   range: ResolvedRange,
+  /**
+   * Path prefixes of the selected property, or null for the whole group.
+   *
+   * Scopes the VISITOR counts. The intent metrics, attribution health and last
+   * intent below are still group-level: they hang off click and stage events,
+   * which are keyed to a session rather than to a path, and scoping them needs a
+   * join this does not do yet. That is disclosed rather than hidden — see the
+   * note rendered above the panel.
+   */
+  landingPrefixes: readonly string[] | null = null,
 ): Promise<SummaryDashboard> {
   const previous = previousRangeOf(range);
 
   const [visitors, prevVisitors, intent, previousIntent, attribution, lastIntent] =
     await Promise.all([
-      loadVisitors(hotelClientId, range),
-      loadVisitors(hotelClientId, previous),
+      loadVisitors(hotelClientId, range, landingPrefixes),
+      loadVisitors(hotelClientId, previous, landingPrefixes),
       loadIntentMetrics(hotelClientId, range),
       loadIntentMetrics(hotelClientId, previous),
       loadAttributionHealth(hotelClientId, range),
