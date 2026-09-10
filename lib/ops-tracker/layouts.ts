@@ -1,8 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // OPERATIONS TRACKER COLUMN LAYOUTS.
 //
-// There are TWO workbooks, one per property, and they do not share a schema.
-// Pretending otherwise is how a column silently lands in the wrong field:
+// Both properties live in ONE workbook, on two tabs — "CBH" and "3Hills" — and
+// the tabs do not share a schema. Sharing a file is exactly what makes it
+// tempting to assume they share a shape; they do not, and pretending otherwise
+// is how a column silently lands in the wrong field:
 //
 //   • the enquiry column is named for the property — "CBH Enquiry" vs
 //     "3Hills Enquiry";
@@ -65,6 +67,15 @@ export type TrackerLayout = {
   columns: Record<string, TrackerField>;
   /** Headers that must be present for the layout to be considered a match. */
   required: readonly TrackerField[];
+  /**
+   * The exact normalised header, in order, that this tab must present.
+   *
+   * `columns` answers "do I recognise this header?" — which a sheet with its
+   * columns REORDERED still passes, because every header is individually known.
+   * This answers "is this the table I think it is?", and it is what
+   * lib/ops-tracker/locate.ts asserts before a single row is read.
+   */
+  expectedHeader: readonly string[];
 };
 
 /**
@@ -84,52 +95,76 @@ export function normaliseHeader(raw: string): string {
     .replace(/\s+/g, " ");
 }
 
-const CBH_COLUMNS: Record<string, TrackerField> = {
-  "date": "date",
-  "cbh enquiry": "enquiries",
-  "repeat": "repeatContacts",
-  "rm nts confirmed": "roomNightsConfirmed",
-  "junk/spam": "junkSpam",
-  "sold out": "soldOut",
-  "inhouse": "inhouse",
-  "low budget": "lowBudget",
-  "less room": "lessRoom",
-  "whatsapp leads": "whatsappLeads",
-  "whatsapp confirmed": "whatsappConfirmed",
-  "total calls received": "totalCallsReceived",
-  "total leads": "storedTotalLeads",
-  "conversion rate": "storedConversionRate",
-};
+// ─────────────────────────────────────────────────────────────────────────────
+// The column ORDER is declared once, and both the header->field map and the
+// expected header are derived from it. Two hand-maintained lists of the same
+// columns drift the first time one is edited and the other is not, and the
+// failure mode is the worst kind: the map still recognises every column, so the
+// import succeeds while the order check passes or fails for reasons nobody can
+// reconcile. One declaration cannot disagree with itself.
+//
+// These orders are the sheets' real ones: CBH occupies B..O (14 columns) and
+// 3Hills B..M (12).
+// ─────────────────────────────────────────────────────────────────────────────
 
-const THREE_HILLS_COLUMNS: Record<string, TrackerField> = {
-  "date": "date",
-  "3hills enquiry": "enquiries",
-  "repeat": "repeatContacts",
-  "rm nts confirmed": "roomNightsConfirmed",
-  "junk/spam": "junkSpam",
-  "sold out": "soldOut",
-  "inhouse": "inhouse",
-  // Combined at source. Stored whole; never split into lowBudget + lessRoom.
-  "low budget less room": "lowBudgetLessRoom",
-  "whatsapp leads": "whatsappLeads",
-  "whatsapp confirmed": "whatsappConfirmed",
-  "total calls received": "totalCallsReceived",
-  // NOTE: no "total leads" column exists for this property.
-  "conversion rate": "storedConversionRate",
-};
+type ColumnOrder = readonly (readonly [string, TrackerField])[];
+
+const CBH_ORDER: ColumnOrder = [
+  ["date", "date"],
+  ["cbh enquiry", "enquiries"],
+  ["repeat", "repeatContacts"],
+  ["rm nts confirmed", "roomNightsConfirmed"],
+  ["junk/spam", "junkSpam"],
+  ["sold out", "soldOut"],
+  ["inhouse", "inhouse"],
+  ["low budget", "lowBudget"],
+  ["less room", "lessRoom"],
+  ["whatsapp leads", "whatsappLeads"],
+  ["whatsapp confirmed", "whatsappConfirmed"],
+  ["total calls received", "totalCallsReceived"],
+  ["total leads", "storedTotalLeads"],
+  ["conversion rate", "storedConversionRate"],
+];
+
+const THREE_HILLS_ORDER: ColumnOrder = [
+  ["date", "date"],
+  ["3hills enquiry", "enquiries"],
+  ["repeat", "repeatContacts"],
+  ["rm nts confirmed", "roomNightsConfirmed"],
+  ["junk/spam", "junkSpam"],
+  ["sold out", "soldOut"],
+  ["inhouse", "inhouse"],
+  // Combined at source. Stored whole; never split into lowBudget + lessRoom,
+  // which would be inventing two numbers from one.
+  ["low budget less room", "lowBudgetLessRoom"],
+  ["whatsapp leads", "whatsappLeads"],
+  ["whatsapp confirmed", "whatsappConfirmed"],
+  ["total calls received", "totalCallsReceived"],
+  // NOTE: no "total leads" column exists for this property. Anything derived
+  // from it is unavailable here — never substituted with Total Calls Received,
+  // which is a different quantity.
+  ["conversion rate", "storedConversionRate"],
+];
+
+const columnsOf = (order: ColumnOrder): Record<string, TrackerField> =>
+  Object.fromEntries(order) as Record<string, TrackerField>;
+
+const headerOf = (order: ColumnOrder): readonly string[] => order.map(([key]) => key);
 
 export const TRACKER_LAYOUTS: Record<TrackerLayoutId, TrackerLayout> = {
   cbh_v1: {
     id: "cbh_v1",
-    label: "Coffeeberry Hills — Call Reports Tracker",
-    columns: CBH_COLUMNS,
+    label: "Coffeeberry Hills — CBH tab",
+    columns: columnsOf(CBH_ORDER),
     required: ["date", "enquiries", "totalCallsReceived"],
+    expectedHeader: headerOf(CBH_ORDER),
   },
   three_hills_v1: {
     id: "three_hills_v1",
-    label: "Three Hills — tracker",
-    columns: THREE_HILLS_COLUMNS,
+    label: "Three Hills — 3Hills tab",
+    columns: columnsOf(THREE_HILLS_ORDER),
     required: ["date", "enquiries", "totalCallsReceived"],
+    expectedHeader: headerOf(THREE_HILLS_ORDER),
   },
 };
 

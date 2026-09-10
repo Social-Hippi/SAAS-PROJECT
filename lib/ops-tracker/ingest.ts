@@ -5,6 +5,7 @@ import { timingSafeEqual } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { sanitizeForSpreadsheet } from "@/lib/xlsx";
 import { TRACKER_LAYOUTS, isTrackerLayoutId } from "@/lib/ops-tracker/layouts";
+import { locateTrackerTable } from "@/lib/ops-tracker/locate";
 import { parseTrackerPayload, type RejectedRow } from "@/lib/ops-tracker/parse";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +64,16 @@ export function secretMatches(provided: string | null, expected: string | undefi
 export type TrackerPayload = {
   spreadsheetId?: unknown;
   tab?: unknown;
+  /**
+   * The whole sheet grid, row 0 = spreadsheet row 1, column 0 = column A,
+   * titles and totals and side tables included. PREFERRED: the server locates
+   * the table inside it (lib/ops-tracker/locate.ts), so the rule that decides
+   * where the table starts exists once, on this side, and is testable.
+   */
+  grid?: unknown;
+  /** Pre-located header + rows. Accepted, but the sender is then the authority
+   *  on where the table began, and a sender that gets that wrong cannot be
+   *  caught here. Used by nothing we ship. */
   header?: unknown;
   rows?: unknown;
   sentAt?: unknown;
@@ -84,24 +95,30 @@ function asStringArray(v: unknown): string[] | null {
 export async function ingestTrackerPayload(payload: TrackerPayload): Promise<IngestOutcome> {
   const spreadsheetId = typeof payload.spreadsheetId === "string" ? payload.spreadsheetId.trim() : "";
   const tab = typeof payload.tab === "string" ? payload.tab.trim() : "";
+  const grid = Array.isArray(payload.grid) ? (payload.grid as unknown[][]) : null;
   const header = asStringArray(payload.header);
   const rawRows = Array.isArray(payload.rows) ? payload.rows : null;
 
   if (!spreadsheetId || !tab) {
     return { status: 400, body: { ok: false, error: "spreadsheetId and tab are required." } };
   }
-  if (!header || header.length === 0) {
-    return { status: 400, body: { ok: false, error: "header row is required." } };
+  if (!grid && (!header || header.length === 0)) {
+    return {
+      status: 400,
+      body: { ok: false, error: "either a grid, or a header row with rows, is required." },
+    };
   }
-  if (!rawRows) {
+  if (!grid && !rawRows) {
     return { status: 400, body: { ok: false, error: "rows must be an array." } };
   }
-  if (rawRows.length > MAX_ROWS_PER_PAYLOAD) {
+
+  const incomingRowCount = grid ? grid.length : rawRows!.length;
+  if (incomingRowCount > MAX_ROWS_PER_PAYLOAD) {
     return {
       status: 413,
       body: {
         ok: false,
-        error: `payload has ${rawRows.length} rows; the cap is ${MAX_ROWS_PER_PAYLOAD}.`,
+        error: `payload has ${incomingRowCount} rows; the cap is ${MAX_ROWS_PER_PAYLOAD}.`,
       },
     };
   }
@@ -150,7 +167,38 @@ export async function ingestTrackerPayload(payload: TrackerPayload): Promise<Ing
   }
 
   const layout = TRACKER_LAYOUTS[layoutId];
-  const parsed = parseTrackerPayload(header, rawRows as unknown[][], layout);
+
+  // Where does the table start? Only the layout knows what a correct answer
+  // looks like, which is why this happens AFTER the segment lookup rather than
+  // at the payload boundary: locating and validating are the same act, and a
+  // located table that does not match its layout is a rejected tab.
+  let tableHeader: string[];
+  let tableRows: unknown[][];
+
+  if (grid) {
+    const located = locateTrackerTable(grid, layout);
+    if (!located.ok) {
+      return {
+        status: 422,
+        body: {
+          ok: false,
+          tab,
+          segment: segment.name,
+          error: `Could not read tab "${tab}" (step ${located.step}). ${located.reason}`,
+          rowsReceived: grid.length,
+          rowsAccepted: 0,
+          rowsRejected: 0,
+        },
+      };
+    }
+    tableHeader = located.table.header;
+    tableRows = located.table.rows;
+  } else {
+    tableHeader = header!;
+    tableRows = rawRows as unknown[][];
+  }
+
+  const parsed = parseTrackerPayload(tableHeader, tableRows, layout);
 
   if (!parsed.ok) {
     return {
@@ -162,9 +210,9 @@ export async function ingestTrackerPayload(payload: TrackerPayload): Promise<Ing
         error: parsed.reason,
         unknownColumns: parsed.unknownColumns,
         missingFields: parsed.missingFields,
-        rowsReceived: rawRows.length,
+        rowsReceived: tableRows.length,
         rowsAccepted: 0,
-        rowsRejected: rawRows.length,
+        rowsRejected: tableRows.length,
       },
     };
   }
@@ -224,7 +272,7 @@ export async function ingestTrackerPayload(payload: TrackerPayload): Promise<Ing
       ok: true,
       tab,
       segment: segment.name,
-      rowsReceived: rawRows.length,
+      rowsReceived: tableRows.length,
       rowsAccepted: parsed.rows.length,
       rowsRejected: parsed.rejected.length,
       rejected: parsed.rejected,

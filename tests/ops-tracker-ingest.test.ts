@@ -6,7 +6,8 @@ import { POST as ingestPOST } from "@/app/api/integrations/ops-tracker/route";
 import { ingestTrackerPayload, secretMatches } from "@/lib/ops-tracker/ingest";
 import { parseTrackerPayload, parseTrackerDate } from "@/lib/ops-tracker/parse";
 import { TRACKER_LAYOUTS, mapHeader, normaliseHeader } from "@/lib/ops-tracker/layouts";
-import { parseCsv } from "@/lib/ops-tracker/csv-source";
+import { fetchTrackerCsv, parseCsv } from "@/lib/ops-tracker/csv-source";
+import { cbhGrid, thGrid } from "./helpers/tracker-fixtures";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GATE 2 — the operations-tracker import.
@@ -20,9 +21,9 @@ import { parseCsv } from "@/lib/ops-tracker/csv-source";
 
 const PREFIX = "TEST_OPS_";
 const CBH_SHEET = `${PREFIX}sheet_cbh`;
-const CBH_TAB = "Aster | Call Reports Tracker";
+const CBH_TAB = "CBH";
 const TH_SHEET = `${PREFIX}sheet_th`;
-const TH_TAB = "3hills tracker";
+const TH_TAB = "3Hills";
 const SECRET = "test-ingest-secret-value";
 
 let agencyId: string;
@@ -406,5 +407,100 @@ describe("6. audit trail", () => {
       select: { propertySegmentId: true },
     });
     expect(stored?.propertySegmentId).toBe(cbhSegmentId);
+  });
+});
+
+// ── 7 · The grid path: the server finds the table, the sender does not ──────
+
+describe("7. locating the table inside a whole sheet", () => {
+  const csvOf = (grid: string[][]): string =>
+    grid.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+
+  test("a whole CBH sheet imports its 30 data rows and nothing else", async () => {
+    const out = await ingestTrackerPayload({ spreadsheetId: CBH_SHEET, tab: CBH_TAB, grid: cbhGrid() });
+    expect(out.status).toBe(200);
+    expect(out.body.rowsAccepted).toBe(30);
+    expect(out.body.rowsRejected).toBe(0);
+
+    const stored = await prisma.manualLeadDaily.findMany({
+      where: { hotelClientId: hotelId, sourceTabName: CBH_TAB },
+      select: { storedTotalLeads: true, enquiries: true },
+    });
+    expect(stored).toHaveLength(30);
+    // The Total row's 643 and the KPI card's 248 are both in the sheet. Neither
+    // is a day, and neither may arrive as one.
+    expect(stored.map((r) => r.storedTotalLeads)).not.toContain(643);
+    expect(stored.map((r) => r.enquiries)).not.toContain(248);
+  });
+
+  test("a whole 3Hills sheet imports 35 rows without its side table", async () => {
+    const out = await ingestTrackerPayload({ spreadsheetId: TH_SHEET, tab: TH_TAB, grid: thGrid() });
+    expect(out.status).toBe(200);
+    expect(out.body.rowsAccepted).toBe(35);
+
+    const stored = await prisma.manualLeadDaily.findMany({
+      where: { hotelClientId: hotelId, sourceTabName: TH_TAB },
+      select: { sourceRow: true },
+    });
+    expect(stored).toHaveLength(35);
+    // MONTHLY PERFORMANCE OVERVIEW lives eight columns to the right. If the span
+    // had run past the blank column N, its headers would be keys on sourceRow.
+    for (const row of stored) {
+      expect(Object.keys(row.sourceRow as object)).not.toContain("MONTHLY PERFORMANCE OVERVIEW");
+    }
+  });
+
+  test("the RIGHT workbook with the WRONG tab name is REFUSED, not imported as zero rows", async () => {
+    // This is the failure the config bug would have produced: a well-formed
+    // request, a real workbook, a tab name that matches nothing. The only wrong
+    // answer here is a 200 reporting a successful import of no rows, because
+    // that is indistinguishable from a quiet period at the property.
+    const out = await ingestTrackerPayload({
+      spreadsheetId: CBH_SHEET,
+      tab: "Aster | Call Reports Tracker",   // the FILE's name, not a tab's
+      grid: cbhGrid(),
+    });
+    expect(out.status).toBe(404);
+    expect(out.body.ok).toBe(false);
+    expect(out.body.error).toMatch(/No property segment is configured/i);
+    expect(out.body.rowsAccepted).toBeUndefined();
+    expect(await prisma.manualLeadDaily.count({ where: { hotelClientId: hotelId } })).toBe(0);
+  });
+
+  test("a sheet with no findable table is refused with a reason, not counted as empty", async () => {
+    const titleBlockOnly = cbhGrid().slice(0, 9);
+    const out = await ingestTrackerPayload({
+      spreadsheetId: CBH_SHEET, tab: CBH_TAB, grid: titleBlockOnly,
+    });
+    expect(out.status).toBe(422);
+    expect(out.body.error).toMatch(/step 1/);
+    expect(out.body.error).toMatch(/ZERO rows/);
+    expect(await prisma.manualLeadDaily.count({ where: { hotelClientId: hotelId } })).toBe(0);
+  });
+
+  test("the CSV backstop hands over the same grid, so both paths agree", async () => {
+    // The reconciliation must not be able to accept what the webhook refuses.
+    const stubFetch = (async () =>
+      new Response(csvOf(cbhGrid()), { status: 200, headers: { "content-type": "text/csv" } })) as typeof fetch;
+
+    const csv = await fetchTrackerCsv(CBH_SHEET, CBH_TAB, stubFetch);
+    expect(csv.ok).toBe(true);
+    if (!csv.ok) return;
+
+    const out = await ingestTrackerPayload({ spreadsheetId: CBH_SHEET, tab: CBH_TAB, grid: csv.grid });
+    expect(out.status).toBe(200);
+    expect(out.body.rowsAccepted).toBe(30);
+  });
+
+  test("a pre-split header + rows payload still imports, for any sender still on it", async () => {
+    // The grid is preferred — it puts the locate rule on this side, where it is
+    // tested — but the older shape must not silently stop working.
+    const out = await ingestTrackerPayload({
+      spreadsheetId: CBH_SHEET, tab: CBH_TAB,
+      header: CBH_HEADER, rows: [cbhRow("2026-08-01"), cbhRow("2026-08-02")],
+    });
+    expect(out.status).toBe(200);
+    expect(out.body.rowsAccepted).toBe(2);
+    expect(await prisma.manualLeadDaily.count({ where: { hotelClientId: hotelId } })).toBe(2);
   });
 });

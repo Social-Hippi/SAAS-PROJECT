@@ -85,7 +85,7 @@ export function parseCsv(text: string): string[][] {
 }
 
 export type CsvFetchResult =
-  | { ok: true; header: string[]; rows: string[][] }
+  | { ok: true; grid: string[][] }
   | { ok: false; reason: string };
 
 /**
@@ -131,9 +131,21 @@ export async function fetchTrackerCsv(
     };
   }
 
-  const parsed = parseCsv(text).filter((r) => r.some((c) => c.trim() !== ""));
-  if (parsed.length === 0) return { ok: false, reason: "published CSV was empty" };
+  // Returned as a RAW GRID — blank rows and all — for lib/ops-tracker/locate.ts
+  // to find the table in, exactly as the push path does. Two things depend on
+  // not tidying it here:
+  //
+  //   • the first row is a title, not a header. This tab has a title block above
+  //     the table, so `const [header, ...rows] = parsed` would name the import
+  //     after a title cell and feed Total and Average in as days;
+  //   • dropping blank rows would CLOSE a gap inside the data block, so this
+  //     path would happily import rows that the push path refuses on. The
+  //     reconciliation must not be able to accept what the webhook would reject
+  //     — that is the whole point of running the same validation twice.
+  const grid = parseCsv(text);
+  if (grid.every((r) => r.every((c) => c.trim() === ""))) {
+    return { ok: false, reason: "published CSV was empty" };
+  }
 
-  const [header, ...rows] = parsed;
-  return { ok: true, header, rows };
+  return { ok: true, grid };
 }
