@@ -1,5 +1,5 @@
 // One-off: summarize AdSnapshot rows to sanity-check what Meta sync stored.
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 async function main() {

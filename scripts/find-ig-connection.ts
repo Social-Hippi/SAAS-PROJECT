@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // READ-ONLY: definitively settle whether an InstagramConnection for "cea_iitm"

@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // READ-ONLY: print the aggregated campaign-performance table exactly as the

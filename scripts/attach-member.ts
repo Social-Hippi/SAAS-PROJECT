@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { createClerkClient } from "@clerk/backend";
 import { prisma } from "../lib/prisma";
 import { getPlan, memberLimit } from "../lib/razorpay-plans";

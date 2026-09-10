@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { STAGES, SENSIBLE_DEFAULTS, stageRank, type FunnelStage } from "@/lib/funnel";

@@ -1,5 +1,5 @@
 
-import "dotenv/config";
+import "./load-env";
 import { prisma } from "../lib/prisma";
 
 // Creates (or updates) a known test agency + hotel so the local tracking test
