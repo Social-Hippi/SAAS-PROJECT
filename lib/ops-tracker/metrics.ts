@@ -48,7 +48,6 @@ export type TrackerDay = {
   inhouse: number | null;
   lowBudget: number | null;
   lessRoom: number | null;
-  lowBudgetLessRoom: number | null;
   whatsappLeads: number | null;
   whatsappConfirmed: number | null;
   totalCallsReceived: number | null;
@@ -115,13 +114,14 @@ function groupTotals(days: readonly TrackerDay[]): Record<DispositionGroup, numb
       sumField(days, (d) => d.enquiries),
       sumField(days, (d) => d.whatsappLeads),
     ),
+    // Both tabs carry Sold Out, Low Budget and Less Room as the same three
+    // columns, so this is one rule rather than a per-property special case. It
+    // used to add a fourth, Three Hills' supposed combined "Low Budget Less
+    // Room" — a column that does not exist on the live tab.
     lost_to_availability_or_rate: add(
       sumField(days, (d) => d.soldOut),
       sumField(days, (d) => d.lowBudget),
       sumField(days, (d) => d.lessRoom),
-      // Three Hills' combined column. Never split, never double-counted: a
-      // property populates either the two split columns or this one, not both.
-      sumField(days, (d) => d.lowBudgetLessRoom),
     ),
     existing_or_returning: add(
       sumField(days, (d) => d.repeatContacts),
@@ -286,7 +286,6 @@ export function summariseTrackerDays(
           d.inhouse,
           d.lowBudget,
           d.lessRoom,
-          d.lowBudgetLessRoom,
         ),
     ),
   ].filter((v) => v.comparable > 0);

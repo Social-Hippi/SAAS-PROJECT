@@ -29,7 +29,22 @@ export const CBH_HEADER = [
   "Total Calls Received", "Total Leads", "Conversion Rate",
 ];
 
+/**
+ * The live 3Hills header, 13 columns, B..N. Read off the tab.
+ *
+ * Low Budget and Less Room are SEPARATE, exactly as on CBH — 3Hills is CBH minus
+ * Total Leads and nothing else. The 12-column shape this was first built for,
+ * with a single combined "Low Budget Less Room", is kept as TH_HEADER_LEGACY_12
+ * below so the regression stays pinned.
+ */
 export const TH_HEADER = [
+  "Date", "3Hills Enquiry", "Repeat", "Rm Nts Confirmed", "Junk / Spam", "Sold Out",
+  "Inhouse", "Low Budget", "Less Room", "WhatsApp Leads", "WhatsApp Confirmed",
+  "Total Calls Received", "Conversion Rate",
+];
+
+/** The shape that was WRONG: 12 columns, Low Budget and Less Room combined. */
+export const TH_HEADER_LEGACY_12 = [
   "Date", "3Hills Enquiry", "Repeat", "Rm Nts Confirmed", "Junk / Spam", "Sold Out",
   "Inhouse", "Low Budget Less Room", "WhatsApp Leads", "WhatsApp Confirmed",
   "Total Calls Received", "Conversion Rate",
@@ -121,14 +136,23 @@ export function cbhGrid(): string[][] {
 
 /**
  * 3Hills as it really is: an extra title row, a BAND header above the real one,
- * and a second table starting at column O with the blank column N between.
+ * 13 tracker columns in B..N, and a second table further right with a blank
+ * column between.
  *
  * The band header is the trap. It contains the word "DATE", so any search for a
  * header row by text finds it FIRST — one row too high — and every column then
  * reads one position off its true meaning.
+ *
+ * ON THE SIDE TABLE'S POSITION: the tracker was first specified as B..M with the
+ * MONTHLY PERFORMANCE OVERVIEW in O..T and column N blank. The tracker is really
+ * B..N, and the live tab's refusal reported a 13-column span — which is only
+ * possible if the header cell at O is EMPTY. So the blank separator is O and the
+ * side table sits beyond it; its exact columns have not been re-read off the tab
+ * and are placed here at P..U. What these fixtures pin is the BOUNDARY — that a
+ * blank header cell ends the span and keeps the side table out — not the letters.
  */
 export function thGrid(): string[][] {
-  const side = (cells: readonly string[]): string[] => ["", ...cells]; // blank N, then O..T
+  const side = (cells: readonly string[]): string[] => ["", ...cells]; // blank O, then P..U
 
   const grid: string[][] = [
     atColumnB(["ASTER | CALL REPORTS TRACKER"]),
@@ -141,15 +165,16 @@ export function thGrid(): string[][] {
     blank(3),
     atColumnB(["Daily log"]),
     // row 10 — BAND header. Says "DATE". Is not the header.
-    atColumnB(["DATE", "ENQUIRY BREAKDOWN", "", "", "", "", "", "", "WHATSAPP", "", "TOTALS", ""]),
-    // row 11 — the real header, plus the side table's own header in O..T
+    atColumnB(["DATE", "ENQUIRY BREAKDOWN", "", "", "", "", "", "", "", "WHATSAPP", "", "TOTALS", ""]),
+    // row 11 — the real header, plus the side table's own header beyond the gap
     atColumnB(TH_HEADER, side(["MONTHLY PERFORMANCE OVERVIEW", "", "", "", "", ""])),
   ];
 
   const dates = thDates();
   dates.forEach((date, i) => {                                // rows 12-46
-    const row = atColumnB([date, "6", "1", "3", "2", "0", "1", "3", "2", "1", "9", "33.3%"]);
-    // The side table occupies the same rows, eight columns to the right.
+    // 13 values: the combined "3" is really Low Budget 2 + Less Room 1.
+    const row = atColumnB([date, "6", "1", "3", "2", "0", "1", "2", "1", "2", "1", "9", "33.3%"]);
+    // The side table occupies the same rows, further to the right.
     if (i < 2) {
       row.push(...side(["August", "241", "112", "46.5%", "", ""]));
     }
@@ -159,7 +184,30 @@ export function thGrid(): string[][] {
   // Real here: Rm Nts Confirmed 112 and Total Calls Received 241, which are what
   // make 112 / 241 the 46.5% on this tab's card — a different formula from CBH's,
   // and not a conversion rate either.
-  grid.push(atColumnB(["Total", "150", "38", "112", "31", "7", "19", "62", "44", "21", "241", ""]));
-  grid.push(atColumnB(["Average", "4.3", "1.1", "3.2", "0.9", "0.2", "0.5", "1.8", "1.3", "0.6", "6.9", ""]));
+  grid.push(atColumnB(["Total", "150", "38", "112", "31", "7", "19", "40", "22", "44", "21", "241", ""]));
+  grid.push(atColumnB(["Average", "4.3", "1.1", "3.2", "0.9", "0.2", "0.5", "1.1", "0.6", "1.3", "0.6", "6.9", ""]));
+  return grid;
+}
+
+/**
+ * The 3Hills tab as it was WRONGLY specified: 12 columns, B..M, with Low Budget
+ * and Less Room combined into one.
+ *
+ * Kept so the regression is pinned by a fixture rather than by memory. The live
+ * tab presented 13 columns against this 12-column layout and the import refused
+ * it whole — which is the behaviour worth keeping, and is only demonstrable if
+ * the wrong shape still exists to be refused.
+ */
+export function thGridLegacy12Col(): string[][] {
+  const grid = thGrid();
+  const headerRow = grid[10]!;
+
+  // Collapse Low Budget (index 8) and Less Room (index 9) back into one column.
+  headerRow.splice(8, 2, "Low Budget Less Room");
+  for (let r = 11; r < grid.length; r++) {
+    const row = grid[r]!;
+    const combined = String(Number(row[8] ?? 0) + Number(row[9] ?? 0));
+    row.splice(8, 2, combined);
+  }
   return grid;
 }

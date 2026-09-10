@@ -2243,9 +2243,18 @@ model ManualLeadDaily {
   junkSpam            Int?
   soldOut             Int?
   inhouse             Int?
-  lowBudget           Int? // CBH only
-  lessRoom            Int? // CBH only
-  lowBudgetLessRoom   Int? // Three Hills only — combined at source, never split
+  lowBudget           Int? // both tabs
+  lessRoom            Int? // both tabs
+  /// RETIRED — nothing writes or reads this. It existed for a believed 3Hills
+  /// column, "Low Budget Less Room", which the live tab does not have: it keeps
+  /// Low Budget and Less Room separate exactly as CBH does. No tracker layout
+  /// maps to it, so no successful import ever populated it.
+  ///
+  /// NOT DROPPED HERE. Dropping a column is irreversible, and the production
+  /// database could not be read from the branch this was corrected on — the only
+  /// rows checked were a local dev database holding none. Kept inert (nullable,
+  /// unwritten, unread) pending a production check.
+  lowBudgetLessRoom   Int?
   whatsappLeads       Int?
   whatsappConfirmed   Int?
   totalCallsReceived  Int?

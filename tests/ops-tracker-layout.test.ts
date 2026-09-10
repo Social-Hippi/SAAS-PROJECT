@@ -9,6 +9,7 @@ import {
   blank,
   cbhGrid,
   thGrid,
+  thGridLegacy12Col,
 } from "./helpers/tracker-fixtures";
 import { readCode } from "./helpers/read-code";
 
@@ -125,12 +126,12 @@ describe("3. the column span stops at the first empty header cell", () => {
     expect(got.table.header).toHaveLength(14);
   });
 
-  test("3Hills spans B..M — 12 columns", () => {
+  test("3Hills spans B..N — 13 columns", () => {
     const got = locateTrackerTable(thGrid(), TH);
     expect(got.ok).toBe(true);
     if (!got.ok) return;
-    expect(columnLetter(got.table.lastColumnIndex)).toBe("M");
-    expect(got.table.header).toHaveLength(12);
+    expect(columnLetter(got.table.lastColumnIndex)).toBe("N");
+    expect(got.table.header).toHaveLength(13);
   });
 
   test("3Hills' MONTHLY PERFORMANCE OVERVIEW side table is excluded entirely", () => {
@@ -140,16 +141,17 @@ describe("3. the column span stops at the first empty header cell", () => {
     expect(got.table.header.join(" | ")).not.toMatch(/MONTHLY PERFORMANCE/i);
     // And none of its cells leaked into a data row.
     for (const row of got.table.rows) {
-      expect(row).toHaveLength(12);
+      expect(row).toHaveLength(13);
       expect(row).not.toContain("August");
       expect(row).not.toContain("46.5%");
     }
   });
 
-  test("the blank column N is what separates them — it is load-bearing", () => {
+  test("the blank column past N is what separates them — it is load-bearing", () => {
     const grid = thGrid();
-    // Fill N in the header row and the side table is no longer separated.
-    grid[10]![13] = "bridged";
+    // Column O (index 14) is the gap. Fill it and the side table is no longer
+    // separated from the tracker.
+    grid[10]![14] = "bridged";
     const got = locateTrackerTable(grid, TH);
     expect(got.ok).toBe(false);
     if (got.ok) return;
@@ -209,6 +211,31 @@ describe("5. a column-set mismatch rejects the whole tab", () => {
   test("both real layouts pass their own assertion", () => {
     expect(locateTrackerTable(cbhGrid(), CBH).ok).toBe(true);
     expect(locateTrackerTable(thGrid(), TH).ok).toBe(true);
+  });
+
+  test("the WRONG 12-column 3Hills shape is refused whole — the live regression", () => {
+    // Exactly what the live tab met on its first push: a layout built for 12
+    // columns with Low Budget and Less Room combined, against a real header of
+    // 13 with them separate.
+    //
+    // ELEVEN of the thirteen columns were still individually recognisable. A
+    // check that only asked "do I know this header?" would have mapped those and
+    // shifted everything after the combined column — filing Less Room's numbers
+    // under WhatsApp Leads, and so on down the row, for every day on the tab.
+    // The whole-tab refusal is what turned a month of mislabelled dispositions
+    // into a 422 and a corrected spec.
+    const got = locateTrackerTable(thGridLegacy12Col(), TH);
+    expect(got.ok).toBe(false);
+    if (got.ok) return;
+    expect(got.step).toBe(5);
+    expect(got.reason).toMatch(/expects 13 columns \(B\.\.N\)/);
+    expect(got.reason).toMatch(/spans 12 \(B\.\.M\)/);
+  });
+
+  test("the real 13-column shape passes where the 12-column one fails", () => {
+    // The pair is the point: same tab, same fixture builder, one column apart.
+    expect(locateTrackerTable(thGrid(), TH).ok).toBe(true);
+    expect(locateTrackerTable(thGridLegacy12Col(), TH).ok).toBe(false);
   });
 
   test("each tab is rejected against the OTHER tab's layout", () => {
@@ -327,18 +354,32 @@ describe("7. layout invariants", () => {
     }
   });
 
-  test("CBH has 14 columns, 3Hills 12 — and only CBH has Total Leads", () => {
+  test("CBH has 14 columns, 3Hills 13 — Total Leads is the ONLY difference", () => {
     expect(CBH.expectedHeader).toHaveLength(14);
-    expect(TH.expectedHeader).toHaveLength(12);
+    expect(TH.expectedHeader).toHaveLength(13);
     expect(CBH.expectedHeader).toContain("total leads");
     expect(TH.expectedHeader).not.toContain("total leads");
+    // 3Hills is CBH minus Total Leads and nothing else — so removing that one
+    // column from CBH's header must yield 3Hills', apart from the property-named
+    // enquiry column.
+    const cbhWithoutTotalLeads = CBH.expectedHeader
+      .filter((h) => h !== "total leads")
+      .map((h) => (h === "cbh enquiry" ? "enquiry" : h));
+    const th = TH.expectedHeader.map((h) => (h === "3hills enquiry" ? "enquiry" : h));
+    expect(th).toEqual(cbhWithoutTotalLeads);
   });
 
-  test("3Hills combines Low Budget and Less Room; CBH splits them", () => {
-    expect(CBH.expectedHeader).toContain("low budget");
-    expect(CBH.expectedHeader).toContain("less room");
-    expect(TH.expectedHeader).toContain("low budget less room");
-    expect(TH.expectedHeader).not.toContain("low budget");
+  test("BOTH tabs keep Low Budget and Less Room as separate columns", () => {
+    // 3Hills was believed to combine them. It does not. Nothing maps to a
+    // combined field any more, on either tab.
+    for (const layout of [CBH, TH]) {
+      expect(layout.expectedHeader).toContain("low budget");
+      expect(layout.expectedHeader).toContain("less room");
+      expect(layout.expectedHeader).not.toContain("low budget less room");
+      expect(Object.values(layout.columns)).toContain("lowBudget");
+      expect(Object.values(layout.columns)).toContain("lessRoom");
+      expect(Object.values(layout.columns)).not.toContain("lowBudgetLessRoom");
+    }
   });
 });
 
