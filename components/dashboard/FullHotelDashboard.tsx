@@ -89,6 +89,8 @@ import {
 import { AvailableFundsCard } from "@/components/dashboard/funds/AvailableFundsCard";
 import { PeriodSelector } from "@/components/dashboard/PeriodSelector";
 import { PropertySelector, propertyLabel, type PropertyOption } from "@/components/dashboard/PropertySelector";
+import { MetaPropertyBreakdown } from "@/components/dashboard/MetaPropertyBreakdown";
+import { loadMetaPropertyBreakdown } from "@/lib/metrics/meta-property-breakdown";
 import { DemandComposition } from "@/components/dashboard/DemandComposition";
 import { ContactReport } from "@/components/dashboard/contact/ContactReport";
 import { classifyVisit, classifyConversion, UNASSIGNED_SEGMENT, type SegmentRule } from "@/lib/segments";
@@ -633,6 +635,13 @@ async function renderDashboard({
           ? await loadGooglePaidPerformance(hotelId, range, showAdSpend)
           : null;
 
+    // Meta only: the same campaigns, grouped by the property they sell. Attributed
+    // from the campaign NAME, which is the only property signal a campaign carries.
+    const metaByProperty =
+      source === "meta_ads"
+        ? await loadMetaPropertyBreakdown(hotelId, range, showAdSpend)
+        : null;
+
     // Socials leads with the format comparison, then ChannelView's per-post
     // detail below it — same shape as the paid views.
     const social = source === "socials" ? await loadSocialPerformance(hotelId, range) : null;
@@ -655,7 +664,7 @@ async function renderDashboard({
           selectedSegmentId={selectedSegmentId}
         />
         <SourceSelector current={source} />
-        {selectedSegmentId && (
+        {selectedSegmentId && source !== "meta_ads" && (
           <GroupScopeNote
             scopeLabel={scopeLabel}
             what={
@@ -664,6 +673,7 @@ async function renderDashboard({
             }
           />
         )}
+        {metaByProperty && <MetaPropertyBreakdown data={metaByProperty} />}
         {paid && <PaidPerformanceTable data={paid} />}
         {social && <SocialContentTable data={social} />}
         <div className="space-y-1">
