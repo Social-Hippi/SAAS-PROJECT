@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 
+import { readCode } from "./helpers/read-code";
+
 import {
   UNASSIGNED_SEGMENT,
   classifyConversion,
@@ -298,5 +300,59 @@ describe("6. demand rhythm", () => {
     ]);
     expect(buckets[1]).toBe(11);
     expect(buckets[0]).toBeNull(); // no Sunday row: unrecorded, not zero
+  });
+});
+
+// ── 7 · The property control survives a change of source ────────────────────
+
+describe("7. every source view keeps the scope controls", () => {
+  const DASH = readCode("components/dashboard/FullHotelDashboard.tsx");
+
+  // Reported from a real report: select Coffeeberry Hills, switch source to
+  // Website, and the property control is simply gone — no way to see which
+  // property is selected, no way to change it, no way back but the browser's own
+  // button. The Website branch rendered period + source; the channel deep-dives
+  // rendered source alone.
+  //
+  // The URL kept `property` through a source change (SourceSelector copies the
+  // whole query string), so the selection was live but invisible — and the
+  // Website view's period selector did not preserve it, so touching a date chip
+  // discarded it outright. Hidden or dropped, depending on what you clicked next.
+
+  test("every view that renders the source dropdown also renders the scope controls", () => {
+    // Counting rather than naming the branches: a NEW early-return view added
+    // later has to satisfy this too, which is the whole point.
+    const views = (DASH.match(/<SourceSelector current=/g) ?? []).length;
+    const scopes = (DASH.match(/<ScopeControls/g) ?? []).length;
+    expect(views, "expected the summary, website and channel views").toBeGreaterThanOrEqual(3);
+    expect(scopes, "a view renders the source dropdown without the scope controls").toBe(views);
+  });
+
+  test("period and property are one block, so a view cannot render half of them", () => {
+    const at = DASH.indexOf("function ScopeControls");
+    expect(at, "expected a single ScopeControls definition").toBeGreaterThan(-1);
+    const body = DASH.slice(at, at + 1400);
+    expect(body).toContain("<PeriodSelector");
+    expect(body).toContain("<PropertySelector");
+  });
+
+  test("changing the date keeps the property; changing the property does not carry a stale one", () => {
+    const at = DASH.indexOf("function ScopeControls");
+    const body = DASH.slice(at, at + 1400);
+    // The period control must carry `property` through, or a date chip drops it.
+    expect(body).toMatch(/<PeriodSelector[\s\S]{0,200}property: propertyParam/);
+    // PropertySelector must NOT: it is the control that SETS the value, and
+    // carrying the old one would pin the reader to their current selection.
+    const propSel = body.slice(body.indexOf("<PropertySelector"));
+    expect(propSel).not.toContain("property: propertyParam");
+  });
+
+  test("a selection the panels cannot honour is disclosed, not left implied", () => {
+    // The property chip stays lit on these views, so a reader has every reason
+    // to read the figures below as that property's. GA4 stores site totals, and
+    // campaign spend carries no trustworthy property signal.
+    expect(DASH).toContain("function GroupScopeNote");
+    const notes = (DASH.match(/<GroupScopeNote/g) ?? []).length;
+    expect(notes, "expected the website and channel views to disclose").toBeGreaterThanOrEqual(2);
   });
 });
