@@ -99,73 +99,56 @@ function CampaignRows({ rows, spendVisible }: { rows: MetaCampaignBreakdownRow[]
   );
 }
 
-/**
- * What the property's own team wrote down, from its operations workbook.
- *
- * Kept in its own block, visually apart from the campaign figures, because it is
- * NOT campaign data. The sheet records a WhatsApp lead, a confirmation and a
- * room night; it does not record which campaign produced any of them. Putting
- * these in the campaign table would imply an attribution nobody measured.
- *
- * Shown beside the Meta figures so the two can be compared — Meta counts
- * conversations its ads started, the property counts every WhatsApp lead however
- * it arrived. The gap is real information, not a discrepancy to reconcile away.
- */
-function RecordedBlock({ recorded, propertyName }: { recorded: PropertyRecorded; propertyName: string }) {
-  const partial = recorded.daysRecorded < recorded.daysInPeriod;
-  const items: [string, string][] = [
-    ["WhatsApp leads", num(recorded.whatsappLeads)],
-    ["WhatsApp confirmed", num(recorded.whatsappConfirmed)],
-    ["Room nights", num(recorded.roomNights)],
-  ];
-  return (
-    <div className="border-t border-line bg-elevated/40 px-4 py-3">
-      <p className="text-[10px] font-medium uppercase tracking-wide text-ink-tertiary">
-        Recorded by {propertyName}
-      </p>
-      <div className="mt-2 flex flex-wrap gap-x-8 gap-y-2">
-        {items.map(([label, value]) => (
-          <div key={label}>
-            <p className="text-xs text-ink-tertiary">{label}</p>
-            <p className="text-sm font-semibold tabular-nums text-ink">{value}</p>
-          </div>
-        ))}
-      </div>
-      <p className="mt-2 text-xs text-ink-tertiary">
-        From the property&apos;s own operations sheet. It records these outcomes but not
-        which campaign produced them, so they are <span className="font-medium">not</span>{" "}
-        attributable to any campaign above and are never divided between them.
-        {partial && (
-          <>
-            {" "}
-            Filled in on {recorded.daysRecorded} of {recorded.daysInPeriod} days — the
-            missing days are unrecorded, not zero.
-          </>
-        )}
-      </p>
-    </div>
-  );
-}
+type Tile = { label: string; value: string; note?: string };
 
-function TotalsStrip({ totals, spendVisible }: { totals: MetaPropertyGroup["totals"]; spendVisible: boolean }) {
-  const items: [string, string][] = [
-    ["Campaigns", String(totals.campaigns)],
-    ["Clicks", num(totals.clicks)],
-    ["Messages", num(totals.messages)],
-    ["Calls", num(totals.calls)],
-    ["Leads", num(totals.leads)],
-    ["Contacts", num(totals.contacts)],
+function TotalsStrip({
+  totals,
+  recorded,
+  spendVisible,
+}: {
+  totals: MetaPropertyGroup["totals"];
+  recorded: PropertyRecorded | null;
+  spendVisible: boolean;
+}) {
+  const items: Tile[] = [
+    { label: "Campaigns", value: String(totals.campaigns) },
+    { label: "Clicks", value: num(totals.clicks) },
+    { label: "Messages", value: num(totals.messages) },
+    { label: "Calls", value: num(totals.calls) },
+    { label: "Leads", value: num(totals.leads) },
+    { label: "Contacts", value: num(totals.contacts) },
   ];
   if (spendVisible) {
-    items.push(["Cost / contact", money(totals.costPerContact)]);
-    items.push(["Total spent", money(totals.spend)]);
+    items.push({ label: "Cost / contact", value: money(totals.costPerContact) });
+    items.push({ label: "Total spent", value: money(totals.spend) });
   }
+
+  // WhatsApp confirmed comes from the property's OWN operations sheet, which
+  // records the outcome but not which campaign produced it. It sits in the same
+  // strip for legibility, so the note is what stops it reading as a campaign
+  // result — the whole strip above it is one. Two facts, kept to one line:
+  // where the number came from, and how much of the period it covers.
+  if (recorded && recorded.whatsappConfirmed != null) {
+    const partial = recorded.daysRecorded < recorded.daysInPeriod;
+    items.push({
+      label: "WhatsApp confirmed",
+      value: num(recorded.whatsappConfirmed),
+      note: partial
+        ? `property-recorded · ${recorded.daysRecorded} of ${recorded.daysInPeriod} days`
+        : "property-recorded",
+    });
+  }
+
+  // auto-fit rather than a fixed column count: the tile count changes with the
+  // spend gate and with whether a property keeps a sheet, and a fixed grid
+  // leaves a dead cell whenever it does.
   return (
-    <div className="grid grid-cols-2 gap-px border-t border-line bg-line sm:grid-cols-4 lg:grid-cols-8">
-      {items.map(([label, value]) => (
-        <div key={label} className="bg-card px-3 py-2.5">
-          <p className="text-[10px] font-medium uppercase tracking-wide text-ink-tertiary">{label}</p>
-          <p className="mt-0.5 text-sm font-semibold tabular-nums text-ink">{value}</p>
+    <div className="grid grid-cols-2 gap-px border-t border-line bg-line [grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr))]">
+      {items.map((t) => (
+        <div key={t.label} className="bg-card px-3 py-2.5">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-ink-tertiary">{t.label}</p>
+          <p className="mt-0.5 text-sm font-semibold tabular-nums text-ink">{t.value}</p>
+          {t.note && <p className="mt-0.5 text-[10px] text-ink-disabled">{t.note}</p>}
         </div>
       ))}
     </div>
@@ -317,8 +300,7 @@ export function MetaPropertyBreakdown({ data }: { data: MetaPropertyBreakdown })
             </p>
           </div>
           <CampaignRows rows={g.campaigns} spendVisible={data.spendVisible} />
-          <TotalsStrip totals={g.totals} spendVisible={data.spendVisible} />
-          {g.recorded && <RecordedBlock recorded={g.recorded} propertyName={g.propertyName} />}
+          <TotalsStrip totals={g.totals} recorded={g.recorded} spendVisible={data.spendVisible} />
         </section>
       ))}
 
