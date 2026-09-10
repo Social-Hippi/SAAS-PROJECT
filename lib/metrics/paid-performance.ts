@@ -157,6 +157,12 @@ export async function loadMetaPaidPerformance(
         archived: false,
         date: { gte: range.since, lte: range.until },
       },
+      // ORDER MATTERS: the aggregation below takes the last name it sees as the
+      // campaign's current one. Without this that was whichever row Postgres
+      // happened to return last, so after a rename the report could show either
+      // the old name or the new one, unpredictably — and the property split
+      // reads that name.
+      orderBy: { date: "asc" },
       select: {
         metaCampaignId: true,
         campaignName: true,
@@ -188,13 +194,35 @@ export async function loadMetaPaidPerformance(
     verifiedByName.set(key, cur);
   }
 
+  /** Sum the outcomes found under each of a campaign's names; null if none. */
+  const mergeVerified = (
+    found: ({ bookings: number; revenue: number } | undefined)[],
+  ): { bookings: number; revenue: number } | null => {
+    const present = found.filter((v): v is { bookings: number; revenue: number } => v != null);
+    if (present.length === 0) return null;
+    return {
+      bookings: present.reduce((t, v) => t + v.bookings, 0),
+      revenue: present.reduce((t, v) => t + v.revenue, 0),
+    };
+  };
+
   const agg = new Map<
     string,
-    { name: string; objective: string | null; spend: number; impressions: number; clicks: number; conversions: number }
+    {
+      name: string;
+      /** EVERY name this campaign had in the window, oldest first. */
+      names: string[];
+      objective: string | null;
+      spend: number;
+      impressions: number;
+      clicks: number;
+      conversions: number;
+    }
   >();
   for (const s of snaps) {
     const e = agg.get(s.metaCampaignId) ?? {
       name: s.campaignName,
+      names: [],
       objective: s.objective,
       spend: 0,
       impressions: 0,
@@ -205,7 +233,8 @@ export async function loadMetaPaidPerformance(
     e.impressions += s.impressions;
     e.clicks += s.clicks;
     e.conversions += s.conversions;
-    e.name = s.campaignName; // latest name wins on a rename
+    e.name = s.campaignName; // latest name wins on a rename — see orderBy above
+    if (!e.names.includes(s.campaignName)) e.names.push(s.campaignName);
     // Any non-null objective in the window wins: older rows predate the column.
     if (s.objective) e.objective = s.objective;
     agg.set(s.metaCampaignId, e);
@@ -221,7 +250,10 @@ export async function loadMetaPaidPerformance(
         clicks: e.clicks,
         spend: e.spend,
         conversions: e.conversions,
-        verified: verifiedByName.get(e.name.trim().toLowerCase()) ?? null,
+        // Bookings join on campaign NAME (the utm_campaign dimension), so a
+        // rename mid-window orphans every booking recorded under the old name
+        // and silently shows 0. Try every name the campaign had.
+        verified: mergeVerified(e.names.map((n) => verifiedByName.get(n.trim().toLowerCase()))),
         showAdSpend,
       }),
     )
@@ -256,6 +288,7 @@ export async function loadGooglePaidPerformance(
     }),
     agencyScoped(prisma.googleAdsCampaignSnapshot).findMany({
       where: { hotelClientId, date: { gte: range.since, lte: range.until } },
+      orderBy: { date: "asc" }, // latest name wins on a rename; see the Meta note above
       select: {
         campaignId: true,
         campaignName: true,

@@ -148,3 +148,39 @@ describe("5. the patterns are data, and are seeded", () => {
     expect(seed).toMatch(/UPDATE_RULES[\s\S]{0,400}campaignNamePatterns: seg\.campaignNamePatterns/);
   });
 });
+
+// ── 6 · Surviving a rename ─────────────────────────────────────────────────
+
+describe("6. a campaign renamed mid-window stays one campaign", () => {
+  const PAID = readCode("lib/metrics/paid-performance.ts");
+
+  // Real event: the campaigns were renamed in Meta to carry {CBH} / {THC}. The
+  // sync re-writes names only for the days it re-syncs, so one campaign can hold
+  // an old name on older days and a new name on recent ones.
+
+  test("rows are aggregated by campaign ID, not by name", () => {
+    // Grouping by name would split a renamed campaign into two rows and halve
+    // its spend across them.
+    expect(PAID).toContain("agg.get(s.metaCampaignId)");
+    expect(PAID).toContain("agg.get(s.campaignId)");
+  });
+
+  test("both loaders order by date, so the LATEST name genuinely wins", () => {
+    // The code said "latest name wins on a rename" while the query had no
+    // ordering, so the winner was whichever row Postgres returned last.
+    const metaAt = PAID.indexOf("prisma.adCampaignSnapshot");
+    const googleAt = PAID.indexOf("prisma.googleAdsCampaignSnapshot");
+    expect(metaAt).toBeGreaterThan(-1);
+    expect(googleAt).toBeGreaterThan(-1);
+    expect(PAID.slice(metaAt, metaAt + 700)).toMatch(/orderBy: \{ date: "asc" \}/);
+    expect(PAID.slice(googleAt, googleAt + 700)).toMatch(/orderBy: \{ date: "asc" \}/);
+  });
+
+  test("bookings recorded under the OLD name are not orphaned", () => {
+    // Verified bookings join on campaign name (the utm_campaign dimension). A
+    // rename would leave every earlier booking unmatched and show 0.
+    expect(PAID).toContain("names: string[]");
+    expect(PAID).toContain("mergeVerified");
+    expect(PAID).toMatch(/mergeVerified\(e\.names\.map/);
+  });
+});
