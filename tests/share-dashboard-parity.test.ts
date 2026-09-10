@@ -206,6 +206,29 @@ describe("3. showAdSpendToHotel still governs the public link", () => {
     expect(TABLE).toMatch(/\{showRoas && \([\s\S]{0,200}r\.trueRoas/);
   });
 
+  test("the GA4 traffic card's Cost tile is gated too", () => {
+    // Found while gating that block by source: loadGa4Dashboard takes no spend
+    // flag, and nothing in lib/share-spend-gate.ts touches ga4.ads — so this
+    // panel rendered Google Ads COST to any share reader regardless of
+    // showAdSpendToHotel. It is server-rendered, so the figure was in the HTML.
+    //
+    // Only the Cost tile is gated. Clicks, impressions, CTR and conversions are
+    // performance rather than spend, and none of them lets spend be divided back
+    // out — there is no CPC or CPA column here to recover it from.
+    const GA4 = readCode("components/dashboard/Ga4WebsiteTraffic.tsx");
+    expect(GA4).toMatch(/showAdSpend: boolean;/);
+    expect(GA4).not.toMatch(/showAdSpend\?: boolean/);
+    expect(GA4).not.toMatch(/showAdSpend = true/);
+    expect(GA4).toMatch(/\{showAdSpend && <Kpi label="Cost"/);
+
+    const calls = [...DASH.matchAll(/<Ga4WebsiteTraffic[\s\S]*?\/>/g)].map((m) => m[0]);
+    expect(calls.length, "expected Ga4WebsiteTraffic call sites").toBeGreaterThan(0);
+    for (const call of calls) {
+      // The real flag, never a bare `showAdSpend` (which would mean true).
+      expect(call).toContain("showAdSpend={showAdSpend}");
+    }
+  });
+
   test("the narrated summary is regenerated, not post-stripped", () => {
     // Its output is prose ("Meta Ads: spent X at Yx ROAS"), so zeroing a field
     // afterwards would leave the sentence intact. It must be told up front.
@@ -250,7 +273,7 @@ describe("4. the GA4 geography + device row is hidden from share readers", () =>
   test("every call site passes the real viewer, not a literal", () => {
     // `viewerIsAgency={true}` would defeat the whole thing, because the share
     // page renders this same shared dashboard.
-    const calls = [...DASH.matchAll(/<Ga4WebsiteTraffic[^/]*\/>/g)].map((m) => m[0]);
+    const calls = [...DASH.matchAll(/<Ga4WebsiteTraffic[\s\S]*?\/>/g)].map((m) => m[0]);
     expect(calls.length, "expected Ga4WebsiteTraffic call sites").toBeGreaterThan(0);
     for (const call of calls) {
       expect(call).toContain("viewerIsAgency={isAgencyViewer}");

@@ -482,7 +482,14 @@ async function renderDashboard({
           preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam }}
         />
         <SourceSelector current={source} />
-        <Ga4WebsiteTraffic data={ga4} manageHref={manageHref} viewerIsAgency={isAgencyViewer} />
+        <Ga4WebsiteTraffic
+          data={ga4}
+          manageHref={manageHref}
+          viewerIsAgency={isAgencyViewer}
+          // ?source=google_ads is its own view; this one is about the website.
+          showGoogleAds={false}
+          showAdSpend={showAdSpend}
+        />
         <CustomerIntentPanel
           comparisons={websiteSummary.comparisons}
           lastIntent={websiteSummary.lastIntent}
@@ -2693,7 +2700,13 @@ async function renderDashboard({
       </SectionCard>
 
       {/* Section 6 — Website Traffic (Google Analytics 4, OAuth) */}
-      <Ga4WebsiteTraffic data={ga4Dashboard} manageHref={manageHref} viewerIsAgency={isAgencyViewer} />
+      <Ga4WebsiteTraffic
+        data={ga4Dashboard}
+        manageHref={manageHref}
+        viewerIsAgency={isAgencyViewer}
+        showGoogleAds
+        showAdSpend={showAdSpend}
+      />
 
       {/* Contact Agency — bottom of the dashboard. Shows the agency that OWNS
           this hotel. The edit link is agency-admin only; a hotel reading its own
