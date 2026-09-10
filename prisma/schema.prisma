@@ -195,6 +195,7 @@ model Agency {
   budgetAlerts               BudgetAlert[]
   ga4Connections             Ga4Connection[]
   ga4Snapshots               Ga4Snapshot[]
+  ga4PropertySnapshots       Ga4PropertySnapshot[]
   googleAdsConnections       GoogleAdsConnection[]
   googleAdsCampaignSnapshots GoogleAdsCampaignSnapshot[]
   hotelInvites               HotelInvite[]
@@ -358,6 +359,7 @@ model HotelClient {
   budgetAlerts               BudgetAlert[]
   ga4Connection              Ga4Connection?
   ga4Snapshots               Ga4Snapshot[]
+  ga4PropertySnapshots       Ga4PropertySnapshot[]
   googleAdsConnection        GoogleAdsConnection?
   googleAdsCampaignSnapshots GoogleAdsCampaignSnapshot[]
   visitorIdentities          VisitorIdentity[]
@@ -1344,9 +1346,9 @@ model AdAccountBalance {
 
   /// Spendable funds, in minor units. NULL means "this account's funding model
   /// does not expose one" - never 0.
-  availableMinor Int?
+  availableMinor   Int?
   /// Outstanding amount due, as Meta reports `balance`.
-  amountDueMinor Int?
+  amountDueMinor   Int?
   /// Lifetime spend and the account's spend cap, when set.
   amountSpentMinor Int?
   spendCapMinor    Int?
@@ -1383,20 +1385,20 @@ model LowBalanceReminder {
 
   /// Where to send it. Set by whoever configures the reminder, which on the
   /// share report is the hotel themselves.
-  email     String
+  email          String
   /// Notify when available funds fall BELOW this, in minor units.
   thresholdMinor Int
-  currency       String @default("INR")
+  currency       String  @default("INR")
   enabled        Boolean @default(true)
 
   /// Observability the UI shows back: did the job run, and did it ever fire?
-  lastCheckedAt   DateTime?
-  lastTriggeredAt DateTime?
+  lastCheckedAt               DateTime?
+  lastTriggeredAt             DateTime?
   /// Balance at the moment it last fired, so the email can be reconstructed.
   lastTriggeredAtBalanceMinor Int?
   /// Re-arms the reminder: once fired it stays quiet until funds go back above
   /// the threshold, so a low account does not email every single day.
-  triggered Boolean @default(false)
+  triggered                   Boolean   @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1747,6 +1749,80 @@ model Ga4Snapshot {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GA4 PER-PROPERTY DAILY SNAPSHOT.
+//
+// Ga4Snapshot holds SITE totals. A group like Aster runs two properties on one
+// website, so "sessions" there answers a question nobody asked once a property is
+// selected — and the site totals cannot be cut afterwards, because they arrive
+// pre-aggregated with no rows left to filter.
+//
+// So the split is made at SYNC time, by asking GA4 the same questions again with
+// a dimensionFilter on the session's LANDING PAGE. GA4 does its own
+// de-duplication, which is why unique visitors and bounce rate are trustworthy
+// here — neither can be obtained by summing anything we could store.
+//
+// A SESSION BELONGS TO THE PROPERTY IT LANDED ON. Every session has exactly one
+// landing page, so the buckets partition cleanly: they never double-count and
+// they sum to the site total. A visitor who arrives on the home page and then
+// reads Coffeeberry Hills pages counts as SHARED, not as Coffeeberry Hills —
+// which makes per-property figures read lower than a first guess, and is the
+// honest answer rather than the flattering one.
+//
+// segmentKey is a PropertySegment id, or the literal "unassigned" for shared
+// pages (home, blog, anything matching no property's prefixes). Unassigned is a
+// first-class bucket, never distributed across properties by ratio — the same
+// rule lib/segments.ts enforces for HotelTrack's own tracking.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Ga4PropertySnapshot {
+  id            String   @id @default(cuid())
+  hotelClientId String
+  agencyId      String
+  date          DateTime @db.Date
+  /// A PropertySegment id, or "unassigned" for shared pages.
+  segmentKey    String
+
+  // Traffic + engagement (R1, filtered)
+  sessions                  Int   @default(0)
+  users                     Int   @default(0)
+  newUsers                  Int   @default(0)
+  pageViews                 Int   @default(0)
+  bounceRate                Float @default(0) // 0..1
+  avgSessionDuration        Int   @default(0) // seconds
+  engagedSessions           Int   @default(0)
+  engagementRate            Float @default(0) // 0..1
+  userEngagementDuration    Int   @default(0) // seconds (total)
+  screenPageViewsPerSession Float @default(0)
+  keyEvents                 Int   @default(0)
+
+  // Channel split (R2, filtered)
+  organicSessions  Int @default(0)
+  paidSessions     Int @default(0)
+  socialSessions   Int @default(0)
+  directSessions   Int @default(0)
+  referralSessions Int @default(0)
+
+  // Device (filtered)
+  mobileSessions  Int @default(0)
+  desktopSessions Int @default(0)
+  tabletSessions  Int @default(0)
+
+  /// Top-N JSON lists, same shapes as Ga4Snapshot's.
+  topCountries Json?
+  topCities    Json?
+  topSources   Json?
+  topCampaigns Json?
+  topPages     Json?
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  @@unique([hotelClientId, segmentKey, date])
+  @@index([hotelClientId, date])
+  @@index([agencyId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Google Ads (googleads.googleapis.com, GAQL). SEPARATE from GA4: different API,
 // the `adwords` OAuth scope, and a platform developer token. Per-hotel + OAuth,
 // modeled exactly like Ga4Connection. Tokens are AES-256-GCM ciphertext.
@@ -1797,13 +1873,13 @@ model GoogleAdsConnection {
 // conversions/conversionsValue come from the account's own Google conversion
 // tracking. The dashboard maps these into the same PaidChannelView shape as Meta.
 model GoogleAdsCampaignSnapshot {
-  id               String   @id @default(cuid())
-  agencyId         String
-  hotelClientId    String
-  customerId       String // the Ads account these rows came from
-  campaignId       String
-  campaignName     String
-  status           String // ENABLED | PAUSED | REMOVED (campaign.status)
+  id                     String   @id @default(cuid())
+  agencyId               String
+  hotelClientId          String
+  customerId             String // the Ads account these rows came from
+  campaignId             String
+  campaignName           String
+  status                 String // ENABLED | PAUSED | REMOVED (campaign.status)
   /// campaign.advertising_channel_type — SEARCH / PERFORMANCE_MAX / DISPLAY /
   /// VIDEO / SHOPPING / DEMAND_GEN …
   ///
@@ -1813,12 +1889,12 @@ model GoogleAdsCampaignSnapshot {
   /// is labelled as the channel it is rather than being dressed up as an
   /// objective. Nullable for rows synced before this column existed.
   advertisingChannelType String?
-  date             DateTime @db.Date
-  spend            Decimal  @db.Decimal(12, 2) // cost_micros / 1_000_000
-  impressions      Int
-  clicks           Int
-  conversions      Float // Google conversions can be fractional
-  conversionsValue Decimal  @db.Decimal(12, 2)
+  date                   DateTime @db.Date
+  spend                  Decimal  @db.Decimal(12, 2) // cost_micros / 1_000_000
+  impressions            Int
+  clicks                 Int
+  conversions            Float // Google conversions can be fractional
+  conversionsValue       Decimal  @db.Decimal(12, 2)
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -2163,7 +2239,6 @@ model BookingJourneyMatch {
   @@index([trackingEventId])
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // PROPERTY SEGMENTS — more than one property under one HotelClient.
 //
@@ -2260,8 +2335,8 @@ model ManualLeadDaily {
   totalCallsReceived  Int?
 
   /// Hand-entered derived values. Audited, never displayed. See lib/ops-tracker.
-  storedTotalLeads      Int?
-  storedConversionRate  Decimal? @db.Decimal(7, 4)
+  storedTotalLeads     Int?
+  storedConversionRate Decimal? @db.Decimal(7, 4)
 
   /// The raw row exactly as received, so a disputed figure can be traced.
   sourceRow     Json

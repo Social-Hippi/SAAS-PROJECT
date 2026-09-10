@@ -111,6 +111,26 @@ function MiniTrend({ points }: { points: Ga4Dashboard["trend"] }) {
   );
 }
 
+/**
+ * A section that exists for the site but was never asked for per property.
+ *
+ * The alternative is an empty table under a lit property chip, which reads as
+ * "this property had none" — a claim, and a false one. These reports are not
+ * filterable by landing page in a way that would keep them honest, so they are
+ * not synced per property, and saying that is the only accurate rendering.
+ */
+function NotPerProperty({ what }: { what: string }) {
+  return (
+    <div className="p-6">
+      <p className="text-sm text-ink-tertiary">
+        Not available for a single property. {what} Switch to{" "}
+        <span className="font-medium text-ink-secondary">All properties</span> to see it
+        for the whole site.
+      </p>
+    </div>
+  );
+}
+
 export function Ga4WebsiteTraffic({
   data,
   manageHref,
@@ -178,6 +198,32 @@ export function Ga4WebsiteTraffic({
       <SectionCard title="Website Traffic" subtitle="From Google Analytics 4.">
         <div className="p-8 text-center text-sm text-ink-tertiary">
           GA4 is connected — run a sync on the Integrations page to pull the last 30 days.
+        </div>
+      </SectionCard>
+    );
+  }
+
+  // A property is selected but nothing has been measured for it in this window.
+  // Rendering the card would print a confident 0 into every tile — which reads
+  // as "this property had no visitors", a claim nobody has grounds to make.
+  if (data.propertyScoped && data.propertyDataMissing) {
+    return (
+      <SectionCard title="Website Traffic" subtitle="Google Analytics 4">
+        <div className="p-8 text-center">
+          <p className="text-sm text-ink-tertiary">
+            Per-property website figures are not available for this period.
+          </p>
+          <p className="mx-auto mt-2 max-w-md text-xs text-ink-disabled">
+            The split is recorded from the first sync after it was switched on, so earlier
+            periods stay empty until they are backfilled. This is not a reading of zero
+            visits.
+          </p>
+          {manageHref && (
+            <p className="mt-3 text-xs text-ink-disabled">
+              Choose <span className="font-medium">All properties</span> to see the whole
+              site for this period.
+            </p>
+          )}
         </div>
       </SectionCard>
     );
@@ -354,11 +400,15 @@ export function Ga4WebsiteTraffic({
 
       {/* ── Landing page × source (Report 2) ──────────────────────────────── */}
       <SectionCard title="Landing pages × source" subtitle="Which pages visitors land on, from which source, and whether they convert.">
+        {data.propertyScoped ? (
+          <NotPerProperty what="The landing page is what assigns a visit to a property in the first place, so breaking it down again inside one property would just restate the filter." />
+        ) : (
         <DataTable
           head={["Landing page", "Source / Medium", "Sessions", "Conversions"]}
           align={[false, false, true, true]}
           rows={data.landingBySource.map((l) => [l.landing, srcMedium(l.source, l.medium), formatNumber(l.sessions), formatNumber(l.keyEvents)])}
         />
+        )}
       </SectionCard>
 
       {/* ── Top pages (Report 3) ──────────────────────────────────────────── */}
@@ -378,6 +428,9 @@ export function Ga4WebsiteTraffic({
       {/* ── New vs returning (Report 5) + Events/ecommerce (Report 6) ─────── */}
       <div className="grid gap-6 md:grid-cols-2">
         <SectionCard title="New vs returning" subtitle={windowSub}>
+          {data.propertyScoped ? (
+            <NotPerProperty what="New and returning are counted per visitor across the whole site, and a visitor is not new to one property and returning to another." />
+          ) : (
           <DataTable
             head={["Visitor type", "Users", "Sessions", "Conversions"]}
             align={[false, true, true, true]}
@@ -386,9 +439,14 @@ export function Ga4WebsiteTraffic({
               formatNumber(s.users), formatNumber(s.sessions), formatNumber(s.keyEvents),
             ])}
           />
+          )}
         </SectionCard>
 
         <SectionCard title="Events & conversions" subtitle="Top GA4 events by count.">
+          {data.propertyScoped ? (
+            <NotPerProperty what="GA4 records an event against the site, not against the page a visitor happened to arrive on." />
+          ) : (
+          <>
           {data.ecommerce && (
             <div className="grid grid-cols-2 gap-px border-b border-line bg-line">
               <Kpi label="Purchase revenue" value={formatCurrency(data.ecommerce.purchaseRevenue / 100)} />
@@ -400,6 +458,8 @@ export function Ga4WebsiteTraffic({
             align={[false, true, true]}
             rows={data.events.map((e) => [e.event, formatNumber(e.count), formatNumber(e.keyEvents)])}
           />
+          </>
+          )}
         </SectionCard>
       </div>
 
