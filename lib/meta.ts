@@ -467,13 +467,35 @@ export type DailyCampaignRow = {
    * so an unrecognised objective is stored faithfully rather than bucketed.
    */
   objective: string | null;
+  /** People reached, as distinct from impressions. */
+  reach: number;
+  /** Messaging conversations started — the "messages generated" figure. */
+  messagingStarted: number;
+  /** Lead-form and pixel leads. Never added to messagingStarted. */
+  leads: number;
+  /** Meta delivery rankings, or null while Meta still has too little data. */
+  qualityRanking: string | null;
+  engagementRateRanking: string | null;
+  conversionRateRanking: string | null;
 };
 
 type RawCampaignInsights = RawDailyInsights & {
   campaign_id?: string;
   campaign_name?: string;
   objective?: string;
+  quality_ranking?: string;
+  engagement_rate_ranking?: string;
+  conversion_rate_ranking?: string;
 };
+
+/** Meta withholds a ranking until an ad has enough impressions, and says so. */
+function ranking(v: string | undefined): string | null {
+  if (!v) return null;
+  const t = v.trim();
+  // "UNKNOWN" is Meta's "not enough data yet" — storing it as a value would put
+  // a rank-shaped word in a column that is meant to hold a rank.
+  return t === "" || t.toUpperCase() === "UNKNOWN" ? null : t;
+}
 
 /**
  * Daily insights at `level=campaign` — the campaign_name dimension is what
@@ -491,8 +513,12 @@ export async function getDailyCampaignInsights(
     // `objective` is a campaign-level insights field; it is simply absent from
     // the response for campaigns Meta does not report one for, which the
     // nullable column and read-time normalisation both handle.
+    // reach is a campaign-level field; the three *_ranking fields are Meta's
+    // delivery diagnostics. `actions` was already being fetched — the messaging
+    // and lead counts below were sitting in it unread.
     fields:
-      "campaign_id,campaign_name,objective,spend,impressions,clicks,actions,action_values",
+      "campaign_id,campaign_name,objective,spend,impressions,reach,clicks,actions,action_values," +
+      "quality_ranking,engagement_rate_ranking,conversion_rate_ranking",
     time_range: JSON.stringify({ since: range.since, until: range.until }),
     time_increment: "1",
     level: "campaign",
@@ -529,8 +555,51 @@ export async function getDailyCampaignInsights(
         clicks: Math.round(toNumber(row.clicks)),
         conversions: Math.round(pickFirst(actions, PIXEL_MATCHERS.purchase)),
         purchaseValue: pickFirst(values, PIXEL_MATCHERS.purchase),
+        reach: Math.round(toNumber(row.reach)),
+        messagingStarted: Math.round(pickFirst(actions, MESSAGING_MATCHERS)),
+        leads: Math.round(pickFirst(actions, LEAD_MATCHERS)),
+        qualityRanking: ranking(row.quality_ranking),
+        engagementRateRanking: ranking(row.engagement_rate_ranking),
+        conversionRateRanking: ranking(row.conversion_rate_ranking),
       };
     });
+}
+
+/**
+ * Campaign objectives, from the CAMPAIGNS endpoint rather than from insights.
+ *
+ * Insights is asked for `objective` and returns it as null for these accounts —
+ * verified against production, where every row including today's has a null
+ * objective while the campaigns themselves plainly have one. The objective is a
+ * property of the campaign, not of a day's delivery, so this is where it lives.
+ *
+ * Best-effort: a failure here leaves objectives unknown, which reads as "Not
+ * available" — it must never cost the day's spend and delivery figures.
+ */
+export async function getCampaignObjectives(
+  accessToken: string,
+  adAccountId: string,
+): Promise<Map<string, string>> {
+  const act = normalizeAccountId(adAccountId);
+  const out = new Map<string, string>();
+  let params: GraphParams = { fields: "id,objective", limit: "500" };
+
+  for (let page = 0; page < 20; page++) {
+    const res = await graphGet<{
+      data?: { id?: string; objective?: string }[];
+      paging?: { cursors?: { after?: string }; next?: string };
+    }>(`${act}/campaigns`, accessToken, params);
+
+    for (const c of res.data ?? []) {
+      if (c.id && c.objective) out.set(c.id, c.objective);
+    }
+
+    const after = res.paging?.cursors?.after;
+    if (!after || !res.paging?.next) break;
+    params = { ...params, after };
+  }
+
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -547,6 +616,29 @@ export type PixelEvents = {
 // Meta reports the same conversion under several action_type aliases. We take
 // the FIRST match in priority order (pixel-specific first) to avoid double
 // counting the generic + offsite variants of one event.
+/**
+ * Action types for a messaging conversation and for a lead.
+ *
+ * KEPT SEPARATE, and never added together. A WhatsApp conversation and a lead
+ * form submission are different events; a campaign running both would be
+ * double-counted by a single "results" figure, and "cost per result" would then
+ * be understated by exactly the overlap.
+ *
+ * Several spellings per row because Meta returns different action types by
+ * placement and by campaign age, and only one of them is ever present.
+ */
+export const MESSAGING_MATCHERS = [
+  "onsite_conversion.messaging_conversation_started_7d",
+  "onsite_conversion.total_messaging_connection",
+  "messaging_conversation_started_7d",
+];
+
+export const LEAD_MATCHERS = [
+  "onsite_conversion.lead_grouped",
+  "offsite_conversion.fb_pixel_lead",
+  "lead",
+];
+
 const PIXEL_MATCHERS: Record<keyof PixelEvents, string[]> = {
   purchase: ["offsite_conversion.fb_pixel_purchase", "purchase", "omni_purchase"],
   lead: ["offsite_conversion.fb_pixel_lead", "lead", "onsite_conversion.lead_grouped"],

@@ -60,6 +60,9 @@ const SEGMENTS = [
     // Resolved from the production path inventory over 90 days. Prefix matching
     // catches gallery pages, the ads landing page and #rooms anchors.
     pathPrefixes: ["/coffeeberry-hills"],
+    // Read off the live campaign names: "SH|CBH| Sales campaign",
+    // "ANG - Leads - WhatsApp - CBH - 2026", "CBH_LEADS_3D2N-…".
+    campaignNamePatterns: ["CBH", "Coffeeberry"],
     sourceSheetId: TRACKER_SPREADSHEET_ID,
     sourceTabName: "CBH",
     trackerLayout: "cbh_v1",
@@ -71,6 +74,10 @@ const SEGMENTS = [
     bookingHosts: [] as string[], // unknown — see Open Decisions
     // Both spellings appear in recorded traffic.
     pathPrefixes: ["/three-hills", "/3hills"],
+    // "ANG - Leads WhatsApp - 3 Hills - 2026" and "SH|THC | COUPLES | SALES-WA".
+    // THC is how the team abbreviates it; without that pattern that campaign's
+    // spend falls to Unassigned rather than to Three Hills.
+    campaignNamePatterns: ["3 Hills", "3Hills", "Three Hills", "THC"],
     sourceSheetId: TRACKER_SPREADSHEET_ID,
     sourceTabName: "3Hills",
     trackerLayout: "three_hills_v1",
@@ -107,6 +114,7 @@ async function main() {
         displayOrder: seg.displayOrder,
         pathPrefixes: seg.pathPrefixes,
         bookingHosts: seg.bookingHosts,
+        campaignNamePatterns: seg.campaignNamePatterns,
         sourceSheetId: seg.sourceSheetId,
         sourceTabName: seg.sourceTabName,
         trackerLayout: seg.trackerLayout,
@@ -120,7 +128,11 @@ async function main() {
         sourceTabName: seg.sourceTabName,
         trackerLayout: seg.trackerLayout,
         ...(UPDATE_RULES
-          ? { pathPrefixes: seg.pathPrefixes, bookingHosts: seg.bookingHosts }
+          ? {
+              pathPrefixes: seg.pathPrefixes,
+              bookingHosts: seg.bookingHosts,
+              campaignNamePatterns: seg.campaignNamePatterns,
+            }
           : {}),
       },
       select: { id: true, name: true, pathPrefixes: true, bookingHosts: true },
