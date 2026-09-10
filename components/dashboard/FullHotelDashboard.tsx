@@ -88,7 +88,7 @@ import {
 } from "@/lib/metrics/paid-performance";
 import { AvailableFundsCard } from "@/components/dashboard/funds/AvailableFundsCard";
 import { PeriodSelector } from "@/components/dashboard/PeriodSelector";
-import { PropertySelector, propertyLabel } from "@/components/dashboard/PropertySelector";
+import { PropertySelector, propertyLabel, type PropertyOption } from "@/components/dashboard/PropertySelector";
 import { DemandComposition } from "@/components/dashboard/DemandComposition";
 import { ContactReport } from "@/components/dashboard/contact/ContactReport";
 import { classifyVisit, classifyConversion, UNASSIGNED_SEGMENT, type SegmentRule } from "@/lib/segments";
@@ -290,6 +290,81 @@ export type FullHotelDashboardProps = {
  * through requireAgencyId(), which is also what rejects a super-admin caller who
  * has no single-agency context.
  */
+// ─────────────────────────────────────────────────────────────────────────────
+// THE TWO SCOPE CONTROLS TRAVEL TOGETHER.
+//
+// Period and property are what define WHAT the figures cover, so they are one
+// block rendered from one place and no view can render a subset of them. (Source
+// picks WHICH view, and each view places that dropdown where it reads best — on
+// Summary it sits below the narrative, deliberately.)
+//
+// It used to be assembled by hand in each branch, and every branch had a
+// different subset: the Website view had period + source but no PROPERTY, and
+// the channel deep-dives had source alone — no period, no property. Selecting
+// Coffeeberry Hills and then switching source left a reader on a page with no
+// way to see which property they were in, no way to change it, and no way back
+// except the browser's own button.
+//
+// The URL kept the selection through a source change — SourceSelector copies the
+// whole query string — but the Website view's period selector did NOT preserve
+// `property`, so clicking a date chip there silently discarded it. Hidden AND
+// dropped, depending on which control you touched next.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ScopeControls({
+  basePath,
+  range,
+  sourceParam,
+  channelParam,
+  postTypeParam,
+  propertyParam,
+  propertyOptions,
+  selectedSegmentId,
+}: {
+  basePath: string;
+  range: React.ComponentProps<typeof PeriodSelector>["range"];
+  sourceParam?: string;
+  channelParam?: string;
+  postTypeParam?: string;
+  propertyParam?: string;
+  propertyOptions: PropertyOption[];
+  selectedSegmentId: string | null;
+}) {
+  // `property` is preserved here and NOT in PropertySelector's own preserve:
+  // that control is the thing that sets it.
+  const carried = { source: sourceParam, channel: channelParam, postType: postTypeParam };
+  return (
+    <>
+      <PeriodSelector basePath={basePath} range={range} preserve={{ ...carried, property: propertyParam }} />
+      <PropertySelector
+        basePath={basePath}
+        options={propertyOptions}
+        current={selectedSegmentId}
+        preserve={carried}
+      />
+    </>
+  );
+}
+
+/**
+ * Says plainly that what follows is NOT cut by the selected property.
+ *
+ * Rendered only when a property is selected and the panels below cannot honour
+ * it. Silence would be worse than the caveat: the property chip stays lit, so a
+ * reader has every reason to believe the figures beneath it describe that
+ * property alone.
+ */
+function GroupScopeNote({ scopeLabel, what }: { scopeLabel: string; what: string }) {
+  return (
+    <div className="rounded-lg border-l-4 border-info bg-info/10 p-4 text-sm">
+      <p className="text-ink">
+        <span className="font-medium">Not split by property.</span> {what} The figures below
+        cover the whole group, not {scopeLabel} alone.
+      </p>
+    </div>
+  );
+}
+
 export async function FullHotelDashboard(props: FullHotelDashboardProps) {
   return props.viewer === "share"
     ? runWithAgencyScope(props.agencyId, () => renderDashboard(props))
@@ -476,12 +551,26 @@ async function renderDashboard({
     return (
       <div className="space-y-6">
         {headerSlot}
-        <PeriodSelector
+        <ScopeControls
           basePath={basePath}
           range={range}
-          preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam }}
+          sourceParam={sourceParam}
+          channelParam={channelParam}
+          postTypeParam={postTypeParam}
+          propertyParam={propertyParam}
+          propertyOptions={propertyOptions}
+          selectedSegmentId={selectedSegmentId}
         />
         <SourceSelector current={source} />
+        {selectedSegmentId && (
+          <GroupScopeNote
+            scopeLabel={scopeLabel}
+            what={
+              "Google Analytics measures the website as a whole, and the stored daily " +
+              "figures are site totals rather than per-section ones."
+            }
+          />
+        )}
         <Ga4WebsiteTraffic
           data={ga4}
           manageHref={manageHref}
@@ -517,9 +606,31 @@ async function renderDashboard({
 
     return (
       <div className="space-y-6">
-        {/* The source control travels WITH the deep-dive. A view you can enter
-            but not leave is the most common way a dashboard traps its reader. */}
+        {/* The controls travel WITH the deep-dive. A view you can enter but not
+            leave is the most common way a dashboard traps its reader — and this
+            one used to render the source dropdown alone, with no period control
+            and no property control at all. */}
+        {headerSlot}
+        <ScopeControls
+          basePath={basePath}
+          range={range}
+          sourceParam={sourceParam}
+          channelParam={channelParam}
+          postTypeParam={postTypeParam}
+          propertyParam={propertyParam}
+          propertyOptions={propertyOptions}
+          selectedSegmentId={selectedSegmentId}
+        />
         <SourceSelector current={source} />
+        {selectedSegmentId && (
+          <GroupScopeNote
+            scopeLabel={scopeLabel}
+            what={
+              "Spend and delivery are recorded per campaign, and a campaign carries no " +
+              "property signal that can be trusted — one campaign can drive to both."
+            }
+          />
+        )}
         {paid && <PaidPerformanceTable data={paid} />}
         {social && <SocialContentTable data={social} />}
         <div className="space-y-1">
@@ -1739,19 +1850,15 @@ async function renderDashboard({
 
       {/* ONE period control, rendered from the ONE resolved period. Both
           surfaces used to build their own chip list from the raw URL. */}
-      <PeriodSelector
+      <ScopeControls
         basePath={basePath}
         range={range}
-        preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam, property: propertyParam }}
-      />
-
-      {/* Which property. Rendered only for a group with more than one — a
-          single-property hotel has nothing to choose. */}
-      <PropertySelector
-        basePath={basePath}
-        options={propertyOptions}
-        current={selectedSegmentId}
-        preserve={{ source: sourceParam, channel: channelParam, postType: postTypeParam }}
+        sourceParam={sourceParam}
+        channelParam={channelParam}
+        postTypeParam={postTypeParam}
+        propertyParam={propertyParam}
+        propertyOptions={propertyOptions}
+        selectedSegmentId={selectedSegmentId}
       />
 
       {/* The period in words, and what to do about it. Templates with computed
