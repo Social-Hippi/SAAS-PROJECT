@@ -911,7 +911,7 @@ model AdSnapshot {
 // (AdSnapshot stays account-level; this adds the campaign_name dimension that
 // campaign↔booking attribution joins on).
 model AdCampaignSnapshot {
-  id             String    @id @default(cuid())
+  id             String   @id @default(cuid())
   agencyId       String
   hotelClientId  String
   // Which Meta ad account this campaign belongs to. Nullable for rows written
@@ -930,18 +930,37 @@ model AdCampaignSnapshot {
   /// Nullable because it is unknowable for every row synced before this column
   /// existed — those read "Not available", never a guessed category.
   objective      String?
-  date           DateTime  @db.Date
-  spend          Decimal   @db.Decimal(12, 2)
+  date           DateTime @db.Date
+  spend          Decimal  @db.Decimal(12, 2)
   impressions    Int
   clicks         Int
   // Meta-reported pixel purchases for this campaign-day.
   conversions    Int
   // Meta-reported purchase value for this campaign-day.
-  purchaseValue  Decimal   @db.Decimal(12, 2)
+  purchaseValue  Decimal  @db.Decimal(12, 2)
+
+  /// People reached — NOT impressions. Nullable because it is unknowable for
+  /// every row synced before this column existed; those read "not available"
+  /// rather than 0, which would claim nobody was reached.
+  reach                 Int?
+  /// Messaging conversations started (WhatsApp / Messenger / Instagram DM).
+  /// This is the "calls / messages generated" figure on the report: for a
+  /// WhatsApp lead campaign it is the actual conversation, not a click.
+  messagingStarted      Int?
+  /// Lead-form submissions and pixel leads. Kept SEPARATE from
+  /// messagingStarted: a form fill and a WhatsApp conversation are different
+  /// events, and adding them would double-count a campaign that produces both.
+  leads                 Int?
+  /// Meta's delivery rankings, verbatim ("ABOVE_AVERAGE", "AVERAGE",
+  /// "BELOW_AVERAGE_35" …). Meta withholds them until an ad has enough
+  /// impressions, so absent is normal and is not a bad score.
+  qualityRanking        String?
+  engagementRateRanking String?
+  conversionRateRanking String?
   // Account-change archiving (see lib/meta-archive.ts + AdSnapshot above).
-  archived       Boolean   @default(false)
-  archivedAt     DateTime?
-  archivedReason String?
+  archived              Boolean   @default(false)
+  archivedAt            DateTime?
+  archivedReason        String?
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
@@ -2263,9 +2282,18 @@ model PropertySegment {
   isActive      Boolean @default(true)
 
   /// Matched against a visit's page PATH. First match wins; order by displayOrder.
-  pathPrefixes String[] @default([])
+  pathPrefixes         String[] @default([])
   /// Matched against a conversion pageUrl HOST (the booking engine's own domain).
-  bookingHosts String[] @default([])
+  bookingHosts         String[] @default([])
+  /// Matched (case-insensitively, as a substring) against a Meta/Google CAMPAIGN
+  /// NAME, to attribute ad spend to a property.
+  ///
+  /// This is the ONLY signal a campaign carries about which property it sells —
+  /// there is no property field on a campaign — so it is an inference from a
+  /// naming convention, and it is held as DATA so it can be corrected by someone
+  /// who cannot deploy. A campaign matching nothing goes to a visible Unassigned
+  /// row and is never split across properties by ratio.
+  campaignNamePatterns String[] @default([])
 
   /// The operations workbook + tab this segment's tracker rows arrive from.
   /// (spreadsheetId, tabName) -> segment is the ingest routing key.

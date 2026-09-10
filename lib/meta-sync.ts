@@ -3,7 +3,12 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { getTokenForApiCall } from "@/lib/token-access";
 import type { SecretToken } from "@/lib/encryption";
-import { getDailyInsights, getDailyCampaignInsights, MetaAuthError } from "@/lib/meta";
+import {
+  getCampaignObjectives,
+  getDailyCampaignInsights,
+  getDailyInsights,
+  MetaAuthError,
+} from "@/lib/meta";
 import { recordSyncFailure } from "@/lib/sync-failures";
 import { refreshCampaignPerformance } from "@/lib/campaign-attribution";
 
@@ -127,17 +132,40 @@ export async function syncHotelAds(
       hotel.metaAdAccountId,
       range,
     );
+
+    // Objectives come from the CAMPAIGNS endpoint, not from insights: insights
+    // returns objective as null for these accounts (verified in production —
+    // even today's rows), because the objective belongs to the campaign rather
+    // than to a day of delivery.
+    //
+    // Best-effort: without it every TYPE reads "Not available", which is what it
+    // already read. It must not cost the day's spend and delivery figures.
+    let objectives = new Map<string, string>();
+    try {
+      objectives = await getCampaignObjectives(secret.reveal(), hotel.metaAdAccountId);
+    } catch (err) {
+      console.warn(
+        `[meta-sync] campaign objectives skipped for ${hotel.id}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
     for (const row of campaignRows) {
       const date = new Date(`${row.date}T00:00:00.000Z`);
       const data = {
         metaAccountId: hotel.metaAdAccountId,
         campaignName: row.campaignName,
-        objective: row.objective,
+        // Insights first (it is the row's own answer), then the campaign's.
+        objective: row.objective ?? objectives.get(row.campaignId) ?? null,
         spend: row.spend.toFixed(2),
         impressions: row.impressions,
         clicks: row.clicks,
         conversions: row.conversions,
         purchaseValue: row.purchaseValue.toFixed(2),
+        reach: row.reach,
+        messagingStarted: row.messagingStarted,
+        leads: row.leads,
+        qualityRanking: row.qualityRanking,
+        engagementRateRanking: row.engagementRateRanking,
+        conversionRateRanking: row.conversionRateRanking,
       };
       await prisma.adCampaignSnapshot.upsert({
         where: {
