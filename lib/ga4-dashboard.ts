@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { agencyScopedFor } from "@/lib/tenant-scope";
+import { whenMigrated } from "@/lib/missing-table";
 
 // Aggregates a hotel's Ga4Snapshot rows (the selected window) into the shape the
 // dashboard's "Website Traffic" section renders. Always scoped by agencyId +
@@ -58,6 +59,28 @@ export type Ga4Dashboard = {
   trend: TrendPoint[]; // Report 7 — per-day sessions + keyEvents
   /** HotelTrack snippet sessions over the same window; null in pixel mode. */
   trackedSessions: number | null;
+  /**
+   * True when these figures describe ONE property rather than the whole site.
+   *
+   * The per-property tables carry the reports that can be filtered by landing
+   * page and no others, so a scoped load leaves landingBySource, newVsReturning,
+   * events, ecommerce and ads empty. They are empty because they were never
+   * asked for per property — NOT because the property had none — and the UI has
+   * to say which, or an absent section reads as a zero.
+   */
+  propertyScoped: boolean;
+  /**
+   * True when a property was selected but this window has NO per-property rows.
+   *
+   * Distinguishes "we have not measured this yet" from "this property had no
+   * traffic". Both would otherwise render as a confident 0 under a lit property
+   * chip, and one of them is a lie.
+   *
+   * It is the normal state for a while after this feature ships: the rows only
+   * begin at the first sync that runs after it, and earlier periods stay empty
+   * until somebody backfills them.
+   */
+  propertyDataMissing: boolean;
 };
 
 const SEP = String.fromCharCode(31);
@@ -113,8 +136,14 @@ export async function loadGa4Dashboard(args: {
   since: Date;
   until: Date;
   trackedSessions: number | null;
+  /**
+   * A PropertySegment id (or "unassigned") to read the per-property tables
+   * instead of the site ones. Null/absent loads the whole site, as before.
+   */
+  segmentKey?: string | null;
 }): Promise<Ga4Dashboard> {
   const { agencyId, hotelId, since, until, trackedSessions } = args;
+  const segmentKey = args.segmentKey ?? null;
   const scoped = <D>(m: D) => agencyScopedFor(agencyId, m);
 
   const conn = await scoped(prisma.ga4Connection).findFirst({
@@ -138,8 +167,12 @@ export async function loadGa4Dashboard(args: {
     ecommerce: null,
     trend: [],
     trackedSessions,
+    propertyScoped: segmentKey != null,
+    propertyDataMissing: false,
   };
   if (!connected) return base;
+
+  if (segmentKey != null) return loadScoped(base, scoped, hotelId, since, until, segmentKey);
 
   const snaps = await scoped(prisma.ga4Snapshot).findMany({
     where: { hotelClientId: hotelId, date: { gte: since, lte: until } },
@@ -225,5 +258,100 @@ export async function loadGa4Dashboard(args: {
   base.newVsReturning = mergeRows<SegmentRow>(segmentLists, ["segment"], ["users", "newUsers", "sessions", "keyEvents"], "users", 4);
   base.events = mergeRows<EventRow>(eventLists, ["event"], ["count", "keyEvents", "users"], "count", 10);
   base.ecommerce = hasEcom ? { purchaseRevenue: ecomRevenue, transactions: ecomTxns } : null;
+  return base;
+}
+
+/**
+ * The per-property read.
+ *
+ * Deliberately NOT a filter over the site tables — those hold pre-aggregated
+ * daily totals with no rows left to filter, which is the whole reason
+ * Ga4PropertySnapshot exists (see lib/ga4-property-sync.ts).
+ *
+ * `users` is summed across days here exactly as the site read sums it, so the
+ * two are comparable. Both are therefore a sum of DAILY uniques rather than a
+ * true window unique — somebody who visits on Monday and Thursday counts twice
+ * in both. That is a pre-existing property of this dashboard, kept identical
+ * rather than quietly improved on one side, which would make the property
+ * figures and the site figures disagree for a reason nobody could see.
+ */
+async function loadScoped(
+  base: Ga4Dashboard,
+  scoped: <D>(m: D) => D,
+  hotelId: string,
+  since: Date,
+  until: Date,
+  segmentKey: string,
+): Promise<Ga4Dashboard> {
+  // whenMigrated, for the reason lib/missing-table.ts records: migrations are
+  // applied by hand and separately from the deploy, and the last table added
+  // this way took every dashboard page down with a P2021 in the window between.
+  const snaps = await whenMigrated("ga4 property split", [] as Awaited<ReturnType<typeof queryScoped>>, () => queryScoped());
+  function queryScoped() {
+    return scoped(prisma.ga4PropertySnapshot).findMany({
+      where: { hotelClientId: hotelId, segmentKey, date: { gte: since, lte: until } },
+      orderBy: { date: "asc" },
+    });
+  }
+
+  // No rows is NOT no traffic. Either the split has never been synced for this
+  // window, or the table is not there yet — and both must read as "not measured"
+  // rather than as a zero.
+  if (snaps.length === 0) return { ...base, propertyDataMissing: true };
+
+  let durWeighted = 0;
+  let bounceWeighted = 0;
+  let engagedSessions = 0;
+  let userEngagementDuration = 0;
+  const countryLists: NamedSessions[][] = [];
+  const cityLists: NamedSessions[][] = [];
+  const sourceLists: unknown[] = [];
+  const campaignLists: unknown[] = [];
+  const pageLists: unknown[] = [];
+
+  for (const s of snaps) {
+    base.sessions += s.sessions;
+    base.users += s.users;
+    base.pageViews += s.pageViews;
+    base.keyEvents += s.keyEvents;
+    durWeighted += s.avgSessionDuration * s.sessions;
+    bounceWeighted += s.bounceRate * s.sessions;
+    engagedSessions += s.engagedSessions;
+    userEngagementDuration += s.userEngagementDuration;
+    base.channels.organic += s.organicSessions;
+    base.channels.paid += s.paidSessions;
+    base.channels.social += s.socialSessions;
+    base.channels.direct += s.directSessions;
+    base.channels.referral += s.referralSessions;
+    base.device.mobile += s.mobileSessions;
+    base.device.desktop += s.desktopSessions;
+    base.device.tablet += s.tabletSessions;
+    countryLists.push((s.topCountries as NamedSessions[]) ?? []);
+    cityLists.push((s.topCities as NamedSessions[]) ?? []);
+    sourceLists.push(s.topSources);
+    campaignLists.push(s.topCampaigns);
+    pageLists.push(s.topPages);
+    base.trend.push({ date: s.date.toISOString().slice(0, 10), sessions: s.sessions, keyEvents: s.keyEvents });
+  }
+
+  base.days = snaps.length;
+  base.avgSessionDuration = base.sessions > 0 ? Math.round(durWeighted / base.sessions) : 0;
+  base.bounceRate = base.sessions > 0 ? bounceWeighted / base.sessions : 0;
+  base.topCountries = mergeTop(countryLists, "name", 5);
+  base.topCities = mergeTop(cityLists, "name", 5);
+  base.engagement = {
+    engagedSessions,
+    engagementRate: base.sessions > 0 ? engagedSessions / base.sessions : 0,
+    screenPageViewsPerSession: base.sessions > 0 ? base.pageViews / base.sessions : 0,
+    avgEngagementSeconds: base.sessions > 0 ? Math.round(userEngagementDuration / base.sessions) : 0,
+  };
+  base.sources = mergeRows<SourceRow>(sourceLists, ["source", "medium"], ["sessions", "users", "keyEvents"], "sessions", 10);
+  base.campaigns = mergeRows<CampaignRow>(campaignLists, ["campaign"], ["sessions", "users", "keyEvents"], "sessions", 10)
+    .filter((c) => c.campaign && c.campaign !== "(not set)");
+  base.topPages = mergeRows<PageRow>(pageLists, ["path", "title"], ["views", "entrances", "engagementSeconds"], "views", 10);
+
+  // Left empty ON PURPOSE — never asked for per property. base.propertyScoped is
+  // what tells the UI to say so rather than render them as zero:
+  //   landingBySource, newVsReturning, events, ecommerce, ads, topLandingPages
   return base;
 }

@@ -354,6 +354,29 @@ function ScopeControls({
  * reader has every reason to believe the figures beneath it describe that
  * property alone.
  */
+/**
+ * How a session was assigned to a property — stated where the numbers are read,
+ * not buried in a methodology page.
+ *
+ * Without it these figures look simply "lower than expected". With it they are
+ * legible: a visitor who arrives on the home page and then browses a property
+ * counts under Shared pages, because the group earned that arrival and guessing
+ * which property deserves it is exactly the invention this codebase refuses.
+ */
+function LandingScopeNote({ scopeLabel }: { scopeLabel: string }) {
+  return (
+    <div className="rounded-lg border-l-4 border-info bg-info/10 p-4 text-sm">
+      <p className="text-ink">
+        <span className="font-medium">Counted by landing page.</span> A visit belongs to
+        the property whose page it arrived on, so every visit is counted once and the
+        properties add up to the site total. Someone who lands on a shared page — the home
+        page, the blog — and then reads {scopeLabel} counts under Shared pages, not under
+        {" "}{scopeLabel}.
+      </p>
+    </div>
+  );
+}
+
 function GroupScopeNote({ scopeLabel, what }: { scopeLabel: string; what: string }) {
   return (
     <div className="rounded-lg border-l-4 border-info bg-info/10 p-4 text-sm">
@@ -545,6 +568,9 @@ async function renderDashboard({
         // both populations are on screen together; here it would be a stray
         // number with nothing to compare against.
         trackedSessions: null,
+        // Read the per-property tables when a property is chosen. Null loads the
+        // site, exactly as before.
+        segmentKey: selectedSegmentId,
       }),
       loadSummaryDashboard(hotelId, range),
     ]);
@@ -563,13 +589,7 @@ async function renderDashboard({
         />
         <SourceSelector current={source} />
         {selectedSegmentId && (
-          <GroupScopeNote
-            scopeLabel={scopeLabel}
-            what={
-              "Google Analytics measures the website as a whole, and the stored daily " +
-              "figures are site totals rather than per-section ones."
-            }
-          />
+          <LandingScopeNote scopeLabel={scopeLabel} />
         )}
         <Ga4WebsiteTraffic
           data={ga4}
@@ -1062,6 +1082,7 @@ async function renderDashboard({
     since: range.since,
     until: range.until,
     trackedSessions,
+    segmentKey: selectedSegmentId,
   });
 
   const hasSocialData =

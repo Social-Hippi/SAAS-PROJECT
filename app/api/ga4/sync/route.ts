@@ -26,6 +26,24 @@ export async function GET(request: Request) {
   const daysParamRaw = url.searchParams.get("days");
   const days = daysParamRaw ? Math.min(30, Math.max(1, Number.parseInt(daysParamRaw, 10) || 30)) : undefined;
 
-  const result = await runGa4Sync({ agencyId, hotelClientId, days });
+  // Explicit window for BACKFILLS: ?from=2026-01-01&to=2026-01-31.
+  //
+  // Deliberately separate from `days`, which stays capped at 30 for the daily
+  // cron. A backfill is sliced by the caller into windows that each finish
+  // inside maxDuration; every write is an upsert, so a slice that fails is
+  // simply re-run. Widening `days` instead would restart at "N days ago" every
+  // attempt and never converge on a long history.
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  const ISO = /^\d{4}-\d{2}-\d{2}$/;
+  if ((from && !ISO.test(from)) || (to && !ISO.test(to))) {
+    return Response.json({ error: "from/to must be YYYY-MM-DD." }, { status: 400 });
+  }
+  if (Boolean(from) !== Boolean(to)) {
+    return Response.json({ error: "from and to must be given together." }, { status: 400 });
+  }
+  const window = from && to ? { startDate: from, endDate: to } : undefined;
+
+  const result = await runGa4Sync({ agencyId, hotelClientId, days, window });
   return Response.json({ ok: true, ...result });
 }

@@ -347,12 +347,26 @@ describe("7. every source view keeps the scope controls", () => {
     expect(propSel).not.toContain("property: propertyParam");
   });
 
-  test("a selection the panels cannot honour is disclosed, not left implied", () => {
-    // The property chip stays lit on these views, so a reader has every reason
-    // to read the figures below as that property's. GA4 stores site totals, and
-    // campaign spend carries no trustworthy property signal.
+  test("every view with a lit property chip explains what it is showing", () => {
+    // The chip stays lit on these views, so a reader has every reason to read
+    // the figures below as that property's. Each view must say which it is:
+    //
+    //   Website  — genuinely scoped now, so it states the RULE (landing page),
+    //              because otherwise the figures just look mysteriously low.
+    //   Channel  — not scoped and cannot be: spend is per campaign and one
+    //              campaign drives to both properties.
+    expect(DASH).toContain("function LandingScopeNote");
     expect(DASH).toContain("function GroupScopeNote");
-    const notes = (DASH.match(/<GroupScopeNote/g) ?? []).length;
-    expect(notes, "expected the website and channel views to disclose").toBeGreaterThanOrEqual(2);
+    const disclosures =
+      (DASH.match(/<LandingScopeNote/g) ?? []).length +
+      (DASH.match(/<GroupScopeNote/g) ?? []).length;
+    expect(disclosures, "expected the website and channel views to disclose").toBeGreaterThanOrEqual(2);
+  });
+
+  test("the website view scopes its data rather than only disclaiming it", () => {
+    // It used to render site totals under a lit property chip. Now it reads the
+    // per-property tables, so the note explains the rule instead of apologising
+    // for the absence of one.
+    expect(DASH).toMatch(/segmentKey: selectedSegmentId/);
   });
 });

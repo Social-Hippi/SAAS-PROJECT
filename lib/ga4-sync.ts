@@ -12,6 +12,7 @@ import {
   type ReportRequest,
   type ReportRow,
 } from "@/lib/ga4";
+import { bucketsFor, filterForBucket, type PropertyBucket } from "@/lib/ga4-property-sync";
 
 // GA4 daily sync (OAuth). For each ACTIVE connection: refresh the access token if
 // it's near expiry, pull the trailing 30 days across a set of THEME-grouped
@@ -218,6 +219,201 @@ function addChannel(b: DayBucket, channel: string, sessions: number) {
   else if (c === "referral") b.referral += sessions;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-PROPERTY PASS.
+//
+// The same questions, asked again once per property with a landing-page filter,
+// and stored in Ga4PropertySnapshot. See lib/ga4-property-sync.ts for why this is
+// a second set of QUERIES rather than a division of what we already store: unique
+// visitors and bounce rate cannot be recovered by summing anything, because GA4
+// de-duplicates people and averages ratios inside the query.
+//
+// Costs one extra pass per bucket. Buckets run SEQUENTIALLY (their six reports in
+// parallel) rather than all at once: GA4 caps concurrent requests per property,
+// and a group with several properties would otherwise trip it and lose the whole
+// pass to a quota error.
+//
+// Best-effort by design. A failure here leaves the SITE totals — already stored
+// above — untouched, because a property split is an enrichment and losing it must
+// not cost the day's traffic figures.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PropDay = {
+  sessions: number; users: number; newUsers: number; pageViews: number;
+  bounceRate: number; avgSessionDuration: number;
+  engagedSessions: number; engagementRate: number;
+  userEngagementDuration: number; screenPageViewsPerSession: number;
+  keyEvents: number;
+  organic: number; paid: number; social: number; direct: number; referral: number;
+  mobile: number; desktop: number; tablet: number;
+  countries: Map<string, number>; cities: Map<string, number>;
+  sources: Map<string, { source: string; medium: string; sessions: number; users: number; keyEvents: number }>;
+  campaigns: Map<string, { campaign: string; sessions: number; users: number; keyEvents: number }>;
+  pages: Map<string, { path: string; title: string; views: number; entrances: number; engagementSeconds: number }>;
+};
+
+const emptyPropDay = (): PropDay => ({
+  sessions: 0, users: 0, newUsers: 0, pageViews: 0,
+  bounceRate: 0, avgSessionDuration: 0,
+  engagedSessions: 0, engagementRate: 0,
+  userEngagementDuration: 0, screenPageViewsPerSession: 0,
+  keyEvents: 0,
+  organic: 0, paid: 0, social: 0, direct: 0, referral: 0,
+  mobile: 0, desktop: 0, tablet: 0,
+  countries: new Map(), cities: new Map(), sources: new Map(), campaigns: new Map(), pages: new Map(),
+});
+
+const bumpMap = (m: Map<string, number>, k: string, v: number) => {
+  if (k) m.set(k, (m.get(k) ?? 0) + v);
+};
+
+const topOf = (m: Map<string, number>, limit: number, key: "name" | "path") =>
+  [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([k, sessions]) => ({ [key]: k, sessions }));
+
+async function syncPropertyBuckets(args: {
+  safeRun: (label: string, req: ReportRequest) => Promise<ReportRow[]>;
+  dateRanges: { startDate: string; endDate: string }[];
+  hotelClientId: string;
+  agencyId: string;
+  buckets: PropertyBucket[];
+}): Promise<number> {
+  const { safeRun, dateRanges, hotelClientId, agencyId, buckets } = args;
+  let rowsWritten = 0;
+
+  for (const bucket of buckets) {
+    const dimensionFilter = filterForBucket(bucket, buckets);
+    if (!dimensionFilter) continue; // nothing claimed, so nothing to complement
+
+    const withFilter = (req: ReportRequest): ReportRequest => ({ ...req, dimensionFilter });
+    const label = `prop:${bucket.key}`;
+
+    const [traffic, acquisition, devices, countries, cities, pages] = await Promise.all([
+      safeRun(`${label}/traffic`, withFilter({ dateRanges, dimensions: [{ name: "date" }], metrics: [
+        { name: "sessions" }, { name: "totalUsers" }, { name: "newUsers" }, { name: "screenPageViews" },
+        { name: "bounceRate" }, { name: "averageSessionDuration" }, { name: "engagedSessions" },
+        { name: "engagementRate" }, { name: "userEngagementDuration" }, { name: "screenPageViewsPerSession" },
+      ] })),
+      safeRun(`${label}/acquisition`, withFilter({ dateRanges, dimensions: [
+        { name: "date" }, { name: "sessionSource" }, { name: "sessionMedium" },
+        { name: "sessionCampaignName" }, { name: "sessionDefaultChannelGroup" },
+      ], metrics: [{ name: "sessions" }, { name: "totalUsers" }, { name: "engagedSessions" }, { name: "keyEvents" }],
+        orderBys: [{ metric: { metricName: "sessions" }, desc: true }], limit: 50000 })),
+      safeRun(`${label}/device`, withFilter({ dateRanges, dimensions: [{ name: "date" }, { name: "deviceCategory" }], metrics: [{ name: "sessions" }] })),
+      safeRun(`${label}/country`, withFilter({ dateRanges, dimensions: [{ name: "date" }, { name: "country" }], metrics: [{ name: "sessions" }] })),
+      safeRun(`${label}/city`, withFilter({ dateRanges, dimensions: [{ name: "date" }, { name: "city" }], metrics: [{ name: "sessions" }] })),
+      safeRun(`${label}/pages`, withFilter({ dateRanges, dimensions: [{ name: "date" }, { name: "pagePath" }, { name: "pageTitle" }],
+        metrics: [{ name: "screenPageViews" }, { name: "sessions" }, { name: "userEngagementDuration" }],
+        orderBys: [{ metric: { metricName: "screenPageViews" }, desc: true }], limit: 50000 })),
+    ]);
+
+    const byDate = new Map<string, PropDay>();
+    const dayOf = (k: string): PropDay => {
+      let d = byDate.get(k);
+      if (!d) { d = emptyPropDay(); byDate.set(k, d); }
+      return d;
+    };
+
+    for (const r of traffic) {
+      const d = dayOf(r.dimensionValues[0].value);
+      d.sessions = num(r.metricValues[0]?.value);
+      d.users = num(r.metricValues[1]?.value);
+      d.newUsers = num(r.metricValues[2]?.value);
+      d.pageViews = num(r.metricValues[3]?.value);
+      d.bounceRate = num(r.metricValues[4]?.value);
+      d.avgSessionDuration = Math.round(num(r.metricValues[5]?.value));
+      d.engagedSessions = num(r.metricValues[6]?.value);
+      d.engagementRate = num(r.metricValues[7]?.value);
+      d.userEngagementDuration = Math.round(num(r.metricValues[8]?.value));
+      d.screenPageViewsPerSession = round2(num(r.metricValues[9]?.value));
+    }
+
+    for (const r of acquisition) {
+      const d = dayOf(r.dimensionValues[0].value);
+      const source = r.dimensionValues[1]?.value ?? "";
+      const medium = r.dimensionValues[2]?.value ?? "";
+      const campaign = r.dimensionValues[3]?.value ?? "";
+      const channel = r.dimensionValues[4]?.value ?? "";
+      const sessions = num(r.metricValues[0]?.value);
+      const users = num(r.metricValues[1]?.value);
+      const keyEvents = num(r.metricValues[3]?.value);
+
+      const c = channel.toLowerCase();
+      if (c === "organic search") d.organic += sessions;
+      else if (c === "paid search") d.paid += sessions;
+      else if (c.includes("social")) d.social += sessions;
+      else if (c === "direct") d.direct += sessions;
+      else if (c === "referral") d.referral += sessions;
+
+      // keyEvents is summed from the acquisition rows: the filtered traffic
+      // report above does not carry it, and this covers the same sessions.
+      d.keyEvents += keyEvents;
+
+      const sk = `${source}\u001f${medium}`;
+      const sRow = d.sources.get(sk) ?? { source, medium, sessions: 0, users: 0, keyEvents: 0 };
+      sRow.sessions += sessions; sRow.users += users; sRow.keyEvents += keyEvents;
+      d.sources.set(sk, sRow);
+
+      if (campaign) {
+        const cRow = d.campaigns.get(campaign) ?? { campaign, sessions: 0, users: 0, keyEvents: 0 };
+        cRow.sessions += sessions; cRow.users += users; cRow.keyEvents += keyEvents;
+        d.campaigns.set(campaign, cRow);
+      }
+    }
+
+    for (const r of devices) {
+      const d = dayOf(r.dimensionValues[0].value);
+      const cat = (r.dimensionValues[1]?.value ?? "").toLowerCase();
+      const sessions = num(r.metricValues[0]?.value);
+      if (cat === "mobile") d.mobile += sessions;
+      else if (cat === "desktop") d.desktop += sessions;
+      else if (cat === "tablet") d.tablet += sessions;
+    }
+
+    for (const r of countries) bumpMap(dayOf(r.dimensionValues[0].value).countries, r.dimensionValues[1]?.value ?? "", num(r.metricValues[0]?.value));
+    for (const r of cities) bumpMap(dayOf(r.dimensionValues[0].value).cities, r.dimensionValues[1]?.value ?? "", num(r.metricValues[0]?.value));
+
+    for (const r of pages) {
+      const d = dayOf(r.dimensionValues[0].value);
+      const path = r.dimensionValues[1]?.value ?? "";
+      const title = r.dimensionValues[2]?.value ?? "";
+      if (!path) continue;
+      const row = d.pages.get(path) ?? { path, title, views: 0, entrances: 0, engagementSeconds: 0 };
+      row.views += num(r.metricValues[0]?.value);
+      row.entrances += num(r.metricValues[1]?.value);
+      row.engagementSeconds += Math.round(num(r.metricValues[2]?.value));
+      d.pages.set(path, row);
+    }
+
+    for (const [dateKey, d] of byDate) {
+      const date = gaDateToUtc(dateKey);
+      const data = {
+        sessions: d.sessions, users: d.users, newUsers: d.newUsers, pageViews: d.pageViews,
+        bounceRate: d.bounceRate, avgSessionDuration: d.avgSessionDuration,
+        engagedSessions: d.engagedSessions, engagementRate: d.engagementRate,
+        userEngagementDuration: d.userEngagementDuration,
+        screenPageViewsPerSession: d.screenPageViewsPerSession,
+        keyEvents: d.keyEvents,
+        organicSessions: d.organic, paidSessions: d.paid, socialSessions: d.social,
+        directSessions: d.direct, referralSessions: d.referral,
+        mobileSessions: d.mobile, desktopSessions: d.desktop, tabletSessions: d.tablet,
+        topCountries: topOf(d.countries, 5, "name"),
+        topCities: topOf(d.cities, 5, "name"),
+        topSources: [...d.sources.values()].sort((a, b) => b.sessions - a.sessions).slice(0, 25),
+        topCampaigns: [...d.campaigns.values()].sort((a, b) => b.sessions - a.sessions).slice(0, 25),
+        topPages: [...d.pages.values()].sort((a, b) => b.views - a.views).slice(0, 25),
+      };
+      await prisma.ga4PropertySnapshot.upsert({
+        where: { hotelClientId_segmentKey_date: { hotelClientId, segmentKey: bucket.key, date } },
+        create: { hotelClientId, agencyId, segmentKey: bucket.key, date, ...data },
+        update: data,
+      });
+      rowsWritten += 1;
+    }
+  }
+
+  return rowsWritten;
+}
+
 export type Ga4AccountSyncResult = {
   ok: boolean;
   daysSynced?: number;
@@ -226,7 +422,20 @@ export type Ga4AccountSyncResult = {
 };
 
 /** Syncs the trailing `days` (default 30) for one connection. Never throws. */
-export async function syncGa4Connection(conn: Conn, days = 30): Promise<Ga4AccountSyncResult> {
+/**
+ * Syncs one connection over a window.
+ *
+ * `window` overrides `days` with explicit YYYY-MM-DD dates, which is what makes a
+ * BACKFILL possible. `days` alone always restarts at "N days ago", so a long run
+ * that times out re-fetches the same early days on the next attempt and never
+ * reaches the end. An explicit window can be sliced into months that each
+ * complete, and every write is an upsert, so re-running a slice is free.
+ */
+export async function syncGa4Connection(
+  conn: Conn,
+  days = 30,
+  window?: { startDate: string; endDate: string },
+): Promise<Ga4AccountSyncResult> {
   let accessToken: string;
   try {
     accessToken = await getValidAccessToken(conn);
@@ -234,8 +443,8 @@ export async function syncGa4Connection(conn: Conn, days = 30): Promise<Ga4Accou
     return { ok: false, tokenExpired: true, error: err instanceof Error ? err.message : "token error" };
   }
 
-  const startDate = `${days}daysAgo`;
-  const endDate = "yesterday";
+  const startDate = window?.startDate ?? `${days}daysAgo`;
+  const endDate = window?.endDate ?? "yesterday";
   const dateRanges = [{ startDate, endDate }];
   const run = (req: ReportRequest) => runReport(accessToken, conn.propertyId, req);
 
@@ -521,6 +730,30 @@ export async function syncGa4Connection(conn: Conn, days = 30): Promise<Ga4Accou
       daysSynced += 1;
     }
 
+    // Per-property split. BEST EFFORT AND LAST: the site totals are already
+    // stored above, and a property split is an enrichment — losing it to a quota
+    // error or a missing table must not cost the day's traffic figures.
+    try {
+      const segments = await prisma.propertySegment.findMany({
+        where: { hotelClientId: conn.hotelClientId, isActive: true },
+        orderBy: { displayOrder: "asc" },
+        select: { id: true, name: true, pathPrefixes: true },
+      });
+      const buckets = bucketsFor(segments);
+      if (buckets.length > 0) {
+        const written = await syncPropertyBuckets({
+          safeRun, dateRanges,
+          hotelClientId: conn.hotelClientId,
+          agencyId: conn.agencyId,
+          buckets,
+        });
+        console.log(`${LOG} ${conn.hotelClientId}: ${written} property-day rows across ${buckets.length} buckets`);
+      }
+    } catch (err) {
+      if (err instanceof GaAuthExpiredError) throw err;
+      console.warn(`${LOG} property split skipped for ${conn.hotelClientId}: ${err instanceof Error ? err.message : err}`);
+    }
+
     await prisma.ga4Connection.update({
       where: { id: conn.id },
       data: {
@@ -567,7 +800,14 @@ export type Ga4SyncResult = {
 
 /** Syncs every ACTIVE GA4 connection (optionally one agency / one hotel). Never throws. */
 export async function runGa4Sync(
-  opts: { agencyId?: string; hotelClientId?: string; days?: number; accountDelayMs?: number } = {},
+  opts: {
+    agencyId?: string;
+    hotelClientId?: string;
+    days?: number;
+    /** Explicit YYYY-MM-DD window; overrides `days`. Used for backfills. */
+    window?: { startDate: string; endDate: string };
+    accountDelayMs?: number;
+  } = {},
 ): Promise<Ga4SyncResult> {
   const delay = opts.accountDelayMs ?? 500;
   const conns = await prisma.ga4Connection.findMany({
@@ -592,7 +832,7 @@ export async function runGa4Sync(
   for (let i = 0; i < conns.length; i++) {
     if (i > 0 && delay > 0) await sleep(delay);
     result.processed += 1;
-    const res = await syncGa4Connection(conns[i], opts.days ?? 30);
+    const res = await syncGa4Connection(conns[i], opts.days ?? 30, opts.window);
     if (res.ok) {
       result.synced += 1;
       result.daysSynced += res.daysSynced ?? 0;
