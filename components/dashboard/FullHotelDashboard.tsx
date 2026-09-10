@@ -628,19 +628,28 @@ async function renderDashboard({
     // The per-campaign table leads the paid views; ChannelView's charts and
     // creative breakdown follow it. Loaded only for the paid sources, so the
     // Instagram and Facebook deep-dives pay nothing for it.
+    // Meta only: the same campaigns, grouped by the property they sell. Attributed
+    // from the campaign NAME, which is the only property signal a campaign carries.
+    //
+    // Loaded FIRST because it decides which campaigns belong to the selected
+    // property, and the table below must show the same set — a filtered box above
+    // an unfiltered table is the property chip telling the reader two things.
+    const metaByProperty =
+      source === "meta_ads"
+        ? await loadMetaPropertyBreakdown(hotelId, range, showAdSpend, selectedSegmentId)
+        : null;
+
+    const metaCampaignFilter =
+      metaByProperty && selectedSegmentId
+        ? new Set(metaByProperty.groups.flatMap((g) => g.campaigns.map((c) => c.campaignId)))
+        : undefined;
+
     const paid =
       source === "meta_ads"
-        ? await loadMetaPaidPerformance(hotelId, range, showAdSpend)
+        ? await loadMetaPaidPerformance(hotelId, range, showAdSpend, metaCampaignFilter)
         : source === "google_ads"
           ? await loadGooglePaidPerformance(hotelId, range, showAdSpend)
           : null;
-
-    // Meta only: the same campaigns, grouped by the property they sell. Attributed
-    // from the campaign NAME, which is the only property signal a campaign carries.
-    const metaByProperty =
-      source === "meta_ads"
-        ? await loadMetaPropertyBreakdown(hotelId, range, showAdSpend)
-        : null;
 
     // Socials leads with the format comparison, then ChannelView's per-post
     // detail below it — same shape as the paid views.

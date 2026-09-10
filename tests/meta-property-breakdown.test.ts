@@ -40,7 +40,7 @@ describe("1. spend is withheld at the source, not in the markup", () => {
   });
 
   test("the dashboard passes the hotel's real flag, not a literal", () => {
-    expect(DASH).toMatch(/loadMetaPropertyBreakdown\(hotelId, range, showAdSpend\)/);
+    expect(DASH).toContain("loadMetaPropertyBreakdown(hotelId, range, showAdSpend, selectedSegmentId)");
   });
 });
 
@@ -109,5 +109,46 @@ describe("5. it only claims a split where one exists", () => {
 
   test("unassigned campaigns get a visible box, and only when there are some", () => {
     expect(LOADER).toMatch(/g\.segmentKey !== UNASSIGNED_SEGMENT \|\| g\.campaigns\.length > 0/);
+  });
+});
+
+// ── 6 · The property chip actually filters this view ───────────────────────
+
+describe("6. selecting a property filters the whole view", () => {
+  // Reported from production: All properties, Three Hills and Coffeeberry Hills
+  // all showed the same thing. The breakdown rendered every property's box
+  // regardless of the selection, so the chip appeared to do nothing here while
+  // filtering everywhere else on the dashboard.
+
+  test("the loader filters groups by the selection", () => {
+    expect(LOADER).toContain("selectedSegmentKey: string | null = null");
+    expect(LOADER).toMatch(/groupsFinal\.filter\(\(g\) => g\.segmentKey === selectedSegmentKey\)/);
+  });
+
+  test("the chart drops series for properties that are no longer on screen", () => {
+    // A line for a property whose box is not rendered is a line nothing explains.
+    expect(LOADER).toContain("shownKeys");
+    expect(LOADER).toMatch(/filter\(\(\[key\]\) => shownKeys\.has\(key\)\)/);
+  });
+
+  test("the rankings note describes what is on screen, not what was loaded", () => {
+    // Otherwise selecting a property whose campaigns ARE ranked would still show
+    // "Meta withholds rankings", because some other property's were not.
+    expect(LOADER).toContain("shownCampaignRankings");
+  });
+
+  test("the campaign table shows the same campaigns as the boxes", () => {
+    // A filtered box above an unfiltered table is the chip telling the reader
+    // two different things.
+    expect(DASH).toContain("metaCampaignFilter");
+    expect(DASH).toContain("loadMetaPaidPerformance(hotelId, range, showAdSpend, metaCampaignFilter)");
+  });
+
+  test("that table filters at the source, so its Total line stays right", () => {
+    const PAID = readCode("lib/metrics/paid-performance.ts");
+    expect(PAID).toContain("onlyCampaignIds?: ReadonlySet<string>");
+    expect(PAID).toMatch(/const kept = onlyCampaignIds/);
+    // The aggregation must consume the filtered set, not the raw one.
+    expect(PAID).toContain("for (const s of kept) {");
   });
 });

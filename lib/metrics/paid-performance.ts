@@ -145,6 +145,16 @@ export async function loadMetaPaidPerformance(
   hotelClientId: string,
   range: Range,
   showAdSpend: boolean,
+  /**
+   * Restrict to these campaigns — used when the property chip has filtered the
+   * view to one property.
+   *
+   * Filtering at the SOURCE rather than dropping rows afterwards, because the
+   * totals below are computed from whatever rows survive. Removing rows from the
+   * rendered table while the Total line still counted every campaign would be a
+   * worse answer than not filtering at all.
+   */
+  onlyCampaignIds?: ReadonlySet<string>,
 ): Promise<PaidPerformance> {
   const [token, snaps, verifiedRows] = await Promise.all([
     agencyScoped(prisma.metaToken).findFirst({
@@ -206,6 +216,10 @@ export async function loadMetaPaidPerformance(
     };
   };
 
+  const kept = onlyCampaignIds
+    ? snaps.filter((s) => onlyCampaignIds.has(s.metaCampaignId))
+    : snaps;
+
   const agg = new Map<
     string,
     {
@@ -219,7 +233,7 @@ export async function loadMetaPaidPerformance(
       conversions: number;
     }
   >();
-  for (const s of snaps) {
+  for (const s of kept) {
     const e = agg.get(s.metaCampaignId) ?? {
       name: s.campaignName,
       names: [],
