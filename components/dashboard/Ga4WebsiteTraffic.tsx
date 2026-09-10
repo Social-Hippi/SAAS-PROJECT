@@ -115,6 +115,8 @@ export function Ga4WebsiteTraffic({
   data,
   manageHref,
   viewerIsAgency,
+  showGoogleAds,
+  showAdSpend,
 }: {
   data: Ga4Dashboard;
   /**
@@ -131,6 +133,23 @@ export function Ga4WebsiteTraffic({
    * the same fail-closed rule showAdSpend follows.
    */
   viewerIsAgency: boolean;
+  /**
+   * Whether to render the Google Ads block at all.
+   *
+   * FALSE on the Website source view: ?source=google_ads is a whole view of its
+   * own, so repeating five Google Ads tiles inside "Website Traffic" put the
+   * same numbers in two places and implied they were website figures.
+   */
+  showGoogleAds: boolean;
+  /**
+   * The hotel's showAdSpendToHotel flag. Governs the COST tile specifically —
+   * clicks, impressions, CTR and conversions are performance, not spend, and
+   * none of them lets spend be divided back out.
+   *
+   * Required, like every other showAdSpend in the tree: a caller that forgets it
+   * must fail to compile rather than publish spend to a client.
+   */
+  showAdSpend: boolean;
 }) {
   if (!data.connected) {
     return (
@@ -214,15 +233,16 @@ export function Ga4WebsiteTraffic({
           </ul>
         </div>
 
-        {/* 3. Google Ads (only when there's spend/clicks) */}
-        {data.ads && (
+        {/* 3. Google Ads — only where it is not already a view of its own, and
+            only when there is spend/clicks to show. */}
+        {showGoogleAds && data.ads && (
           <div className="border-b border-line p-4 last:border-b-0">
             <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-tertiary">Google Ads</p>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <div className={`grid grid-cols-2 gap-3 ${showAdSpend ? "sm:grid-cols-5" : "sm:grid-cols-4"}`}>
               <Kpi label="Clicks" value={formatNumber(data.ads.clicks)} />
               <Kpi label="Impressions" value={formatNumber(data.ads.impressions)} />
               <Kpi label="CTR" value={ctr == null ? "—" : formatPercent(ctr)} />
-              <Kpi label="Cost" value={formatCurrency(data.ads.cost / 100)} />
+              {showAdSpend && <Kpi label="Cost" value={formatCurrency(data.ads.cost / 100)} />}
               <Kpi label="Conversions" value={formatNumber(data.ads.conversions)} />
             </div>
             <p className="mt-2 text-xs text-ink-tertiary">
