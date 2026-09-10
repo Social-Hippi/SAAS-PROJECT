@@ -88,6 +88,14 @@ export async function loadMetaPropertyBreakdown(
   hotelClientId: string,
   range: { since: Date; until: Date },
   showAdSpend: boolean,
+  /**
+   * The property chip's selection, or null for "All properties".
+   *
+   * Filters at the SOURCE rather than in the markup, so a report for one
+   * property does not carry another property's campaigns and spend in its
+   * payload at all — the same rule the ad-spend gate follows.
+   */
+  selectedSegmentKey: string | null = null,
 ): Promise<MetaPropertyBreakdown> {
   const [segments, snaps, verifiedRows] = await Promise.all([
     agencyScoped(prisma.propertySegment).findMany({
@@ -233,15 +241,35 @@ export async function loadMetaPropertyBreakdown(
   // Unassigned last, and only when it has campaigns — an empty Unassigned box is
   // noise, but a populated one must never be hidden.
   out.sort((a, b) => Number(a.segmentKey === UNASSIGNED_SEGMENT) - Number(b.segmentKey === UNASSIGNED_SEGMENT));
-  const groupsFinal = out.filter((g) => g.segmentKey !== UNASSIGNED_SEGMENT || g.campaigns.length > 0);
+  let groupsFinal = out.filter((g) => g.segmentKey !== UNASSIGNED_SEGMENT || g.campaigns.length > 0);
+
+  // The property chip filters this view exactly as it filters every other one.
+  // Selecting a property and seeing both properties' campaigns is the reader
+  // being told the control does nothing.
+  if (selectedSegmentKey != null) {
+    groupsFinal = groupsFinal.filter((g) => g.segmentKey === selectedSegmentKey);
+  }
+
+  const shownKeys = new Set(groupsFinal.map((g) => g.segmentKey));
+  const dailyRows = [...daily.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, byProperty]) => ({
+      date,
+      // Drop series for properties that are not on screen, so the chart cannot
+      // plot a line the boxes above it do not explain.
+      byProperty: Object.fromEntries(
+        Object.entries(byProperty).filter(([key]) => shownKeys.has(key)),
+      ),
+    }));
+
+  const shownCampaignRankings = groupsFinal.flatMap((g) => g.campaigns.map((c) => c.ranking));
 
   return {
     spendVisible: showAdSpend,
     groups: groupsFinal,
-    daily: [...daily.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([date, byProperty]) => ({ date, byProperty })),
-    rankingsUnavailable: [...byCampaign.values()].every((a) => a.ranking == null),
+    daily: dailyRows,
+    // About what is ON SCREEN: the note explains the dashes a reader can see.
+    rankingsUnavailable: shownCampaignRankings.every((r) => r == null),
   };
 }
 
