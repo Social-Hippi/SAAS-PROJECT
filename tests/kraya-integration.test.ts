@@ -183,3 +183,82 @@ describe("6. the route", () => {
     expect(PROXY).toContain('"/api/integrations/kraya(.*)"');
   });
 });
+
+// ── 7. Setup UI ─────────────────────────────────────────────────────────────
+
+const ACTIONS = readCode("app/(agency)/agency/(app)/hotel/[id]/integrations/kraya-actions.ts");
+const CARD = readCode("app/(agency)/agency/(app)/hotel/[id]/integrations/KrayaCard.tsx");
+const PAGE = readCode("app/(agency)/agency/(app)/hotel/[id]/integrations/page.tsx");
+
+describe("7. the secret", () => {
+  test("is CSPRNG and encrypted before it reaches the database", () => {
+    expect(ACTIONS).toMatch(/randomBytes\(32\)/);
+    expect(ACTIONS).toMatch(/credentials: encryptToken\(secret\)/);
+    expect(ACTIONS).not.toMatch(/credentials:\s*secret\b/);
+  });
+
+  test("is returned only by the call that minted it, and never read back", () => {
+    expect(ACTIONS).toMatch(/return \{ error: null, ok: true, secret \}/);
+    expect(ACTIONS).not.toContain("getTokenForApiCall");
+  });
+
+  test("the card warns that regenerating breaks the live webhook", () => {
+    expect(CARD).toMatch(/not shown again/i);
+    expect(CARD).toMatch(/stops Kraya&apos;s webhook until the new value is/i);
+  });
+});
+
+describe("8. the confirmed-stage control", () => {
+  test("options are learned from this hotel's own leads", () => {
+    // Not a hardcoded list: "Booking Confirmed" here, "Won" at the next hotel.
+    expect(PAGE).toMatch(/groupBy\(\{[\s\S]{0,120}by: \["stageName"\]/);
+    expect(CARD).toMatch(/connection\.observedStages\.map/);
+  });
+
+  test("no free-text box before any lead has arrived", () => {
+    // A typo there would silently create no bookings, forever, with no symptom.
+    expect(CARD).toMatch(/Stage names appear here once the first lead arrives/);
+    expect(CARD).not.toMatch(/<input[^>]*name="stage"/);
+  });
+
+  test("clearing it is allowed and means create no bookings", () => {
+    // A deliberate choice an agency may want, so it is accepted not rejected.
+    expect(ACTIONS).toMatch(/raw\.length > 0 \? raw : null/);
+    expect(CARD).toMatch(/none: create no bookings/);
+  });
+});
+
+describe("9. the card reports honestly and isolates tenants", () => {
+  test("the badge tracks whether a lead has ARRIVED", () => {
+    // A connection made here and never enabled in Kraya looks identical to a
+    // working one until the first lead lands.
+    expect(PAGE).toMatch(/krayaView\.lastLeadReceivedAt \? "green" : "yellow"/);
+    expect(CARD).toMatch(/No lead received yet/);
+  });
+
+  test("every action requires an admin and an agency-scoped hotel", () => {
+    for (const fn of ["connectKraya", "setKrayaConfirmedStage", "disconnectKraya"]) {
+      const body = ACTIONS.slice(ACTIONS.indexOf(`export async function ${fn}`), ACTIONS.indexOf(`export async function ${fn}`) + 700);
+      expect(body, fn).toMatch(/requireAdmin\(\)/);
+      expect(body, fn).toMatch(/ownHotel\(/);
+    }
+  });
+
+  test("the row is written under the hotel's own agencyId", () => {
+    expect(ACTIONS).toMatch(/agencyId: hotel\.agencyId/);
+    expect(ACTIONS).not.toMatch(/agencyId:\s*(formData|member\.agencyId)/);
+  });
+
+  test("disconnecting keeps the leads and bookings", () => {
+    // They are facts. Deleting attribution history to unhook a webhook would
+    // destroy the thing this integration exists to build.
+    expect(ACTIONS).toMatch(/prisma\.krayaConnection\.deleteMany/);
+    expect(ACTIONS).not.toMatch(/whatsAppConversation\.deleteMany/);
+    expect(ACTIONS).not.toMatch(/booking\.deleteMany/);
+  });
+
+  test("the page never selects the ciphertext", () => {
+    const sel = PAGE.slice(PAGE.indexOf("krayaConnection"), PAGE.indexOf("krayaConnection") + 400);
+    expect(sel).not.toMatch(/credentials:\s*true/);
+  });
+});
