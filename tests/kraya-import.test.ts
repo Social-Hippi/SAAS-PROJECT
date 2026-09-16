@@ -215,3 +215,13 @@ describe("6. ad ids survive the export round-trip", () => {
     expect(IMPORT).toMatch(/Ee\]\[\+-\]/);
   });
 });
+
+describe("7. the page reflects what was just imported", () => {
+  test("the import revalidates the integrations page", () => {
+    // The import is a fetch() to a route handler, so nothing revalidates on its
+    // behalf. Without this the confirmed-stage dropdown keeps offering the
+    // handful of stages that had arrived by webhook, and an operator who has
+    // just imported 4,000 leads cannot find the stage they imported.
+    expect(ROUTE).toMatch(/revalidatePath\(`\/agency\/hotel\/\$\{hotel\.id\}\/integrations`\)/);
+  });
+});
