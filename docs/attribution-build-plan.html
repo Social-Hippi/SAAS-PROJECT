@@ -1,0 +1,416 @@
+<title>Closing the Attribution Loop</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --ground:#F6F7F5; --surface:#FFFFFF; --sunk:#EEF1EE;
+    --ink:#151E1A; --ink-2:#51605A; --ink-3:#7B8880;
+    --line:#E1E6E2; --line-2:#CED6D0;
+    --accent:#0F7A57; --accent-soft:#E6F1EC;
+    --built:#1D7A4E; --partial:#8A6108; --blocked:#A33F36;
+    --built-bg:#E7F3EC; --partial-bg:#F7EFDC; --blocked-bg:#F7E8E6;
+    --display:"Newsreader",Georgia,"Times New Roman",serif;
+    --body:"Public Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0E1412; --surface:#161E1A; --sunk:#1C2621;
+      --ink:#E7EEE9; --ink-2:#A3B1AA; --ink-3:#7A8880;
+      --line:#283330; --line-2:#36443F;
+      --accent:#4FBF92; --accent-soft:#163026;
+      --built:#5BC189; --partial:#D7A93F; --blocked:#E08279;
+      --built-bg:#142C20; --partial-bg:#2E2413; --blocked-bg:#301B19;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0E1412; --surface:#161E1A; --sunk:#1C2621;
+    --ink:#E7EEE9; --ink-2:#A3B1AA; --ink-3:#7A8880;
+    --line:#283330; --line-2:#36443F;
+    --accent:#4FBF92; --accent-soft:#163026;
+    --built:#5BC189; --partial:#D7A93F; --blocked:#E08279;
+    --built-bg:#142C20; --partial-bg:#2E2413; --blocked-bg:#301B19;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--ground); color:var(--ink);
+    font-family:var(--body); font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:860px; margin:0 auto; padding:56px 24px 96px; display:flex; flex-direction:column; gap:48px}
+
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--ink-3);
+  }
+  h1{
+    font-family:var(--display); font-weight:600; font-size:clamp(34px,5.5vw,50px);
+    line-height:1.08; letter-spacing:-.02em; margin:12px 0 0; text-wrap:balance;
+  }
+  .standfirst{
+    font-family:var(--display); font-size:19px; line-height:1.5; color:var(--ink-2);
+    max-width:62ch; margin:16px 0 0;
+  }
+  h2{
+    font-family:var(--display); font-weight:600; font-size:27px; line-height:1.2;
+    letter-spacing:-.015em; margin:0; text-wrap:balance;
+  }
+  h3{font-size:15px; font-weight:600; margin:0; letter-spacing:-.005em}
+  p{margin:0; max-width:70ch}
+  a{color:var(--accent)}
+  code{font-family:var(--mono); font-size:.86em; background:var(--sunk); padding:1px 5px; border-radius:3px}
+
+  header{border-bottom:2px solid var(--ink); padding-bottom:28px}
+  .meta{
+    display:flex; flex-wrap:wrap; gap:6px 20px; margin-top:24px;
+    font-family:var(--mono); font-size:11.5px; color:var(--ink-3);
+  }
+  .meta b{color:var(--ink-2); font-weight:500}
+
+  /* ── Scoreboard ─────────────────────────────────────────── */
+  .board{display:flex; flex-direction:column; gap:1px; background:var(--line); border:1px solid var(--line); border-radius:4px; overflow:hidden}
+  .row{
+    background:var(--surface); display:grid; grid-template-columns:28px 1fr 132px 92px;
+    gap:16px; align-items:center; padding:15px 18px;
+  }
+  @media(max-width:640px){
+    .row{grid-template-columns:24px 1fr; row-gap:10px}
+    .row .meter,.row .chip{grid-column:2}
+  }
+  .num{font-family:var(--mono); font-size:12px; color:var(--ink-3)}
+  .row h3{font-size:14.5px}
+  .row .sub{font-size:12.5px; color:var(--ink-3); margin-top:2px}
+  .meter{height:6px; background:var(--sunk); border-radius:3px; overflow:hidden}
+  .meter span{display:block; height:100%; border-radius:3px}
+  .chip{
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;
+    padding:3px 8px; border-radius:3px; text-align:center; white-space:nowrap; font-weight:500;
+  }
+  .c-built{background:var(--built-bg); color:var(--built)}
+  .c-partial{background:var(--partial-bg); color:var(--partial)}
+  .c-blocked{background:var(--blocked-bg); color:var(--blocked)}
+  .m-built span{background:var(--built)} .m-partial span{background:var(--partial)} .m-blocked span{background:var(--blocked)}
+
+  /* ── Workstream ─────────────────────────────────────────── */
+  .stream{display:flex; flex-direction:column; gap:20px; scroll-margin-top:20px}
+  .stream-head{display:flex; gap:14px; align-items:baseline; border-bottom:1px solid var(--line-2); padding-bottom:12px}
+  .stream-head .num{font-family:var(--display); font-size:27px; color:var(--accent); line-height:1}
+  .cols{display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line); border:1px solid var(--line); border-radius:4px; overflow:hidden}
+  @media(max-width:700px){.cols{grid-template-columns:1fr}}
+  .col{background:var(--surface); padding:16px 18px; display:flex; flex-direction:column; gap:10px}
+  .col-label{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3)}
+  ul{margin:0; padding-left:17px; display:flex; flex-direction:column; gap:7px; font-size:14px; color:var(--ink-2)}
+  li::marker{color:var(--line-2)}
+  li b{color:var(--ink); font-weight:600}
+  .verdict{
+    border-left:3px solid var(--accent); background:var(--accent-soft);
+    padding:14px 18px; font-size:14.5px; border-radius:0 4px 4px 0;
+  }
+  .verdict b{color:var(--ink)}
+  .warn{border-left-color:var(--blocked); background:var(--blocked-bg)}
+
+  /* ── Tables ─────────────────────────────────────────────── */
+  .scroll{overflow-x:auto; border:1px solid var(--line); border-radius:4px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; font-size:13.5px; min-width:540px}
+  th,td{text-align:left; padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--ink-3); font-weight:500; background:var(--sunk);
+  }
+  tr:last-child td{border-bottom:none}
+  td.w{font-family:var(--mono); font-size:12px; white-space:nowrap; color:var(--ink-2)}
+
+  /* ── Sequence ───────────────────────────────────────────── */
+  .seq{display:flex; flex-direction:column; gap:14px}
+  .phase{display:grid; grid-template-columns:96px 1fr; gap:18px; align-items:start}
+  @media(max-width:600px){.phase{grid-template-columns:1fr; gap:6px}}
+  .phase .when{
+    font-family:var(--mono); font-size:11px; color:var(--ink-3); padding-top:3px;
+    letter-spacing:.04em; text-transform:uppercase;
+  }
+  .phase .what{border-left:2px solid var(--line-2); padding:0 0 4px 18px; display:flex; flex-direction:column; gap:7px}
+  .phase.now .what{border-left-color:var(--accent)}
+  @media(max-width:600px){.phase .what{padding-left:14px}}
+  .phase h3{font-size:14.5px}
+  .phase p{font-size:13.5px; color:var(--ink-2)}
+
+  footer{border-top:1px solid var(--line); padding-top:20px; font-size:12.5px; color:var(--ink-3); max-width:70ch}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">HotelTrack · Feasibility audit</div>
+  <h1>Closing the attribution loop</h1>
+  <p class="standfirst">Four things stand between HotelTrack and proving that an ad produced a paying guest. Three of them are mostly built already. The fourth has not been started, and its clock is the longest — so it should start today.</p>
+  <div class="meta">
+    <span><b>Audited</b> 16 Sep 2026</span>
+    <span><b>Against</b> main @ 02898bd</span>
+    <span><b>Property</b> Aster Holidays</span>
+    <span><b>Method</b> schema + source read, live production probes</span>
+  </div>
+</header>
+
+<section>
+  <h2>Where each piece actually stands</h2>
+  <p style="margin:14px 0 18px; color:var(--ink-2)">The bar is how much of the machinery exists in the repo today — not how close it is to working, which is a different question and usually an external one.</p>
+  <div class="board">
+    <div class="row">
+      <div class="num">01</div>
+      <div><h3>Ad-attributed revenue from the booking engine</h3><div class="sub">Booking ingest, identity hashing, journey matching, lifecycle history</div></div>
+      <div class="meter m-partial"><span style="width:85%"></span></div>
+      <div class="chip c-blocked">Vendor-gated</div>
+    </div>
+    <div class="row">
+      <div class="num">02</div>
+      <div><h3>Calls from a per-hotel sheet</h3><div class="sub">Apps Script push, CSV backstop, reconciliation rules</div></div>
+      <div class="meter m-built"><span style="width:90%"></span></div>
+      <div class="chip c-partial">Needs UI</div>
+    </div>
+    <div class="row">
+      <div class="num">03</div>
+      <div><h3>Message counts from Meta</h3><div class="sub">Insights <code>actions</code> matchers, campaign snapshots</div></div>
+      <div class="meter m-partial"><span style="width:95%"></span></div>
+      <div class="chip c-blocked">Sync broken</div>
+    </div>
+    <div class="row">
+      <div class="num">04</div>
+      <div><h3>Click-to-WhatsApp → booking attribution</h3><div class="sub">Cloud API webhook, <code>ctwa_clid</code> capture, phone matching</div></div>
+      <div class="meter m-blocked"><span style="width:15%"></span></div>
+      <div class="chip c-blocked">Not started</div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────── 1 -->
+<section class="stream" id="s1">
+  <div class="stream-head"><span class="num">1</span><h2>Ad-attributed revenue from the booking engine</h2></div>
+
+  <p>This is the product's core claim, and it is <b>far closer than the current dashboard suggests</b>. A complete booking-attribution subsystem already exists — it has simply never been connected to a live hotel, which is why the report says "Bookings aren't connected yet" and every revenue figure falls back to the tracking snippet.</p>
+
+  <div class="cols">
+    <div class="col">
+      <div class="col-label">Already built</div>
+      <ul>
+        <li><b>Booking</b> — gross / net / room / ancillary / tax / refunded, idempotent on <code>(hotel, provider, externalBookingId)</code>, so a webhook retry cannot duplicate revenue</li>
+        <li><b>BookingStatusEvent</b> — append-only, so cancellations and refunds reconstruct realized revenue rather than overwriting it</li>
+        <li><b>BookingJourneyMatch</b> — ten match methods graded <code>DETERMINISTIC</code> → <code>STRONG</code> → <code>PARTIAL</code> → <code>UNKNOWN</code>, with the compared evidence kept for audit</li>
+        <li><b>Cross-domain handoff</b> — snippet v2.5 carries <code>_ht_j</code> to the booking host, 30-minute TTL. This is the fix for identity dying at the domain boundary</li>
+        <li><b>Hashed guest identity</b> — email and phone hashed through the same salted chain as visitors, so matching never stores a raw contact detail</li>
+        <li>Push receiver with constant-time secret comparison, per-provider rate limiting, tenant resolution</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="col-label">Missing</div>
+      <ul>
+        <li><b>The Simplotel adapter is a deliberate stub.</b> It refuses to guess field names — its own comment says guessing produces "confident, wrong bookings and wrong revenue"</li>
+        <li>No <code>BookingConnection</code> row exists for Aster, and there is <b>no UI anywhere</b> to create one</li>
+        <li>Revenue on the report still reads <code>TrackingEvent.conversionValue</code>, not <code>Booking</code></li>
+        <li>No decision yet on which match confidences count as ad-attributed revenue</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict warn">
+    <b>The blocker is external, and it is the long pole.</b> Everything here waits on two things only Simplotel can give: their actual webhook payload spec (field names for amounts, guest identifiers, reservation id), and confirmation that <code>_ht_j</code> survives the hand-off and comes back on the booking. Without the second, matching drops from <code>DETERMINISTIC</code> to email/phone hashes — which collide when a family books under one address. <b>Open that conversation this week; it gates everything else in this workstream.</b>
+  </div>
+
+  <p>One design decision needs making before the numbers go in front of a hotel. Not every booking will match a journey. If "ad revenue" silently means "revenue we could match", the figure understates and nobody can tell by how much. The honest shape is three numbers side by side: <b>attributed to ads</b>, <b>attributed elsewhere</b>, and <b>unmatched</b> — with the third visible rather than absorbed. The grading ladder already exists to support exactly this; my recommendation is to count only <code>DETERMINISTIC</code> and <code>STRONG</code> as attributed, and show <code>PARTIAL</code> separately.</p>
+</section>
+
+<!-- ─────────────────────────────────────────────── 2 -->
+<section class="stream" id="s2">
+  <div class="stream-head"><span class="num">2</span><h2>Calls from a per-hotel sheet</h2></div>
+
+  <p>Mechanically solved — this shipped today and is live on Aster's report showing 519 calls. The question is only how a <em>second</em> hotel gets the same thing.</p>
+
+  <div class="cols">
+    <div class="col">
+      <div class="col-label">Already built</div>
+      <ul>
+        <li>Apps Script push on an <code>onChange</code> trigger — an edit lands in seconds, workbook stays private</li>
+        <li>Daily CSV re-import as a self-healing backstop, so a dropped webhook is not permanent staleness</li>
+        <li>Reconciliation: a day whose disposition columns contradict its stored total is withheld, not added</li>
+        <li>Missing days stay missing — never counted as zero</li>
+        <li>Coverage warning on the report, which fires and clears itself automatically</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="col-label">Missing</div>
+      <ul>
+        <li><b>Column layouts are hardcoded.</b> <code>cbh_v1</code> and <code>three_hills_v1</code> are TypeScript constants listing exact column order</li>
+        <li>Sheet-to-property wiring exists only in a seed script — <b>no UI</b></li>
+        <li><b>No status card anywhere.</b> Meta, Google Ads, GA4 and Instagram each have one; the tracker has none — which is precisely why it sat seven days stale unnoticed</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <b>Fully in our control, and small.</b> Today, onboarding a hotel whose sheet differs by one column means writing a new layout constant and deploying. That is fine for two properties and untenable at twenty. The fix is to move layouts from code to data — a header-mapping row per connection — plus a settings screen and a status card. Roughly a week, no external dependency, and it removes a deploy from every future onboarding.
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────── 3 -->
+<section class="stream" id="s3">
+  <div class="stream-head"><span class="num">3</span><h2>Message counts from Meta</h2></div>
+
+  <p>Built and rendering. Two problems, one fixable and one permanent.</p>
+
+  <div class="cols">
+    <div class="col">
+      <div class="col-label">Fixable</div>
+      <ul>
+        <li><b>The campaign sync has been dead since 10 Sep.</b> <code>AdCampaignSnapshot</code> rows arrive with a null messaging figure while account-level spend keeps flowing — so nothing looked broken</li>
+        <li>Diagnosing it needs database or log access, both currently closed to me</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="col-label">Permanent</div>
+      <ul>
+        <li><b>Meta does not separate WhatsApp from Messenger and Instagram DM.</b> One combined figure, no per-network breakdown exposed to connected tools</li>
+        <li>So a tile labelled "WhatsApp messages" fed from here can never be WhatsApp-only, however it is labelled</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict">
+    That second point is what makes workstream 4 necessary rather than merely nice. <b>The Cloud API is the only route to a real WhatsApp-only number</b> — and the only route to knowing <em>who</em> messaged, which is what turns a count into revenue.
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────── 4 -->
+<section class="stream" id="s4">
+  <div class="stream-head"><span class="num">4</span><h2>Click-to-WhatsApp → booking attribution</h2></div>
+
+  <p>Nothing exists yet. But less is needed than it appears, because the hard half — matching a contact detail to a booking without storing it — is already solved and in production use.</p>
+
+  <div class="cols">
+    <div class="col">
+      <div class="col-label">Reusable today</div>
+      <ul>
+        <li><code>Booking.guestPhoneHash</code> and <code>guestEmailHash</code>, already populated by the ingest path</li>
+        <li>The salted hash chain in <code>lib/pii.ts</code> — one function, both sides</li>
+        <li><code>phone_hash</code> and <code>email_hash</code> are already match methods in the grading ladder</li>
+        <li><code>bookingChannel</code> already carries <code>whatsapp</code> as a value</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="col-label">To build</div>
+      <ul>
+        <li>WhatsApp Business Account + Cloud API access <span style="color:var(--blocked)">(Meta review)</span></li>
+        <li>Webhook receiver for inbound messages</li>
+        <li><b><code>ctwa_clid</code> capture</b> — the click-to-WhatsApp click id Meta attaches to a conversation that began from an ad</li>
+        <li>Phone normalisation to E.164 before hashing, or nothing will match</li>
+        <li>Booking-sheet ingest as the interim revenue source</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <b>Prioritise <code>ctwa_clid</code> over phone matching.</b> Meta stamps it on the conversation itself, so it names the exact ad — that is <code>DETERMINISTIC</code> evidence. Phone matching is inference: two guests share a number more often than you would like, and a booking made by a travel agent carries the agent's. Build the click id as the primary key and keep phone as the fallback, exactly as the existing ladder is shaped.
+  </div>
+
+  <div class="verdict warn">
+    <b>Two things will bite.</b> First, the number you connect to the Cloud API <em>cannot already be in use on the WhatsApp app</em> — if the property is running its bookings off a phone handset today, that number has to be migrated, and their current workflow changes. Get that agreed before any code. Second, this stores customer phone numbers under India's DPDP Act; the hashing design helps, but notice and purpose need to be right, and a hash cannot be un-hashed when someone asks what you hold on them.
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────── sequence -->
+<section>
+  <h2>Sequencing</h2>
+  <p style="margin:14px 0 22px; color:var(--ink-2)">Two of these have external approval gates. Those clocks should start before any code is written, because nothing we do in the meantime shortens them.</p>
+
+  <div class="seq">
+    <div class="phase now">
+      <div class="when">This week</div>
+      <div class="what">
+        <h3>Start both external clocks, in parallel</h3>
+        <p>Email Simplotel for the Booking Push payload spec and ask explicitly whether a query parameter on the booking URL is echoed back. Separately, begin Meta Business verification for WhatsApp Cloud API. Neither needs engineering time; both gate months of it.</p>
+      </div>
+    </div>
+    <div class="phase now">
+      <div class="when">Also now</div>
+      <div class="what">
+        <h3>Find why the campaign sync died</h3>
+        <p>Six days of messaging data are missing and the figure on your client's report is understated. Needs database or Vercel log access.</p>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="when">Week 1–2</div>
+      <div class="what">
+        <h3>Ops-tracker self-service</h3>
+        <p>Layouts from code to data, a settings screen, and a status card. Unblocks every future hotel onboarding without a deploy — and would have surfaced the seven-day gap on its own.</p>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="when">On Simplotel reply</div>
+      <div class="what">
+        <h3>Finish the adapter and connect one hotel</h3>
+        <p>The stub becomes real in about a day once the field names are known. Then: a connection UI, switch report revenue from <code>TrackingEvent</code> to <code>Booking</code>, and add the attributed / other / unmatched split.</p>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="when">On Meta approval</div>
+      <div class="what">
+        <h3>Cloud API webhook and click-id capture</h3>
+        <p>Receiver, <code>ctwa_clid</code> storage, E.164 normalisation into the existing hash chain. The matching half already exists, so this is smaller than it looks.</p>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="when">Last</div>
+      <div class="what">
+        <h3>Join WhatsApp conversations to bookings</h3>
+        <p>Only meaningful once both 1 and 4 are live — it needs bookings in the database and conversations to match them against.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────── risk -->
+<section>
+  <h2>Where the delay will actually come from</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Risk</th><th>Lands on</th><th>Exposure</th><th>What reduces it</th></tr></thead>
+      <tbody>
+        <tr><td><b>Simplotel never sends a spec</b>, or the journey token does not survive</td><td class="w">1</td><td class="w">Weeks–months</td><td>Ask this week. If the token dies, fall back to email/phone hashes and say so in the UI rather than overstating confidence.</td></tr>
+        <tr><td><b>Meta Business verification</b> stalls on documents</td><td class="w">4</td><td class="w">2–6 weeks</td><td>Start now; it runs in the background at zero engineering cost.</td></tr>
+        <tr><td><b>The property's WhatsApp number is already on the app</b></td><td class="w">4</td><td class="w">Blocks entirely</td><td>Confirm with the hotel before building. May need a new number and a workflow change on their side.</td></tr>
+        <tr><td><b>Too few bookings match</b> to be credible</td><td class="w">1, 4</td><td class="w">Undermines the claim</td><td>Show the unmatched remainder as its own figure. A visible gap is survivable; a silently understated one is not.</td></tr>
+        <tr><td><b>Campaign sync cause is systemic</b>, not a one-off</td><td class="w">3</td><td class="w">Recurring</td><td>Needs the log access that is currently closed.</td></tr>
+        <tr><td><b>DPDP obligations</b> on stored phone numbers</td><td class="w">4</td><td class="w">Legal</td><td>Hashing helps but is not sufficient. Get notice and purpose reviewed before the first message is stored.</td></tr>
+        <tr><td><b>Each new hotel needs a deploy</b></td><td class="w">2</td><td class="w">Compounds</td><td>The week of work in phase 1–2 removes it permanently.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────── asks -->
+<section>
+  <h2>Decisions and access needed</h2>
+  <div class="cols">
+    <div class="col">
+      <div class="col-label">Decisions only you can make</div>
+      <ul>
+        <li>Which match confidences count as <b>ad-attributed revenue</b> — recommend <code>DETERMINISTIC</code> + <code>STRONG</code>, with <code>PARTIAL</code> shown separately</li>
+        <li>Whether unmatched bookings appear on the <b>hotel's</b> report or only the agency's</li>
+        <li>Which booking engines beyond Simplotel need adapters</li>
+        <li>Whether the property will migrate its WhatsApp number</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="col-label">Access still closed to me</div>
+      <ul>
+        <li><b><code>DATABASE_URL</code></b> — all 31 Vercel secrets are write-only, so <code>env pull</code> returns nothing usable. This blocks diagnosing the campaign sync and running 37 test files</li>
+        <li><b>Vercel observability</b> — runtime logs and errors both return 403</li>
+        <li><b>Simplotel's payload spec</b> — the single hardest dependency in this document</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Audited against <code>main</code> at commit <code>02898bd</code> on 16 September 2026. Readiness percentages describe how much machinery exists in the repository, not proximity to working — for workstream 1 the remaining 15% is entirely external. Live figures were probed through the production share link; no database access was available.
+</footer>
+
+</div>

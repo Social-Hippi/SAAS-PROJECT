@@ -41,11 +41,26 @@ function secretMatches(presented: string, expected: string): boolean {
 }
 
 /** Bearer token, or null. Accepts only the Authorization header. */
+/**
+ * The presented credential, with or without a `Bearer ` prefix.
+ *
+ * WHY BARE TOKENS ARE ACCEPTED. A provider configures this header by typing JSON
+ * into a form on their own dashboard, and Simplotel's form ships an EXAMPLE that
+ * shows a bare token: {"Authorization": "a9c98543dd94..."}. A partner who copies
+ * the shape of that example — the obvious thing to do — would be rejected with a
+ * 401 that looks identical to a wrong secret, and the round trip to find out why
+ * is measured in weeks with a vendor we cannot iterate with quickly.
+ *
+ * Accepting both costs nothing: the value is still compared in constant time
+ * against the stored secret, so a bare string that is not the secret fails
+ * exactly as it did before. What changes is that a correct secret typed the
+ * natural way now works.
+ */
 function bearerFrom(headers: Headers): string | null {
-  const raw = headers.get("authorization");
+  const raw = headers.get("authorization")?.trim();
   if (!raw) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(raw.trim());
-  const token = m?.[1]?.trim();
+  const m = /^Bearer\s+(.+)$/i.exec(raw);
+  const token = (m ? m[1] : raw).trim();
   return token ? token : null;
 }
 
