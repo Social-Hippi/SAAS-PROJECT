@@ -103,6 +103,13 @@ const isPublicRoute = createRouteMatcher([
   "/api/integrations/ops-tracker(.*)",
   // Scheduled reconciliation for the same import, CRON_SECRET-gated in-route.
   "/api/cron/ops-tracker-sync(.*)",
+  // WhatsApp Cloud API webhook. Meta carries no Clerk session, and its GET
+  // subscription handshake must reach the route to be verified at all. The route
+  // authenticates every POST by HMAC over the raw body (X-Hub-Signature-256)
+  // under META_APP_SECRET, and resolves the tenant from phone_number_id against
+  // a connection an agency had to create — a payload naming an unknown number is
+  // dropped, never stored against a guess.
+  "/api/integrations/whatsapp(.*)",
   // Daily GA4 (OAuth) sync cron, gated by CRON_SECRET inside the route.
   "/api/ga4/sync(.*)",
   // GA4 OAuth callback: the browser arrives from accounts.google.com; the signed
