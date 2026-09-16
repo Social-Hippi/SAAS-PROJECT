@@ -36,6 +36,18 @@ let envSnapshot: Record<string, string | undefined> = {};
 
 const params = (provider: string) => ({ params: Promise.resolve({ provider }) });
 
+/** Push with the Authorization header set VERBATIM, prefix and all. */
+function pushRawAuth(body: string, authorization: string) {
+  return pushPOST(
+    new Request("http://localhost/api/integrations/booking/simplotel", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization },
+      body,
+    }),
+    params("simplotel"),
+  );
+}
+
 function push(body: string, opts: { auth?: string | null; provider?: string; contentType?: string } = {}) {
   const headers: Record<string, string> = {
     "content-type": opts.contentType ?? "application/json",
@@ -129,6 +141,24 @@ describe("transport and authentication", () => {
     const res = await push("{}", { auth: "sk_wrong_secret_value_00000000000000" });
     expect(res.status).toBe(403);
     expect((await res.json()).error).toBe("Invalid credentials");
+  });
+
+  test("a BARE token authenticates, exactly as a Bearer one does", async () => {
+    // Simplotel's Booking Push form is a free-text JSON box, and the example it
+    // ships shows a bare token: {"Authorization": "a9c98543dd94..."}. A partner
+    // copying that shape would otherwise get a 401 indistinguishable from a
+    // wrong secret — and the round trip to discover why runs to weeks.
+    //
+    // 422 is the PASS here: authentication succeeded and the request reached the
+    // adapter, which refuses every body until the payload contract is agreed.
+    const res = await pushRawAuth("{}", SECRET_A);
+    expect(res.status).toBe(422);
+  });
+
+  test("a bare token that is not the secret is still refused", async () => {
+    // Tolerating the prefix must not tolerate the credential.
+    const res = await pushRawAuth("{}", "sk_wrong_secret_value_00000000000000");
+    expect(res.status).toBe(403);
   });
 
   test("wrong content type → 415", async () => {

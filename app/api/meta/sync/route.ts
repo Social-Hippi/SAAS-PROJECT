@@ -5,6 +5,7 @@ import { getDailyInsights, getDailyCampaignInsights, MetaAuthError } from "@/lib
 import { runDailyAlerts, type RunAlertsResult } from "@/lib/alerts";
 import { recordSyncFailure } from "@/lib/backfill";
 import { refreshCampaignPerformance } from "@/lib/campaign-attribution";
+import { campaignSnapshotData } from "@/lib/meta-campaign-row";
 
 // Scheduled Meta Ads sync. Runs on Vercel Cron once a day (see vercel.json) and
 // can be triggered manually for testing. Guarded by CRON_SECRET — Vercel Cron
@@ -143,15 +144,11 @@ export async function GET(request: Request) {
         );
         for (const row of campaignRows) {
           const date = new Date(`${row.date}T00:00:00.000Z`);
-          const data = {
-            metaAccountId: accountId,
-            campaignName: row.campaignName,
-            spend: row.spend.toFixed(2),
-            impressions: row.impressions,
-            clicks: row.clicks,
-            conversions: row.conversions,
-            purchaseValue: row.purchaseValue.toFixed(2),
-          };
+          // Objectives are not fetched on this path, so `objective` resolves
+          // from the insight row alone. Every other column is written — this
+          // used to be a seven-field literal, which is how six columns silently
+          // stopped being populated (see lib/meta-campaign-row.ts).
+          const data = campaignSnapshotData(row, accountId);
           await prisma.adCampaignSnapshot.upsert({
             where: {
               hotelClientId_metaCampaignId_date: {

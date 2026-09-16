@@ -3,13 +3,27 @@ import { describe, expect, test } from "vitest";
 import { readCode } from "./helpers/read-code";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHARE ↔ AGENCY PARITY.
+// SHARE ↔ AGENCY SEPARATION.
 //
-// The public /share/<uuid> report and the agency's /agency/hotel/[id] page used
-// to be different code: one had five panels, the other twenty-odd, and every
-// change to either widened the gap. They are now the same component, and this
-// suite exists to keep it that way — plus to pin the four things that are
-// ALLOWED to differ, so a future change to any of them has to be deliberate:
+// HISTORY, because this suite has now enforced BOTH answers and the reasoning
+// matters more than either. The share report and the agency page were once
+// different code — five panels against twenty-odd — and drifted with every
+// change to either. They were merged onto <FullHotelDashboard>, and this suite
+// existed to keep them identical.
+//
+// They are deliberately separate again, for a reason the merge did not address:
+// sameness fixed drift but answered the AGENCY's question on the HOTEL's report.
+// A hotel owner opens the link to learn four things — what came in, what it
+// cost, who got in touch, how many booked — and twenty-five panels of
+// attribution working-out is not that. /share/<uuid> now renders nine figures
+// from lib/metrics/client-report.ts and nothing else.
+//
+// So the invariant INVERTS: the share page must NOT reach the full dashboard.
+// What the old merge was protecting against — a second surface quietly growing
+// its own panels — is now protected by the loader instead. Nine fields, each a
+// MetricValue; a tenth panel means a new field, in one reviewed file.
+//
+// The agency page keeps the full dashboard, and these still hold:
 //
 //   1. CONTROLS. No link into an agency-only page may render for a share reader.
 //   2. AD SPEND. showAdSpendToHotel still governs the public link, on the
@@ -31,21 +45,32 @@ const SHARE_PAGE = readCode("app/share/[uuid]/page.tsx");
 const PROXY = readCode("proxy.ts");
 const HOTEL_AUTH = readCode("lib/hotel-auth.ts");
 
-// ── 1. One dashboard, two surfaces ──────────────────────────────────────────
+// ── 1. Two surfaces, two reports ────────────────────────────────────────────
 
-describe("1. both surfaces render the same dashboard", () => {
-  test("each page imports the shared component", () => {
-    for (const [name, src] of [["agency page", AGENCY_PAGE], ["share page", SHARE_PAGE]] as const) {
-      expect(src, name).toContain(
-        'import { FullHotelDashboard } from "@/components/dashboard/FullHotelDashboard"',
-      );
-      expect(src, name).toContain("<FullHotelDashboard");
-    }
+describe("1. the share page renders the nine-figure client report", () => {
+  test("the agency page keeps the full dashboard", () => {
+    expect(AGENCY_PAGE).toContain(
+      'import { FullHotelDashboard } from "@/components/dashboard/FullHotelDashboard"',
+    );
+    expect(AGENCY_PAGE).toContain("<FullHotelDashboard");
+  });
+
+  test("the share page renders the client report instead", () => {
+    expect(SHARE_PAGE).toContain(
+      'import { ClientReport } from "@/components/dashboard/ClientReport"',
+    );
+    expect(SHARE_PAGE).toContain("<ClientReport");
+  });
+
+  test("the share page cannot reach the full dashboard at all", () => {
+    // THE regression guard. Re-importing it is how a hotel ends up back in front
+    // of twenty-five panels of the agency's working-out.
+    expect(SHARE_PAGE).not.toContain("FullHotelDashboard");
   });
 
   test("neither page re-implements the panels itself", () => {
-    // The whole point: a panel lives in ONE file. If a page starts importing
-    // KpiStrip or ContentPerformanceTable again, the split is coming back.
+    // A panel lives in ONE file. If a page starts importing KpiStrip or
+    // ContentPerformanceTable directly, a third surface is being grown in place.
     for (const [name, src] of [["agency page", AGENCY_PAGE], ["share page", SHARE_PAGE]] as const) {
       for (const panel of [
         "KpiStrip",
@@ -63,10 +88,17 @@ describe("1. both surfaces render the same dashboard", () => {
     }
   });
 
-  test("the share page declares itself the share viewer, on the hotel API, with its token", () => {
-    expect(SHARE_PAGE).toContain('viewer="share"');
-    expect(SHARE_PAGE).toContain('apiBase="/api/hotel"');
-    expect(SHARE_PAGE).toContain("shareToken={uuid}");
+  test("the share report is fed by the one loader, under the tenant override", () => {
+    // agencyId comes off the ShareLink row and is installed as the request-scoped
+    // override, so every query inside stays filtered by agencyId. A share page
+    // that loaded data outside runWithAgencyScope would be reading unscoped.
+    expect(SHARE_PAGE).toContain("loadClientReport");
+    expect(SHARE_PAGE).toMatch(/runWithAgencyScope\(link\.agencyId/);
+  });
+
+  test("the share page passes the hotel's own spend flag, not a literal", () => {
+    expect(SHARE_PAGE).toMatch(/showAdSpend:\s*link\.showAdSpend/);
+    expect(SHARE_PAGE).toMatch(/showAdSpend=\{link\.showAdSpend\}/);
   });
 
   test("the agency page declares itself the agency viewer", () => {

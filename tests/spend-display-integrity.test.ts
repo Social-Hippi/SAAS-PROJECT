@@ -256,3 +256,65 @@ describe("no contaminated ROAS formulas", () => {
     expect(src).not.toMatch(/allRevenue\s*\/\s*\w*[Ss]pend/);
   });
 });
+
+// ── 7. The contact report honours showAdSpendToHotel ──────────────────────
+//
+// ContactReport was added by the client-report-v2 work AFTER the share-page
+// spend gate, and did not honour it. On a hotel with showAdSpendToHotel off,
+// /share/<uuid> still printed each platform's Spend tile and both halves of the
+// "Cost per contact" bridge — while the client-fetched half of the very same
+// report (/api/hotel/[id]/owner-metrics, via lib/share-spend-gate.ts) correctly
+// returned marketingSpend {total: null, meta: 0, google: 0}. The two halves of
+// one page disagreed, and the visible half was the leaking one.
+//
+// Source assertions, per the file header: this is a binding inside a server
+// component, and the binding is what regressed.
+
+const CONTACT_REPORT = read("components/dashboard/contact/ContactReport.tsx");
+
+describe("contact report spend gate", () => {
+  test("ContactReport accepts the showAdSpend flag", () => {
+    expect(CONTACT_REPORT).toMatch(/showAdSpend:\s*boolean/);
+  });
+
+  test("the dashboard passes the flag down rather than hardcoding it", () => {
+    // Pins the prop to the variable. `showAdSpend={true}` would satisfy a
+    // looser regex while reopening the leak for every share link.
+    expect(SHARE_DASHBOARD).toMatch(/<ContactReport[\s\S]*?showAdSpend=\{showAdSpend\}[\s\S]*?\/>/);
+  });
+
+  test("the platform Spend tile is gated", () => {
+    expect(CONTACT_REPORT).toMatch(
+      /showAdSpend\s*&&\s*<Figure\s+label="Spend"/,
+    );
+  });
+
+  test("the cost-per-contact bridge is gated whole", () => {
+    // Both tiles are spend ÷ contacts, so neither survives the flag. The
+    // section goes entirely: a "Cost per contact" heading above two dashes
+    // still discloses that a spend figure exists.
+    expect(CONTACT_REPORT).toMatch(/\{showAdSpend\s*&&\s*\(\s*<section/);
+  });
+
+  test("no spend-derived figure renders unconditionally", () => {
+    // The blended figures must never appear outside a gated region.
+    const ungated = CONTACT_REPORT.replace(/\{showAdSpend[\s\S]*?\n      \)\}/g, "");
+    expect(ungated).not.toMatch(/blendedCostPerContact=\{/);
+    expect(ungated).not.toMatch(/costPerQualifiedContact=\{/);
+  });
+});
+
+// ── 8. Recommended actions never quote spend to a spend-hidden reader ─────
+//
+// The "What to do next" list is built from the same noOutcomeCampaigns rows as
+// the panel below it. The panel was gated; the action was not, so the copy
+// ("Review {campaign}. It spent {spend} in this period...") put a rupee figure
+// in front of readers the panel deliberately hides it from.
+
+describe("recommended actions spend gate", () => {
+  test("topNoOutcomeCampaign is gated on showAdSpend", () => {
+    expect(SHARE_DASHBOARD).toMatch(
+      /topNoOutcomeCampaign:\s*\n?\s*showAdSpend\s*&&\s*noOutcomeCampaigns\[0\]/,
+    );
+  });
+});

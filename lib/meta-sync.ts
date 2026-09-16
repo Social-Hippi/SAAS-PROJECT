@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { campaignSnapshotData } from "@/lib/meta-campaign-row";
 import { getTokenForApiCall } from "@/lib/token-access";
 import type { SecretToken } from "@/lib/encryption";
 import {
@@ -150,24 +151,7 @@ export async function syncHotelAds(
     }
     for (const row of campaignRows) {
       const date = new Date(`${row.date}T00:00:00.000Z`);
-      const data = {
-        metaAccountId: hotel.metaAdAccountId,
-        campaignName: row.campaignName,
-        // Insights first (it is the row's own answer), then the campaign's.
-        objective: row.objective ?? objectives.get(row.campaignId) ?? null,
-        spend: row.spend.toFixed(2),
-        impressions: row.impressions,
-        clicks: row.clicks,
-        conversions: row.conversions,
-        purchaseValue: row.purchaseValue.toFixed(2),
-        reach: row.reach,
-        messagingStarted: row.messagingStarted,
-        calls: row.calls,
-        leads: row.leads,
-        qualityRanking: row.qualityRanking,
-        engagementRateRanking: row.engagementRateRanking,
-        conversionRateRanking: row.conversionRateRanking,
-      };
+      const data = campaignSnapshotData(row, hotel.metaAdAccountId, objectives);
       await prisma.adCampaignSnapshot.upsert({
         where: {
           hotelClientId_metaCampaignId_date: {

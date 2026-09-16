@@ -28,6 +28,8 @@ import { IntegrationStatusBadge } from "@/components/ui/IntegrationStatusBadge";
 import { MetaTokenForm } from "@/app/(agency)/agency/(app)/settings/MetaTokenForm";
 import { disconnectMetaToken } from "@/app/(agency)/agency/(app)/settings/actions";
 import { TestConnection } from "../install/TestConnection";
+import { MetaSyncButton } from "./MetaSyncButton";
+import { BookingConnectionCard } from "./BookingConnectionCard";
 import { HotelAdAccountSelect } from "./HotelAdAccountSelect";
 import { ConnectionHistory } from "./ConnectionHistory";
 import { archivedAccountSummaries } from "@/lib/meta-archive";
@@ -411,6 +413,19 @@ export default async function HotelIntegrationsPage({
     }
   }
 
+  // Booking Push connection — the source of REAL reservations. Never selects
+  // `credentials`: the ciphertext is stripped by the prisma scrub extension
+  // anyway, and this page has no reason to touch it.
+  const bookingConn = await agencyScoped(prisma.bookingConnection).findFirst({
+    where: { hotelClientId: hotel.id },
+    select: {
+      provider: true,
+      status: true,
+      lastBookingReceivedAt: true,
+      lastError: true,
+    },
+  });
+
   // ── Summary ────────────────────────────────────────────────────────────────
   const summary = summarize({
     snippet: snippetState(hotel.snippetStatus, hotel.lastEventAt),
@@ -602,15 +617,18 @@ export default async function HotelIntegrationsPage({
                   </p>
                 )}
               </div>
-              <form action={disconnectMetaToken}>
-                <input type="hidden" name="hotelId" value={hotel.id} />
-                <button
-                  type="submit"
-                  className="rounded-lg border border-line-strong bg-elevated px-3 py-1.5 text-sm font-medium text-ink-secondary hover:bg-line-strong"
-                >
-                  Disconnect
-                </button>
-              </form>
+              <div className="flex flex-wrap items-center gap-2">
+                <MetaSyncButton hotelId={hotel.id} />
+                <form action={disconnectMetaToken}>
+                  <input type="hidden" name="hotelId" value={hotel.id} />
+                  <button
+                    type="submit"
+                    className="rounded-lg border border-line-strong bg-elevated px-3 py-1.5 text-sm font-medium text-ink-secondary hover:bg-line-strong"
+                  >
+                    Disconnect
+                  </button>
+                </form>
+              </div>
             </div>
             <HotelAdAccountSelect
               hotelId={hotel.id}
@@ -945,6 +963,43 @@ export default async function HotelIntegrationsPage({
           lastSyncError={gads?.lastSyncError ?? null}
           accounts={gadsAccounts}
           metrics={gadsMetrics}
+        />
+      </IntegrationCard>
+
+      {/* ── Card 6 — Booking Push (confirmed reservations + revenue) ───────── */}
+      <IntegrationCard
+        icon={<span className="text-xs font-bold text-brand">Bkg</span>}
+        title="Booking engine"
+        subtitle="Confirmed bookings, revenue, and which marketing produced them"
+        badge={
+          <IntegrationStatusBadge
+            tone={
+              !bookingConn ? "gray" : bookingConn.lastBookingReceivedAt ? "green" : "yellow"
+            }
+            label={
+              !bookingConn
+                ? "Not connected"
+                : bookingConn.lastBookingReceivedAt
+                  ? "Receiving"
+                  : "Awaiting first booking"
+            }
+          />
+        }
+      >
+        <BookingConnectionCard
+          hotelId={hotel.id}
+          appUrl={appUrl}
+          connection={
+            bookingConn
+              ? {
+                  provider: bookingConn.provider,
+                  status: bookingConn.status,
+                  lastBookingReceivedAt:
+                    bookingConn.lastBookingReceivedAt?.toISOString() ?? null,
+                  lastError: bookingConn.lastError,
+                }
+              : null
+          }
         />
       </IntegrationCard>
     </div>

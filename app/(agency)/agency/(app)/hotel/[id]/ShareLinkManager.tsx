@@ -1,8 +1,9 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { createShareLink, revokeShareLink, type ShareState } from "./share-actions";
+import { setShowAdSpendToHotel } from "./hotel-share-actions";
 
 type ActiveLink = {
   id: string;
@@ -59,14 +60,65 @@ function CreateForm({
   );
 }
 
+/**
+ * Whether the hotel sees ad-spend amounts on its /share/<uuid> report.
+ *
+ * WHY THIS IS HERE AND NOT IN HotelShareManager.tsx. It used to live there,
+ * beside the retired /h/<token> hotel-login flow. When that route was retired
+ * the whole component stopped being rendered — and the toggle went with it,
+ * unnoticed, because the FLAG kept working: showAdSpendToHotel defaults to
+ * false, so every hotel had spend hidden and no agency had any way to turn it
+ * on. A setting nobody can reach is not a default, it is a dead end.
+ *
+ * Submits on change rather than behind a Save button: it is one boolean, and an
+ * unsaved toggle that looks applied is worse than no toggle. The optimistic
+ * local state keeps the switch from snapping back while the action round-trips.
+ */
+function AdSpendToggle({ hotelId, initialOn }: { hotelId: string; initialOn: boolean }) {
+  const [on, setOn] = useState(initialOn);
+  return (
+    <form action={setShowAdSpendToHotel} className="flex items-start justify-between gap-3">
+      <input type="hidden" name="hotelId" value={hotelId} />
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-ink">Show ad spend amounts to hotel</p>
+        <p className="mt-0.5 text-xs text-ink-tertiary">
+          When OFF, the hotel sees bookings and enquiries but not what was spent on
+          ads — and not return on ad spend, which would give the spend away by
+          division.
+        </p>
+      </div>
+      <label
+        className="relative inline-flex shrink-0 cursor-pointer items-center"
+        title="When OFF, ad spend and return on ad spend are hidden from the hotel."
+      >
+        <input
+          type="checkbox"
+          name="show"
+          checked={on}
+          onChange={(e) => {
+            setOn(e.target.checked);
+            e.currentTarget.form?.requestSubmit();
+          }}
+          className="peer sr-only"
+        />
+        <span className="h-6 w-11 rounded-full bg-line-strong transition peer-checked:bg-brand" />
+        <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition peer-checked:translate-x-5" />
+      </label>
+    </form>
+  );
+}
+
 export function ShareLinkManager({
   hotelId,
   shareBaseUrl,
   link,
+  showAdSpend,
 }: {
   hotelId: string;
   shareBaseUrl: string;
   link: ActiveLink | null;
+  /** The hotel's showAdSpendToHotel flag, governing the share report only. */
+  showAdSpend: boolean;
 }) {
   if (!link) {
     return (
@@ -76,6 +128,11 @@ export function ShareLinkManager({
           works on any phone — no login needed — and expires in 30 days.
         </p>
         <CreateForm hotelId={hotelId} cta="Generate share link" />
+        {/* Rendered before a link exists too: the agency should be able to
+            decide what the report will show BEFORE handing it to a client. */}
+        <div className="mt-4 border-t border-line pt-4">
+          <AdSpendToggle hotelId={hotelId} initialOn={showAdSpend} />
+        </div>
       </div>
     );
   }
@@ -110,6 +167,10 @@ export function ShareLinkManager({
             ? ` · last ${new Date(link.lastViewedAt).toLocaleDateString()}`
             : ""}
         </span>
+      </div>
+
+      <div className="border-t border-line pt-4">
+        <AdSpendToggle hotelId={hotelId} initialOn={showAdSpend} />
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

@@ -1857,9 +1857,14 @@ async function renderDashboard({
     // read. Left null rather than approximated — an action must never fire on a
     // figure that was estimated. See Open Decisions.
     junkShareDeltaPoints: null,
-    topNoOutcomeCampaign: noOutcomeCampaigns[0]
-      ? { name: noOutcomeCampaigns[0].name, spend: formatCurrency(noOutcomeCampaigns[0].spend) }
-      : null,
+    // showAdSpend gates this the same way it gates the panel these rows feed
+    // below. The action's copy quotes the campaign's spend outright ("It spent
+    // {spend} in this period..."), so leaving it ungated put a rupee figure in
+    // "What to do next" on exactly the share links that hide the spend panel.
+    topNoOutcomeCampaign:
+      showAdSpend && noOutcomeCampaigns[0]
+        ? { name: noOutcomeCampaigns[0].name, spend: formatCurrency(noOutcomeCampaigns[0].spend) }
+        : null,
   };
   // ── 9.4 · demand rhythm ────────────────────────────────────────────────────
   // Visits bucketed by the PROPERTY's weekday, not UTC's: an evening booking in
@@ -2107,6 +2112,7 @@ async function renderDashboard({
         blendedCostPerContact={blendedCost}
         costPerQualifiedContact={qualifiedCost}
         periodLabel={range.dateLabel}
+        showAdSpend={showAdSpend}
       />
 
       {/* Section 2 — Content performance (attribution-dependent; hidden in pixel mode) */}

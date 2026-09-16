@@ -47,7 +47,19 @@ export default async function HotelDashboardPage({
   // this lookup is what decides whether the page exists AT ALL for this member.
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
     where: { id },
-    select: { id: true, name: true, websiteUrl: true, lastSyncedAt: true, timezone: true },
+    select: {
+      id: true,
+      name: true,
+      websiteUrl: true,
+      lastSyncedAt: true,
+      timezone: true,
+      // Governs the hotel-facing share link only, never this page. Read here so
+      // the agency can SEE and CHANGE it — the toggle used to live in
+      // HotelShareManager.tsx, which stopped being rendered when the /h/ hotel
+      // login was retired. The flag kept working and its default is false, so
+      // every hotel silently had spend hidden with no way to turn it on.
+      showAdSpendToHotel: true,
+    },
   });
   if (!hotel) notFound();
 
@@ -162,6 +174,7 @@ export default async function HotelDashboardPage({
           hotelId={hotel.id}
           shareBaseUrl={shareBaseUrl()}
           link={shareLink}
+          showAdSpend={hotel.showAdSpendToHotel}
         />
       </section>
 
