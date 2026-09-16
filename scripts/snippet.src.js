@@ -798,6 +798,23 @@
     if (document.body) attachInteractionListeners();
     else addEventListener("DOMContentLoaded", attachInteractionListeners);
 
+    // ── Phone normalization ────────────────────────────────────────────────
+    // MUST stay byte-identical to normalizePhone() in lib/pii-client.ts: this
+    // hash is computed here and compared server-side, so any divergence means
+    // the two never match and nobody ever sees an error.
+    //
+    // Stripping punctuation alone is not enough. One Indian mobile is written
+    // "+91 99004 49954", "09900449954" and "9900449954", which strip to three
+    // different strings and therefore three different hashes. All forms are
+    // folded to country code + subscriber number here.
+    function normalizePhone(v) {
+      var d = String(v == null ? "" : v).replace(/[^0-9]/g, "");
+      if (d.indexOf("00") === 0) d = d.slice(2);        // international prefix
+      else if (d.charAt(0) === "0") d = d.replace(/^0+/, ""); // trunk prefix
+      if (d.length === 10) d = "91" + d;                // bare national number
+      return d.length < 10 ? "" : d;
+    }
+
     // Visitor identification. window.htIdentify({ name, email, phone, customerId }).
     // Email + phone are SHA-256-hashed in the browser before sending — the raw
     // value never reaches our backend. Name + customerId are sent as-is (names are
@@ -834,7 +851,7 @@
           emailHash: null, phoneHash: null
         };
         var emailRaw = info.email ? String(info.email).trim().toLowerCase() : "";
-        var phoneRaw = info.phone ? String(info.phone).replace(/[^0-9]/g, "") : "";
+        var phoneRaw = info.phone ? normalizePhone(info.phone) : "";
         var pending = 0, done = false;
         function finish() {
           if (done || pending > 0) return;
