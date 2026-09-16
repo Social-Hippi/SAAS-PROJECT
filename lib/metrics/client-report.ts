@@ -128,6 +128,18 @@ const ROOM_NIGHTS_NONE_RECORDED =
 
 const NO_AD_ACTIVITY = "No advertising activity was recorded in this period.";
 
+/**
+ * Says the figure was not CAPTURED, not that nothing happened.
+ *
+ * The first wording here was "No advertising activity was recorded in this
+ * period", which was plainly false on a hotel that had spent ₹20,857 on Meta in
+ * the same window — the campaign table simply had no rows carrying the column.
+ * Telling a hotel its ads produced nothing, when the truth is that nobody
+ * measured, is the one mistake this module exists to prevent.
+ */
+const NO_CAMPAIGN_REPORTING =
+  "Meta has not reported campaign-level results for this period, so this figure is not available. It is not a zero.";
+
 // ── Loader ───────────────────────────────────────────────────────────────────
 
 export async function loadClientReport(args: {
@@ -195,8 +207,9 @@ export async function loadClientReport(args: {
       // "this row predates the column", which is not zero.
       agencyScoped(prisma.adCampaignSnapshot).aggregate({
         where: { hotelClientId, archived: false, date: dayFilter },
-        _sum: { calls: true, messagingStarted: true },
-        _count: { calls: true, messagingStarted: true },
+        _sum: { messagingStarted: true },
+        _max: { date: true },
+        _count: { messagingStarted: true },
       }),
       whenMigrated("operations tracker", [], () =>
         agencyScoped(prisma.manualLeadDaily).findMany({
@@ -273,20 +286,14 @@ export async function loadClientReport(args: {
   // _count on a nullable column counts NON-NULL rows, so zero means every row in
   // the window predates the column — the figure was never captured, rather than
   // captured as none.
-  const fromCampaigns = (
-    total: unknown,
-    populated: number,
-  ): MetricValue<number> =>
-    !metaConnected
-      ? unavailable("Meta Ads is not connected.")
-      : populated === 0
-        ? unavailable(NO_AD_ACTIVITY)
-        : ok(num(total));
-
-  const whatsappMessages = fromCampaigns(
-    campaigns._sum.messagingStarted,
-    campaigns._count.messagingStarted,
-  );
+  // _count on a nullable column counts NON-NULL rows, so zero means no campaign
+  // row in this window carried the figure — it was never captured, rather than
+  // captured as none. Summing regardless would report a confident 0.
+  const whatsappMessages: MetricValue<number> = !metaConnected
+    ? unavailable("Meta Ads is not connected.")
+    : campaigns._count.messagingStarted === 0
+      ? unavailable(NO_CAMPAIGN_REPORTING)
+      : ok(num(campaigns._sum.messagingStarted));
 
   // ── The property's own call log ────────────────────────────────────────────
   //
@@ -370,6 +377,12 @@ export async function loadClientReport(args: {
   };
 
   const metaNote = coverageNote("Meta Ads", meta._max.date);
+  // CAMPAIGN rows are a SEPARATE table from the account-level spend rows, and
+  // the two fall behind independently — in production on 2026-09-16 the account
+  // table was current while the campaign table had written nothing since the
+  // 10th. Reading this tile's coverage off `meta` suppressed the warning on the
+  // one figure that needed it, which is why it gets its own.
+  const campaignNote = coverageNote("Meta Ads campaign reporting", campaigns._max.date);
   const googleNote = coverageNote("Google Ads", google._max.date);
   // completeThrough is the tracker's own answer for "the latest day with a row",
   // already computed by the summary — deriving it a second time here is how the
@@ -394,7 +407,7 @@ export async function loadClientReport(args: {
       // coverage — not Meta's. Reading staleness off the wrong source is how a
       // figure that stops mid-period gets presented as if it covered all of it.
       calls: trackerNote,
-      whatsappMessages: metaNote,
+      whatsappMessages: campaignNote,
       totalRoomNights: trackerNote,
     }).filter(([, v]) => v != null),
   ) as ClientReport["staleNote"];

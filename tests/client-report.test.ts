@@ -100,8 +100,16 @@ describe("2. unknowns are never coerced", () => {
 
   test("a nullable ad column that was never captured is unavailable, not zero", () => {
     // _count on a nullable column counts NON-NULL rows, so 0 means the column
-    // was never populated for this window — summing it would report 0 calls.
-    expect(LOADER).toMatch(/populated === 0\s*\n?\s*\?\s*unavailable\(/);
+    // was never populated for this window — summing it would report 0 messages.
+    expect(LOADER).toMatch(
+      /campaigns\._count\.messagingStarted === 0\s*\n?\s*\?\s*unavailable\(/,
+    );
+  });
+
+  test("the unavailable reason does not claim the ads did nothing", () => {
+    // The first wording said "No advertising activity was recorded in this
+    // period" on a hotel that had spent ₹20,857 on Meta that same window.
+    expect(LOADER).toMatch(/NO_CAMPAIGN_REPORTING[\s\S]{0,400}It is not a zero/);
   });
 });
 
@@ -294,11 +302,19 @@ describe("8. a short figure says it is short", () => {
     // metaNote would read staleness off a table it no longer touches — and Meta
     // is current while the workbook is days behind, so the warning would be
     // silently suppressed on exactly the tile that needs it.
-    for (const f of ["metaSpend", "whatsappMessages"]) {
-      expect(LOADER).toMatch(new RegExp(`${f}:\\s*(showAdSpend \\? )?metaNote`));
-    }
+    expect(LOADER).toMatch(/metaSpend:\s*showAdSpend \? metaNote/);
     expect(LOADER).toMatch(/calls:\s*trackerNote/);
     expect(LOADER).toMatch(/totalRoomNights:\s*trackerNote/);
+  });
+
+  test("campaign figures take campaign coverage, not account-level coverage", () => {
+    // AdSnapshot (account) and AdCampaignSnapshot (campaign) fall behind
+    // INDEPENDENTLY: on 2026-09-16 the account table was current while the
+    // campaign table had written nothing since the 10th. Sharing one note
+    // suppressed the warning on the only tile that needed it.
+    expect(LOADER).toMatch(/campaignNote = coverageNote\([^)]*campaigns\._max\.date\)/);
+    expect(LOADER).toMatch(/whatsappMessages:\s*campaignNote/);
+    expect(LOADER).toMatch(/metaSpend:\s*showAdSpend \? metaNote/);
   });
 
   test("a covered source produces no key at all", () => {
