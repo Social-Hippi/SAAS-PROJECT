@@ -83,8 +83,12 @@ describe("2. unknowns are never coerced", () => {
   });
 
   test("an unfiled room-night period is not_traceable, not zero", () => {
-    // Nobody filed is not nobody stayed.
-    expect(LOADER).toMatch(/recorded\.length === 0\s*\?\s*notTraceable\(/);
+    // Nobody filed is not nobody stayed. summariseTrackerDays already returns an
+    // unknown for an unrecorded period; this keeps it an unknown rather than
+    // unwrapping it to a number.
+    expect(LOADER).toMatch(
+      /isOk\(trackerSummary\.roomNightsConfirmed\)[\s\S]{0,120}notTraceable\(ROOM_NIGHTS_NONE_RECORDED\)/,
+    );
   });
 
   test("a silent snippet is unavailable, not zero revenue", () => {
@@ -285,10 +289,16 @@ describe("8. a short figure says it is short", () => {
     expect(LOADER).toMatch(/returnOnAdSpend:\s*showAdSpend\s*\?\s*\(googleNote \?\? metaNote\)/);
   });
 
-  test("all three Meta-fed tiles carry Meta's coverage", () => {
-    for (const f of ["metaSpend", "calls", "whatsappMessages"]) {
+  test("each tile takes coverage from the source that actually feeds it", () => {
+    // Calls moved from Meta to the operations workbook. Leaving its coverage on
+    // metaNote would read staleness off a table it no longer touches — and Meta
+    // is current while the workbook is days behind, so the warning would be
+    // silently suppressed on exactly the tile that needs it.
+    for (const f of ["metaSpend", "whatsappMessages"]) {
       expect(LOADER).toMatch(new RegExp(`${f}:\\s*(showAdSpend \\? )?metaNote`));
     }
+    expect(LOADER).toMatch(/calls:\s*trackerNote/);
+    expect(LOADER).toMatch(/totalRoomNights:\s*trackerNote/);
   });
 
   test("a covered source produces no key at all", () => {
@@ -308,6 +318,31 @@ describe("8. a short figure says it is short", () => {
     for (const f of ["metaSpend", "googleSpend", "returnOnAdSpend"]) {
       expect(LOADER).toMatch(new RegExp(`${f}:\\s*showAdSpend \\?`));
     }
+  });
+});
+
+// ── 8b. Calls come from the workbook, and only the workbook ────────────────
+
+describe("8b. calls are the property's own log", () => {
+  test("calls read the operations tracker, not Meta click-to-call", () => {
+    expect(LOADER).toMatch(/const calls = trackerSummary\.totalCallsReceived/);
+    // The Meta call column must not feed this tile again by accident.
+    expect(LOADER).not.toMatch(/calls = fromCampaigns/);
+    expect(LOADER).not.toMatch(/campaigns\._sum\.calls/);
+  });
+
+  test("the figure goes through the tracker's reconciliation rules", () => {
+    // Summing the column directly would skip the variance checks, and a day
+    // whose disposition columns contradict its stored total would be added in.
+    expect(LOADER).toContain("summariseTrackerDays");
+  });
+
+  test("the caption says the property logged them and they are unattributable", () => {
+    // It counts EVERY call, not only ad-driven ones, so it must not be read as
+    // an advertising result.
+    expect(CAPTION.calls).toMatch(/property's own team/i);
+    expect(CAPTION.calls).toMatch(/not only calls from ads/i);
+    expect(CAPTION.calls).toMatch(/cannot be credited to any one channel/i);
   });
 });
 

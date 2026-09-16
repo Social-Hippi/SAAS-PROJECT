@@ -8,10 +8,13 @@ import {
   sum,
   notTraceable,
   unavailable,
+  isOk,
   type MetricValue,
 } from "@/lib/metrics/metric-value";
 import { zonedDayString } from "@/lib/timezone";
 import { whenMigrated } from "@/lib/missing-table";
+import { summariseTrackerDays, type TrackerDay } from "@/lib/ops-tracker/metrics";
+import { datesInRange } from "@/lib/metrics/contact-report";
 import { REPORTING_CURRENCY } from "@/lib/ad-spend";
 import type { ResolvedRange } from "@/lib/attribution";
 
@@ -95,7 +98,13 @@ export const CAPTION = {
    */
   returnOnAdSpend:
     "Total revenue ÷ total ad spend. Includes bookings that came from direct and organic visits, not only from ads.",
-  calls: "Calls connected from click-to-call ads.",
+  /**
+   * The workbook counts EVERY call the property took, not only the ones an ad
+   * connected — so it must not be read as an advertising result. The caption
+   * names the recorder, because that is what makes the number unattributable.
+   */
+  calls:
+    "Calls logged by the property's own team. Counts every call received, not only calls from ads — so it cannot be credited to any one channel.",
   whatsappMessages:
     "Conversations started from your ads. Meta reports WhatsApp, Messenger and Instagram together in this figure.",
   totalBookings: "Bookings completed on your website in this period.",
@@ -192,7 +201,7 @@ export async function loadClientReport(args: {
       whenMigrated("operations tracker", [], () =>
         agencyScoped(prisma.manualLeadDaily).findMany({
           where: { hotelClientId, date: dayFilter },
-          select: { roomNightsConfirmed: true, date: true },
+          orderBy: { date: "asc" },
         }),
       ),
     ]);
@@ -274,21 +283,64 @@ export async function loadClientReport(args: {
         ? unavailable(NO_AD_ACTIVITY)
         : ok(num(total));
 
-  const calls = fromCampaigns(campaigns._sum.calls, campaigns._count.calls);
   const whatsappMessages = fromCampaigns(
     campaigns._sum.messagingStarted,
     campaigns._count.messagingStarted,
   );
 
+  // ── The property's own call log ────────────────────────────────────────────
+  //
+  // CALLS COME FROM THE OPERATIONS WORKBOOK, NOT FROM META. Meta's click-to-call
+  // figure counts only calls its own ads connected; the workbook's "Total Calls
+  // Received" column counts every call the property took. They are different
+  // quantities, and the second is the one the hotel recognises as "calls".
+  //
+  // Run through summariseTrackerDays rather than summed here, so this figure
+  // obeys the same reconciliation rules as every other tracker number: a day
+  // whose disposition columns contradict its stored total is withheld rather
+  // than added in, and a missing day stays missing instead of counting as zero.
+  // That is also why the whole row is selected above — the checks need columns
+  // this report never displays.
+  //
+  // NOT ATTRIBUTABLE TO ANY CHANNEL. The workbook has no source or campaign
+  // column, so this number cannot be credited to Meta, to Google, or to
+  // anything else, and the caption says so.
+  const trackerSummary = summariseTrackerDays(
+    tracker.map(
+      (r): TrackerDay => ({
+        date: r.date.toISOString().slice(0, 10),
+        enquiries: r.enquiries,
+        repeatContacts: r.repeatContacts,
+        roomNightsConfirmed: r.roomNightsConfirmed,
+        junkSpam: r.junkSpam,
+        soldOut: r.soldOut,
+        inhouse: r.inhouse,
+        lowBudget: r.lowBudget,
+        lessRoom: r.lessRoom,
+        whatsappLeads: r.whatsappLeads,
+        whatsappConfirmed: r.whatsappConfirmed,
+        totalCallsReceived: r.totalCallsReceived,
+        storedTotalLeads: r.storedTotalLeads,
+        storedConversionRate:
+          r.storedConversionRate == null ? null : Number(r.storedConversionRate),
+      }),
+    ),
+    datesInRange(range),
+  );
+
+  const calls = trackerSummary.totalCallsReceived;
+
   // ── Bookings ───────────────────────────────────────────────────────────────
   //
   // Room nights come from the property's own workbook, never from tracking. A
   // period with no rows is not a period with no room nights — nobody filed.
-  const recorded = tracker.filter((r) => r.roomNightsConfirmed != null);
-  const totalRoomNights: MetricValue<number> =
-    recorded.length === 0
-      ? notTraceable(ROOM_NIGHTS_NONE_RECORDED)
-      : ok(recorded.reduce((t, r) => t + (r.roomNightsConfirmed ?? 0), 0));
+  // Same summary, so the two tracker figures cannot disagree about which days
+  // counted. summariseTrackerDays already renders an unrecorded period as an
+  // unknown; ROOM_NIGHTS_NONE_RECORDED replaces its generic wording with the
+  // sentence that names who records them.
+  const totalRoomNights: MetricValue<number> = isOk(trackerSummary.roomNightsConfirmed)
+    ? trackerSummary.roomNightsConfirmed
+    : notTraceable(ROOM_NIGHTS_NONE_RECORDED);
 
   // ── Coverage ───────────────────────────────────────────────────────────────
   //
@@ -319,14 +371,14 @@ export async function loadClientReport(args: {
 
   const metaNote = coverageNote("Meta Ads", meta._max.date);
   const googleNote = coverageNote("Google Ads", google._max.date);
+  // completeThrough is the tracker's own answer for "the latest day with a row",
+  // already computed by the summary — deriving it a second time here is how the
+  // two would drift apart.
   const trackerNote = coverageNote(
     "The property's operations tracker",
-    recorded.length === 0
-      ? null
-      : tracker.reduce<Date | null>(
-          (max, r) => (max == null || r.date > max ? r.date : max),
-          null,
-        ),
+    trackerSummary.completeThrough
+      ? new Date(`${trackerSummary.completeThrough}T00:00:00.000Z`)
+      : null,
   );
 
   // Undefined entries are dropped, so a covered tile carries no key at all and
@@ -338,7 +390,10 @@ export async function loadClientReport(args: {
       // Return on ad spend divides revenue by BOTH platforms' spend, so either
       // one being short makes the ratio overstate the return.
       returnOnAdSpend: showAdSpend ? (googleNote ?? metaNote) : undefined,
-      calls: metaNote,
+      // Calls moved to the operations workbook, so it takes the tracker's
+      // coverage — not Meta's. Reading staleness off the wrong source is how a
+      // figure that stops mid-period gets presented as if it covered all of it.
+      calls: trackerNote,
       whatsappMessages: metaNote,
       totalRoomNights: trackerNote,
     }).filter(([, v]) => v != null),
