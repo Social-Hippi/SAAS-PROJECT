@@ -42,6 +42,9 @@ const SECRET_SOURCES = {
   // Booking provider shared secret / API key (Phase 1B). Read ONLY through
   // getTokenForApiCall so every access is audited, like every other secret.
   booking_provider: { table: "BookingConnection", column: "credentials" },
+  // Kraya webhook shared secret — Kraya presents it back in a header and the
+  // receiver resolves the tenant from it, so it is read on every delivery.
+  kraya_webhook: { table: "KrayaConnection", column: "credentials" },
 } as const;
 
 export type SecretKind = keyof typeof SECRET_SOURCES;

@@ -74,7 +74,10 @@ export async function connectBookingProvider(
   const credentials = encryptToken(secret);
 
   await prisma.bookingConnection.upsert({
-    where: { hotelClientId: hotel.id },
+    // Keyed by hotel AND provider: a hotel legitimately has more than one source
+    // (Simplotel for web bookings, Kraya for WhatsApp), and they must not
+    // overwrite each other's secret.
+    where: { hotelClientId_provider: { hotelClientId: hotel.id, provider } },
     create: {
       agencyId: hotel.agencyId,
       hotelClientId: hotel.id,
@@ -103,6 +106,11 @@ export async function disconnectBookingProvider(formData: FormData): Promise<voi
   // Booking.connectionId is onDelete: SetNull, so the reservations survive with
   // their revenue and journey matches intact. Deleting history to disconnect a
   // webhook would be destroying the very thing the integration exists to build.
-  await prisma.bookingConnection.deleteMany({ where: { hotelClientId: hotel.id } });
+  // Scoped to the provider named in the form, so disconnecting Simplotel cannot
+  // silently remove a Kraya connection for the same hotel.
+  const provider = ((formData.get("provider") as string | null) ?? "").trim().toLowerCase();
+  await prisma.bookingConnection.deleteMany({
+    where: { hotelClientId: hotel.id, ...(provider ? { provider } : {}) },
+  });
   revalidatePath(`/agency/hotel/${hotel.id}/integrations`);
 }

@@ -198,6 +198,7 @@ export const MULTI_TENANT_MODELS = [
   "syncFailure",
   "guideDownload",
   "hotelShareAccess",
+  "krayaConnection",
   "whatsappConnection",
   "whatsappConversation",
   "budgetAlert",

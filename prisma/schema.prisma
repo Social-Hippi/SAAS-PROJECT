@@ -209,6 +209,7 @@ model Agency {
   hotelUserInvites           HotelUserInvite[]
   whatsappConnections   WhatsAppConnection[]
   whatsappConversations WhatsAppConversation[]
+  krayaConnections      KrayaConnection[]
 }
 
 model AgencyMember {
@@ -368,13 +369,14 @@ model HotelClient {
   hotelInvites               HotelInvite[]
   influencerInstagramPosts   InfluencerInstagramPost[]
   unattributedMentions       UnattributedMention[]
-  bookingConnection          BookingConnection?
+  bookingConnections         BookingConnection[]
   bookings                   Booking[]
   members                    HotelMember[]
   userInvites                HotelUserInvite[]
 
   whatsappConnection    WhatsAppConnection?
   whatsappConversations WhatsAppConversation[]
+  krayaConnection       KrayaConnection?
   @@index([agencyId])
   // Created by 20260611140000_add_hotel_soft_delete but never declared here, so
   // the schema and the database had drifted since June: every `prisma migrate
@@ -2076,7 +2078,11 @@ enum BookingMatchConfidence {
 model BookingConnection {
   id                    String    @id @default(cuid())
   agencyId              String
-  hotelClientId         String    @unique // one booking source per hotel
+  /// NOT unique on its own: a hotel legitimately has more than one booking
+  /// source. Aster takes web bookings through Simplotel and WhatsApp bookings
+  /// through Kraya, and those never overlap — a WhatsApp booking is typed by the
+  /// reservations team and never touches the booking engine. See @@unique below.
+  hotelClientId         String
   /// Free-form provider key, e.g. "webhook" | "csv" | "cloudbeds" | "staah".
   /// String (not enum) per this schema's open-vocabulary convention.
   provider              String
@@ -2098,6 +2104,9 @@ model BookingConnection {
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
   bookings    Booking[]
 
+  /// One connection per PROVIDER per hotel. Two rows for the same provider would
+  /// make the receiver's secret lookup ambiguous about which tenant to write to.
+  @@unique([hotelClientId, provider])
   @@index([agencyId])
 }
 
@@ -2323,6 +2332,52 @@ model WhatsAppConnection {
   @@index([agencyId])
 }
 
+/// One hotel's Kraya (WhatsApp CRM) account.
+///
+/// Kraya holds the hotel's reservations WhatsApp number, so HotelTrack cannot
+/// connect that number to Meta directly — a number belongs to one platform at a
+/// time. Reading from Kraya is therefore not a shortcut around the Cloud API; it
+/// is the only route that does not take the number away from the team using it.
+///
+/// It is also the BETTER route: Meta can say a conversation started from an ad,
+/// but only Kraya knows whether the reservations team turned it into a booking.
+model KrayaConnection {
+  id            String @id @default(cuid())
+  agencyId      String
+  hotelClientId String @unique // one Kraya account per hotel
+
+  /// AES-256-GCM ciphertext of the webhook secret. Kraya presents it back in the
+  /// X-KRAYA-WEBHOOK-SECRET header, and the receiver resolves the tenant by
+  /// comparing against every stored secret in constant time.
+  credentials String? @db.Text
+
+  /// The stage name that means "this became a booking", VERBATIM as Kraya spells
+  /// it — "Booking Confirmed" here, but a different hotel may say "Won".
+  ///
+  /// Configuration rather than code because stage names are the hotel's own
+  /// vocabulary and differ per pipeline ("Sold out" vs "Sold out for CBH"). Every
+  /// other stage is displayed exactly as Kraya reports it and needs no mapping at
+  /// all; only this one carries a consequence, because it mints a Booking row.
+  ///
+  /// Null until chosen. Leads still flow; no bookings are created, which is the
+  /// safe failure — inventing bookings from a guessed stage name is not.
+  confirmedStageName String?
+
+  /// pending | active | error | disconnected.
+  status String @default("pending")
+  /// When a lead was last actually received — the honest health signal.
+  lastLeadReceivedAt DateTime?
+  lastError          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId])
+}
+
 /// One person's WhatsApp conversation with one hotel, and the ad that started it.
 ///
 /// A CONVERSATION, not a message log: one row per contact, updated as they
@@ -2332,7 +2387,11 @@ model WhatsAppConversation {
   id            String @id @default(cuid())
   agencyId      String
   hotelClientId String
-  connectionId  String
+  /// The WhatsApp number this arrived on — NULL for a conversation that reached
+  /// us through Kraya, because that number belongs to Kraya's account and we
+  /// hold no connection to it. A conversation is identified by hotel + phone
+  /// hash, not by which pipe carried it.
+  connectionId  String?
 
   /// The contact, hashed with the SAME salted chain as VisitorIdentity.phoneHash
   /// and Booking.guestPhoneHash (lib/pii.ts over a normalized SHA-256), so a
@@ -2360,6 +2419,22 @@ model WhatsAppConversation {
   sourceUrl  String?
   headline   String?
 
+  /// Kraya's own lead id, when the conversation came from there. THE idempotency
+  /// key for that path — a lead is upserted on every stage change, and without a
+  /// stable id a renamed or re-numbered contact would duplicate.
+  krayaLeadId String?
+
+  /// The lead's current stage and pipeline, VERBATIM as Kraya spells them.
+  ///
+  /// Deliberately not mapped to an internal vocabulary. These are the hotel's own
+  /// words ("Sold out for CBH", "Interested - Follow up"), they differ per
+  /// pipeline, and the reservations team renames them. Storing what Kraya says
+  /// means a rename shows up correctly with no deploy, and a new stage appears on
+  /// the report by itself. Only ONE stage carries a consequence — the confirmed
+  /// one, named on KrayaConnection — and that is a setting, not a translation.
+  stageName    String?
+  pipelineName String?
+
   firstMessageAt DateTime
   lastMessageAt  DateTime
   messageCount   Int      @default(1)
@@ -2369,7 +2444,7 @@ model WhatsAppConversation {
 
   agency      Agency             @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient        @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
-  connection  WhatsAppConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  connection  WhatsAppConnection? @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   /// One row per contact per hotel — a repeat messager updates, never duplicates.
   @@unique([hotelClientId, phoneHash])
@@ -2377,6 +2452,7 @@ model WhatsAppConversation {
   @@index([hotelClientId, firstMessageAt])
   @@index([hotelClientId, phoneHash]) // the booking join
   @@index([ctwaClid])
+  @@index([hotelClientId, krayaLeadId])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

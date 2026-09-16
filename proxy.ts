@@ -110,6 +110,10 @@ const isPublicRoute = createRouteMatcher([
   // a connection an agency had to create — a payload naming an unknown number is
   // dropped, never stored against a guess.
   "/api/integrations/whatsapp(.*)",
+  // Kraya lead webhook. Kraya carries no Clerk session; the route authenticates
+  // by constant-time comparison of X-KRAYA-WEBHOOK-SECRET against every stored
+  // connection secret, and that comparison is also what resolves the tenant.
+  "/api/integrations/kraya(.*)",
   // Daily GA4 (OAuth) sync cron, gated by CRON_SECRET inside the route.
   "/api/ga4/sync(.*)",
   // GA4 OAuth callback: the browser arrives from accounts.google.com; the signed
