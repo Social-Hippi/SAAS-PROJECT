@@ -112,16 +112,23 @@ describe("3. which stage means booked", () => {
   });
 });
 
-describe("4. the referral is never erased", () => {
-  test("it is written on create, and on update only into empty fields", () => {
-    // Kraya re-sends the WHOLE lead on every stage change, and a hand-edited
-    // lead can come back with wa_ref_* blank. Assigning unconditionally would
-    // delete the ad at the moment someone marked it "Booking Confirmed" — the
-    // exact instant the attribution became worth having.
-    expect(INGEST).toMatch(
-      /gainsAttribution\s*=\s*\n?\s*ref != null && existing != null && existing\.ctwaClid == null && existing\.sourceId == null/,
-    );
-    expect(INGEST).toMatch(/\.\.\.\(gainsAttribution/);
+describe("4. the referral is never erased, and always fills", () => {
+  test("empty fields are filled ONE BY ONE, not all-or-nothing", () => {
+    // Never overwrite: Kraya re-sends the whole lead on every stage change, and
+    // a hand-edited lead can come back with wa_ref_* blank, which would delete
+    // the ad at the moment someone marked it "Booking Confirmed".
+    //
+    // But always fill. An all-or-nothing gate ("write nothing unless EVERY
+    // field is empty") looks equivalent and is not: a row holding a click id
+    // but no ad id can never gain the ad id, because the click id makes the
+    // gate false. Eighty production rows hit exactly that.
+    expect(INGEST).toMatch(/const fill = /);
+    expect(INGEST).toMatch(/current == null && incoming != null \? incoming : undefined/);
+    expect(INGEST).not.toMatch(/existing\.ctwaClid == null && existing\.sourceId == null/);
+  });
+
+  test("undefined entries are dropped so Prisma leaves those columns alone", () => {
+    expect(INGEST).toMatch(/filter\(\(\[, v\]\) => v !== undefined\)/);
   });
 });
 
