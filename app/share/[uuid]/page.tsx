@@ -7,6 +7,8 @@ import { runWithAgencyScope, agencyScoped } from "@/lib/tenant";
 import { resolveRange } from "@/lib/attribution";
 import { loadClientReport } from "@/lib/metrics/client-report";
 import { ClientReport } from "@/components/dashboard/ClientReport";
+import { WhatsAppAttribution } from "@/components/dashboard/WhatsAppAttribution";
+import { loadWhatsAppAttribution } from "@/lib/metrics/whatsapp-attribution-report";
 import { PeriodSelector } from "@/components/dashboard/PeriodSelector";
 import { PasswordGate } from "./PasswordGate";
 
@@ -134,7 +136,7 @@ export default async function SharePage({
   // request-scoped tenant override. agencyScoped() prefers that override over
   // its Clerk lookup, so every query below stays filtered by agencyId AND
   // hotelClientId exactly as it is for the agency.
-  const { range, report } = await runWithAgencyScope(link.agencyId, async () => {
+  const { range, report, whatsapp } = await runWithAgencyScope(link.agencyId, async () => {
     // The property's own timezone decides where a day starts. A report that cuts
     // days in UTC shows a hotelier figures that disagree with their own diary.
     const hotel = await agencyScoped(prisma.hotelClient).findFirst({
@@ -145,14 +147,21 @@ export default async function SharePage({
       { range: one(sp.range), from: one(sp.from), to: one(sp.to) },
       { timezone: hotel?.timezone },
     );
-    return {
-      range: resolved,
-      report: await loadClientReport({
+    const [report, whatsapp] = await Promise.all([
+      loadClientReport({
         hotelClientId: link.hotelClientId,
         range: resolved,
         showAdSpend: link.showAdSpend,
       }),
-    };
+      // Renders nothing when the hotel has no Kraya connection, so a property
+      // without WhatsApp reporting simply does not see the section.
+      loadWhatsAppAttribution({
+        agencyId: link.agencyId,
+        hotelClientId: link.hotelClientId,
+        range: resolved,
+      }),
+    ]);
+    return { range: resolved, report, whatsapp };
   });
 
   return (
@@ -179,6 +188,12 @@ export default async function SharePage({
         <PeriodSelector basePath={`/share/${uuid}`} range={range} />
 
         <ClientReport data={report} showAdSpend={link.showAdSpend} />
+
+        <WhatsAppAttribution
+          data={whatsapp}
+          periodLabel={range.dateLabel}
+          timezone={range.timezone}
+        />
 
         <p className="pt-2 text-center text-xs text-ink-disabled">
           Powered by HotelTrack · This is a private, read-only report.
