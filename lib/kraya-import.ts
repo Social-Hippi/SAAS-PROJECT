@@ -43,6 +43,41 @@ export type ImportResult = {
   skipped: { row: number; reason: string }[];
 };
 
+/**
+ * Cell references whose EXACT digits matter, read from the sheet XML rather than
+ * from the parsed cell.
+ *
+ * A Meta ad id is an 18-digit number, and Kraya's export writes it as a NUMERIC
+ * cell. Both of the obvious ways to read that lose it:
+ *
+ *   formatted text  ->  "1.20242E+17"        Excel renders General format as
+ *                                            scientific past 11 digits
+ *   parsed value    ->  120241573189260240   the true id ends 234; 1.2e17 is far
+ *                                            past Number.MAX_SAFE_INTEGER, so the
+ *                                            last digits are rounded away
+ *
+ * Neither is recoverable, and neither errors — the id simply becomes a different
+ * id, quietly, and joins to no campaign. The raw XML holds the digits exactly, so
+ * for these columns that is what is read.
+ *
+ * Ids arriving from the WEBHOOK are unaffected: JSON carries them as strings.
+ * This is purely an artefact of the spreadsheet round-trip.
+ */
+function exactNumericCells(rawSheetXml: string): Map<string, string> {
+  const out = new Map<string, string>();
+  // Numeric cells only: a shared-string cell carries t="s" and its <v> is an
+  // index into the string table, not the value.
+  const re = /<c r="([A-Z]+\d+)"(?![^>]*\bt=")[^>]*><v>([^<]+)<\/v>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(rawSheetXml)) !== null) {
+    if (/^\d+$/.test(m[2])) out.set(m[1], m[2]);
+  }
+  return out;
+}
+
+/** Columns read from the XML for exact digits rather than from the parsed cell. */
+const EXACT_COLUMNS = new Set(["wa_ref_source_id", "wa_ref_ctwa_clid"]);
+
 const HEADERS = {
   phone: "Phone number",
   email: "Email",
@@ -57,6 +92,23 @@ const HEADERS = {
   sourceUrl: "wa_ref_source_url",
   headline: "wa_ref_headline",
 } as const;
+
+/**
+ * An ad id that survived the spreadsheet intact, or null.
+ *
+ * "1.20242E+17" is what an 18-digit id looks like after Excel's General format
+ * has been applied, and the digits behind it are gone. Storing it would attach
+ * the conversation to an ad that does not exist — a WRONG attribution, which is
+ * worse than none, because nothing downstream could tell it was wrong.
+ */
+function exactId(v: unknown): string | null {
+  const t = v == null ? "" : String(v).trim();
+  if (t.length === 0) return null;
+  // Scientific notation, or anything else that is not the id itself.
+  if (!/^[A-Za-z0-9_-]+$/.test(t)) return null;
+  if (/^\d+(\.\d+)?[Ee][+-]?\d+$/.test(t)) return null;
+  return t;
+}
 
 const str = (v: unknown): string | null => {
   if (v == null) return null;
@@ -129,11 +181,60 @@ export function parseKrayaExport(
   file: ArrayBuffer | Buffer,
   confirmedStageName: string | null,
 ): ImportResult {
-  const wb = XLSX.read(file, { type: "buffer" });
+  // bookFiles keeps the original part contents, which is the only place an
+  // 18-digit ad id survives intact — see exactNumericCells above.
+  const wb = XLSX.read(file, { type: "buffer", bookFiles: true }) as unknown as {
+    Sheets: Record<string, XLSX.WorkSheet>;
+    SheetNames: string[];
+    files?: Record<string, { content?: unknown }>;
+  };
   const sheet = wb.Sheets[wb.SheetNames[0]];
+
+  let exact = new Map<string, string>();
+  try {
+    const key = Object.keys(wb.files ?? {}).find((k) => /worksheets\/sheet1\.xml$/.test(k));
+    const content = key ? wb.files![key]?.content : undefined;
+    const xml =
+      typeof content === "string"
+        ? content
+        : Buffer.isBuffer(content)
+          ? content.toString("utf8")
+          : null;
+    if (xml) exact = exactNumericCells(xml);
+  } catch {
+    // Fall back to the parsed values. An id may then be scientific notation,
+    // which the ingest rejects rather than storing as a different ad.
+  }
+
   const rows = sheet
-    ? (XLSX.utils.sheet_to_json(sheet, { defval: null, raw: false }) as Record<string, unknown>[])
+    ? (XLSX.utils.sheet_to_json(sheet, {
+        defval: null,
+        raw: false,
+        // Cell refs are needed to look an exact value back up, and sheet_to_json
+        // does not report them — so the row NUMBER is tracked instead. Data
+        // begins on row 2, under the header.
+      }) as Record<string, unknown>[])
     : [];
+
+  // header name -> column letter, so an exact lookup knows which cell to read.
+  const columnOf = new Map<string, string>();
+  if (sheet && sheet["!ref"]) {
+    const range = XLSX.utils.decode_range(sheet["!ref"]);
+    for (let c = range.s.c; c <= range.e.c; c += 1) {
+      const letter = XLSX.utils.encode_col(c);
+      const header = sheet[`${letter}1`] as { v?: unknown } | undefined;
+      const name = header?.v == null ? null : String(header.v).trim();
+      if (name) columnOf.set(name, letter);
+    }
+  }
+
+  /** The exact digits for an EXACT_COLUMNS cell, else the parsed value. */
+  const readExact = (header: string, rowNumber: number, parsed: unknown): unknown => {
+    if (!EXACT_COLUMNS.has(header)) return parsed;
+    const letter = columnOf.get(header);
+    if (!letter) return parsed;
+    return exact.get(`${letter}${rowNumber}`) ?? parsed;
+  };
 
   const leads: ImportedLead[] = [];
   const skipped: ImportResult["skipped"] = [];
@@ -147,8 +248,10 @@ export function parseKrayaExport(
       return;
     }
 
-    const ctwaClid = str(row[HEADERS.ctwaClid]);
-    const sourceId = str(row[HEADERS.sourceId]);
+    // Row 2 is the first data row, under the header.
+    const rowNumber = i + 2;
+    const ctwaClid = exactId(readExact(HEADERS.ctwaClid, rowNumber, row[HEADERS.ctwaClid]));
+    const sourceId = exactId(readExact(HEADERS.sourceId, rowNumber, row[HEADERS.sourceId]));
     const stage = str(row[HEADERS.stage]);
 
     leads.push({

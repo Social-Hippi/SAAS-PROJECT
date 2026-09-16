@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
@@ -105,6 +106,14 @@ export async function POST(request: Request) {
       failed += 1;
     }
   }
+
+  // Without this the integrations page keeps the render it had BEFORE the
+  // import, so the confirmed-stage dropdown still offers whatever handful of
+  // stages had arrived by webhook — and an operator who just imported 4,000
+  // leads cannot find the stage they imported. The import is a fetch() to a
+  // route handler, so nothing else revalidates on its behalf.
+  revalidatePath(`/agency/hotel/${hotel.id}/integrations`);
+  revalidatePath(`/agency/hotel/${hotel.id}`);
 
   return Response.json({
     ok: true,

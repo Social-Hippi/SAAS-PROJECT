@@ -169,3 +169,59 @@ describe("5. real Kraya exports", () => {
     });
   }
 });
+
+// ── 6. The ad id must survive the spreadsheet ──────────────────────────────
+//
+// A Meta ad id is 18 digits, and Kraya's export writes it as a NUMERIC cell.
+// Both ordinary ways of reading that destroy it, silently:
+//
+//   formatted text  ->  "1.20242E+17"        Excel's General format renders
+//                                            anything past 11 digits in
+//                                            scientific notation
+//   parsed value    ->  120241573189260240   the true id ends 234; 1.2e17 is far
+//                                            past Number.MAX_SAFE_INTEGER, so the
+//                                            final digits are rounded away
+//
+// Neither errors. The id simply becomes a DIFFERENT id and joins to no campaign
+// — and this reached production: 80 conversations were imported carrying
+// "1.20251E+17" before it was caught. Ids from the webhook were unaffected,
+// because JSON carries them as strings.
+
+describe("6. ad ids survive the export round-trip", () => {
+  test.each(FIXTURES.map(([n, p]) => [n, p] as const))(
+    "%s: every stored ad id is full digits, never scientific notation",
+    (_name, path) => {
+      if (!existsSync(path)) return;
+      const r = parseKrayaExport(readFileSync(path), "Booking Confirmed");
+      const ids = r.leads.map((l) => l.referral?.sourceId).filter(Boolean) as string[];
+      for (const id of ids) {
+        expect(id).toMatch(/^\d{10,}$/);
+        expect(id).not.toMatch(/[Ee]\+/);
+      }
+    },
+  );
+
+  test("the exact digits are read from the sheet XML, not the parsed cell", () => {
+    expect(IMPORT).toMatch(/bookFiles: true/);
+    expect(IMPORT).toMatch(/function exactNumericCells/);
+    // Shared-string cells hold an INDEX in <v>, not a value, so they must not be
+    // harvested as though they were numbers.
+    expect(IMPORT).toMatch(/\(\?!\[\^>\]\*\\b?t="\)/);
+  });
+
+  test("a corrupted id is dropped rather than stored as a different ad", () => {
+    // Wrong attribution is worse than none: nothing downstream could tell.
+    expect(IMPORT).toMatch(/function exactId/);
+    expect(IMPORT).toMatch(/Ee\]\[\+-\]/);
+  });
+});
+
+describe("7. the page reflects what was just imported", () => {
+  test("the import revalidates the integrations page", () => {
+    // The import is a fetch() to a route handler, so nothing revalidates on its
+    // behalf. Without this the confirmed-stage dropdown keeps offering the
+    // handful of stages that had arrived by webhook, and an operator who has
+    // just imported 4,000 leads cannot find the stage they imported.
+    expect(ROUTE).toMatch(/revalidatePath\(`\/agency\/hotel\/\$\{hotel\.id\}\/integrations`\)/);
+  });
+});
