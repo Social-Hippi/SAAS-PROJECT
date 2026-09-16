@@ -30,6 +30,7 @@ import { disconnectMetaToken } from "@/app/(agency)/agency/(app)/settings/action
 import { TestConnection } from "../install/TestConnection";
 import { MetaSyncButton } from "./MetaSyncButton";
 import { BookingConnectionCard } from "./BookingConnectionCard";
+import { KrayaCard } from "./KrayaCard";
 import { HotelAdAccountSelect } from "./HotelAdAccountSelect";
 import { ConnectionHistory } from "./ConnectionHistory";
 import { archivedAccountSummaries } from "@/lib/meta-archive";
@@ -425,6 +426,56 @@ export default async function HotelIntegrationsPage({
       lastError: true,
     },
   });
+
+  // Kraya — the hotel's WhatsApp CRM. Its stage names are learned from the leads
+  // themselves rather than configured, so the "which stage means booked" control
+  // can offer exactly what this hotel actually uses.
+  const krayaConn = await agencyScoped(prisma.krayaConnection).findFirst({
+    where: { hotelClientId: hotel.id },
+    select: {
+      status: true,
+      lastLeadReceivedAt: true,
+      confirmedStageName: true,
+      lastError: true,
+    },
+  });
+
+  let krayaView: {
+    status: string;
+    lastLeadReceivedAt: string | null;
+    confirmedStageName: string | null;
+    lastError: string | null;
+    observedStages: { name: string; count: number }[];
+    leadCount: number;
+    bookingCount: number;
+  } | null = null;
+
+  if (krayaConn) {
+    const [stages, leadCount, bookingCount] = await Promise.all([
+      agencyScoped(prisma.whatsAppConversation).groupBy({
+        by: ["stageName"],
+        where: { hotelClientId: hotel.id, stageName: { not: null } },
+        _count: { _all: true },
+      }),
+      agencyScoped(prisma.whatsAppConversation).count({
+        where: { hotelClientId: hotel.id, krayaLeadId: { not: null } },
+      }),
+      agencyScoped(prisma.booking).count({
+        where: { hotelClientId: hotel.id, provider: "kraya" },
+      }),
+    ]);
+    krayaView = {
+      status: krayaConn.status,
+      lastLeadReceivedAt: krayaConn.lastLeadReceivedAt?.toISOString() ?? null,
+      confirmedStageName: krayaConn.confirmedStageName,
+      lastError: krayaConn.lastError,
+      observedStages: stages
+        .map((s) => ({ name: s.stageName as string, count: s._count._all }))
+        .sort((a, b) => b.count - a.count),
+      leadCount,
+      bookingCount,
+    };
+  }
 
   // ── Summary ────────────────────────────────────────────────────────────────
   const summary = summarize({
@@ -1001,6 +1052,27 @@ export default async function HotelIntegrationsPage({
               : null
           }
         />
+      </IntegrationCard>
+
+      {/* ── Card 7 — Kraya (WhatsApp CRM: enquiries + WhatsApp bookings) ───── */}
+      <IntegrationCard
+        icon={<span className="text-xs font-bold text-brand">Kr</span>}
+        title="Kraya"
+        subtitle="WhatsApp enquiries, the ad each came from, and bookings taken by phone"
+        badge={
+          <IntegrationStatusBadge
+            tone={!krayaView ? "gray" : krayaView.lastLeadReceivedAt ? "green" : "yellow"}
+            label={
+              !krayaView
+                ? "Not connected"
+                : krayaView.lastLeadReceivedAt
+                  ? "Receiving"
+                  : "Awaiting first lead"
+            }
+          />
+        }
+      >
+        <KrayaCard hotelId={hotel.id} appUrl={appUrl} connection={krayaView} />
       </IntegrationCard>
     </div>
   );

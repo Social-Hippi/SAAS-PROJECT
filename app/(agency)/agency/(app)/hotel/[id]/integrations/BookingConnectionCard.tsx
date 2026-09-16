@@ -123,6 +123,7 @@ export function BookingConnectionCard({
         {connection && (
           <form action={disconnectBookingProvider}>
             <input type="hidden" name="hotelId" value={hotelId} />
+            <input type="hidden" name="provider" value={provider} />
             <button
               type="submit"
               className="rounded-lg border border-line-strong bg-elevated px-3 py-2 text-sm font-medium text-ink-secondary hover:bg-line-strong"
