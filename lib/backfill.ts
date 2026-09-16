@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { campaignSnapshotData } from "@/lib/meta-campaign-row";
 import { getTokenForApiCall } from "@/lib/token-access";
 import type { SecretToken } from "@/lib/encryption";
 import { getDailyInsights, getDailyCampaignInsights, MetaAuthError } from "@/lib/meta";
@@ -306,15 +307,9 @@ async function backfillCampaigns(
         for (const row of rows) {
           if (!row.date) continue;
           const date = new Date(`${row.date}T00:00:00.000Z`);
-          const data = {
-            metaAccountId: accountId,
-            campaignName: row.campaignName,
-            spend: row.spend.toFixed(2),
-            impressions: row.impressions,
-            clicks: row.clicks,
-            conversions: row.conversions,
-            purchaseValue: row.purchaseValue.toFixed(2),
-          };
+          // Same full column set as the cron and the live sync — a restored day
+          // that is missing six columns is not a restored day.
+          const data = campaignSnapshotData(row, accountId);
           await prisma.adCampaignSnapshot.upsert({
             where: {
               hotelClientId_metaCampaignId_date: {
