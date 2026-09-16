@@ -3,7 +3,11 @@ import { headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, clientIpFromHeaders } from "@/lib/ratelimit";
 import { resolveShareLink } from "@/lib/share-link-access";
-import { FullHotelDashboard } from "@/components/dashboard/FullHotelDashboard";
+import { runWithAgencyScope, agencyScoped } from "@/lib/tenant";
+import { resolveRange } from "@/lib/attribution";
+import { loadClientReport } from "@/lib/metrics/client-report";
+import { ClientReport } from "@/components/dashboard/ClientReport";
+import { PeriodSelector } from "@/components/dashboard/PeriodSelector";
 import { PasswordGate } from "./PasswordGate";
 
 // Public, no-login view of a hotel's dashboard, addressed by an unguessable
@@ -125,56 +129,65 @@ export default async function SharePage({
   const sp = await searchParams;
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
-  // Identity only. The period control lives in <FullHotelDashboard>, rendered
-  // from the ONE resolved range — this page used to build a second chip list
-  // from the raw URL, which is how two controls end up disagreeing.
-  const header = (
-    <div className="space-y-4">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-widest text-ink-disabled">
-          HotelTrack
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-ink">
-          {link.hotelName}
-        </h1>
-        {/* The agency attribution line is gone: this is the HOTEL's report about
-            the hotel's own performance, and leading with who sent it framed it
-            as the agency's document. The property and its domain identify it. */}
-        <p className="mt-0.5 text-sm text-ink-tertiary">{link.websiteUrl}</p>
-      </div>
-    </div>
-  );
+  // HOW A SESSION-LESS PAGE READS SESSION-SCOPED DATA. The agencyId comes off
+  // the ShareLink ROW — never from the URL — and is installed as the
+  // request-scoped tenant override. agencyScoped() prefers that override over
+  // its Clerk lookup, so every query below stays filtered by agencyId AND
+  // hotelClientId exactly as it is for the agency.
+  const { range, report } = await runWithAgencyScope(link.agencyId, async () => {
+    // The property's own timezone decides where a day starts. A report that cuts
+    // days in UTC shows a hotelier figures that disagree with their own diary.
+    const hotel = await agencyScoped(prisma.hotelClient).findFirst({
+      where: { id: link.hotelClientId },
+      select: { timezone: true },
+    });
+    const resolved = resolveRange(
+      { range: one(sp.range), from: one(sp.from), to: one(sp.to) },
+      { timezone: hotel?.timezone },
+    );
+    return {
+      range: resolved,
+      report: await loadClientReport({
+        hotelClientId: link.hotelClientId,
+        range: resolved,
+        showAdSpend: link.showAdSpend,
+      }),
+    };
+  });
 
   return (
     <div className="min-h-full bg-page">
-      <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <FullHotelDashboard
-          hotelId={link.hotelClientId}
-          agencyId={link.agencyId}
-          agencyName={link.agencyName}
-          agencyPlan={link.agencyPlan}
-          // The agency that OWNS this hotel — read off the ShareLink row, so a
-          // reader always gets the agency managing them.
-          agencyContact={link.agencyContact}
-          viewer="share"
-          showAdSpend={link.showAdSpend}
-          basePath={`/share/${uuid}`}
-          apiBase="/api/hotel"
-          shareToken={uuid}
-          rangeParam={one(sp.range)}
-          // Custom range on the public report. Safe to accept only because
-          // resolveRange now parses strictly and clamps server-side: the old
-          // shape-only guard accepted "2026-13-45", which became an Invalid
-          // Date and threw RangeError — a 500 on a link a client had been sent.
-          fromParam={one(sp.from)}
-          toParam={one(sp.to)}
-          postTypeParam={one(sp.postType)}
-          channelParam={one(sp.channel)}
-          sourceParam={one(sp.source)}
-          propertyParam={one(sp.property)}
-          headerSlot={header}
-        />
-        <p className="pt-6 text-center text-xs text-ink-disabled">
+      <main className="mx-auto w-full max-w-6xl space-y-8 px-4 py-6 sm:px-6 lg:px-8">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-widest text-ink-disabled">
+            HotelTrack
+          </p>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight text-ink">
+            {link.hotelName}
+          </h1>
+          {/* The agency attribution line is gone: this is the HOTEL's report about
+              the hotel's own performance, and leading with who sent it framed it
+              as the agency's document. The property and its domain identify it. */}
+          <p className="mt-0.5 text-sm text-ink-tertiary">{link.websiteUrl}</p>
+        </div>
+
+        <div>
+          <PeriodSelector basePath={`/share/${uuid}`} range={range} />
+          {/* Rendered ALWAYS, including for presets: a report is read weeks after
+              it is sent, and "Last 30 days" alone does not say which thirty. */}
+          <p className="mt-2 text-sm text-ink-tertiary">
+            Showing <span className="font-medium text-ink-secondary">{range.dateLabel}</span>
+            {" · times shown in "}
+            {range.timezone}
+          </p>
+          {range.adjustments.length > 0 && (
+            <p className="mt-1 text-xs text-ink-tertiary">{range.adjustments.join(" ")}</p>
+          )}
+        </div>
+
+        <ClientReport data={report} showAdSpend={link.showAdSpend} />
+
+        <p className="pt-2 text-center text-xs text-ink-disabled">
           Powered by HotelTrack · This is a private, read-only report.
         </p>
       </main>

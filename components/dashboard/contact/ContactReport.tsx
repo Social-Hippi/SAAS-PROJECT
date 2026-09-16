@@ -119,6 +119,7 @@ export function ContactReport({
   blendedCostPerContact,
   costPerQualifiedContact,
   periodLabel,
+  showAdSpend,
 }: {
   blockA: BlockA;
   platforms: PlatformBlock[];
@@ -134,6 +135,17 @@ export function ContactReport({
   blendedCostPerContact: MetricValue<number>;
   costPerQualifiedContact: MetricValue<number>;
   periodLabel: string;
+  /**
+   * The hotel's showAdSpendToHotel flag. The agency passes true; /share/<uuid>
+   * passes the hotel's own setting.
+   *
+   * This block reports platform spend AND divides it by contacts, so it is
+   * exactly the surface lib/share-spend-gate.ts exists to close on the
+   * client-fetched half: remove spend, and remove anything spend can be divided
+   * out of. It was added after that gate and did not honour it, so a share link
+   * on a spend-hidden hotel printed both the spend and the cost per contact.
+   */
+  showAdSpend: boolean;
 }) {
   const a = blockA.summary;
 
@@ -257,10 +269,16 @@ export function ContactReport({
           provenance={`${p.label}'s own figures, in ${p.label}'s own daily buckets and attribution window. Not measured by HotelTrack and not comparable with block A.`}
           freshness={p.freshness}
         >
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          <div
+            className={`grid grid-cols-2 gap-4 sm:grid-cols-3 ${
+              showAdSpend ? "lg:grid-cols-5" : "lg:grid-cols-4"
+            }`}
+          >
             <Figure label="Impressions" value={p.impressions} />
             <Figure label="Clicks" value={p.clicks} />
-            <Figure label="Spend" value={p.spend} format="currency" />
+            {/* Impressions, clicks and CTR are outcomes and survive; spend is the
+                one figure the flag governs. */}
+            {showAdSpend && <Figure label="Spend" value={p.spend} format="currency" />}
             <Figure
               label="Platform-reported conversions"
               value={p.conversions}
@@ -294,6 +312,11 @@ export function ContactReport({
       </Block>
 
       {/* ── The one permitted bridge ───────────────────────────────────── */}
+      {/* Both tiles here are spend ÷ contacts, so neither can survive the flag —
+          and the section goes whole rather than emptied, because a heading that
+          reads "Cost per contact" above two dashes still tells the reader a
+          spend figure exists and is being kept from them. */}
+      {showAdSpend && (
       <section className="rounded-card border border-line bg-card p-4 shadow-card sm:p-5">
         <h3 className="font-medium text-ink">Cost per contact</h3>
         <p className="mt-1 text-sm text-ink-tertiary">{BLENDED_COST_NOTE}</p>
@@ -315,6 +338,7 @@ export function ContactReport({
           return on ad spend and cannot be turned into one.
         </p>
       </section>
+      )}
     </div>
   );
 }
