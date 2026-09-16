@@ -98,3 +98,34 @@ describe("no writer hand-rolls the column list again", () => {
     expect(literal).toBeNull();
   });
 });
+
+// ── Meta Ads has a manual sync, like every other integration ────────────────
+//
+// GA4, Google Ads and Instagram each shipped a "Sync now"; Meta Ads never did,
+// so its only path was the 02:00 UTC cron. That gap bit on the day the
+// seven-field write bug above was fixed: the repair existed but could not be
+// applied, and nobody could confirm it had worked, until the next night.
+
+const META_ACTIONS = readCode("app/(agency)/agency/(app)/hotel/[id]/integrations/meta-actions.ts");
+const INTEGRATIONS = readCode("app/(agency)/agency/(app)/hotel/[id]/integrations/page.tsx");
+
+describe("the Meta Ads card can be synced by hand", () => {
+  test("the button is rendered on the card", () => {
+    expect(INTEGRATIONS).toContain("<MetaSyncButton");
+  });
+
+  test("the action verifies the hotel belongs to the caller's agency", () => {
+    // syncHotelAds takes a hotel id ON TRUST — its own doc says the CALLER must
+    // be authorized. agencyScoped resolves nothing for another agency's hotel,
+    // so this lookup IS the authorization and cannot be dropped.
+    expect(META_ACTIONS).toContain("requireAdmin");
+    expect(META_ACTIONS).toMatch(/agencyScoped\(prisma\.hotelClient\)[\s\S]{0,160}findFirst/);
+    expect(META_ACTIONS).toMatch(/syncHotelAds\(owned\.id/);
+  });
+
+  test("it pulls a wider window than the nightly cron", () => {
+    // Reached for when something looks wrong; a 7-day window cannot repair a
+    // gap wider than 7 days.
+    expect(META_ACTIONS).toMatch(/WINDOW_DAYS = 30/);
+  });
+});

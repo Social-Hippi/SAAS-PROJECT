@@ -28,6 +28,7 @@ import { IntegrationStatusBadge } from "@/components/ui/IntegrationStatusBadge";
 import { MetaTokenForm } from "@/app/(agency)/agency/(app)/settings/MetaTokenForm";
 import { disconnectMetaToken } from "@/app/(agency)/agency/(app)/settings/actions";
 import { TestConnection } from "../install/TestConnection";
+import { MetaSyncButton } from "./MetaSyncButton";
 import { HotelAdAccountSelect } from "./HotelAdAccountSelect";
 import { ConnectionHistory } from "./ConnectionHistory";
 import { archivedAccountSummaries } from "@/lib/meta-archive";
@@ -602,15 +603,18 @@ export default async function HotelIntegrationsPage({
                   </p>
                 )}
               </div>
-              <form action={disconnectMetaToken}>
-                <input type="hidden" name="hotelId" value={hotel.id} />
-                <button
-                  type="submit"
-                  className="rounded-lg border border-line-strong bg-elevated px-3 py-1.5 text-sm font-medium text-ink-secondary hover:bg-line-strong"
-                >
-                  Disconnect
-                </button>
-              </form>
+              <div className="flex flex-wrap items-center gap-2">
+                <MetaSyncButton hotelId={hotel.id} />
+                <form action={disconnectMetaToken}>
+                  <input type="hidden" name="hotelId" value={hotel.id} />
+                  <button
+                    type="submit"
+                    className="rounded-lg border border-line-strong bg-elevated px-3 py-1.5 text-sm font-medium text-ink-secondary hover:bg-line-strong"
+                  >
+                    Disconnect
+                  </button>
+                </form>
+              </div>
             </div>
             <HotelAdAccountSelect
               hotelId={hotel.id}
