@@ -171,19 +171,12 @@ export default async function SharePage({
           <p className="mt-0.5 text-sm text-ink-tertiary">{link.websiteUrl}</p>
         </div>
 
-        <div>
-          <PeriodSelector basePath={`/share/${uuid}`} range={range} />
-          {/* Rendered ALWAYS, including for presets: a report is read weeks after
-              it is sent, and "Last 30 days" alone does not say which thirty. */}
-          <p className="mt-2 text-sm text-ink-tertiary">
-            Showing <span className="font-medium text-ink-secondary">{range.dateLabel}</span>
-            {" · times shown in "}
-            {range.timezone}
-          </p>
-          {range.adjustments.length > 0 && (
-            <p className="mt-1 text-xs text-ink-tertiary">{range.adjustments.join(" ")}</p>
-          )}
-        </div>
+        {/* PeriodSelector renders the chips, the literal date window ("Showing
+            18 Aug – 16 Sep 2026 · times shown in Asia/Kolkata") and any clamp
+            adjustments itself. This page adds none of them — doing so is how
+            two controls end up disagreeing, and the first cut printed the
+            window twice. */}
+        <PeriodSelector basePath={`/share/${uuid}`} range={range} />
 
         <ClientReport data={report} showAdSpend={link.showAdSpend} />
 

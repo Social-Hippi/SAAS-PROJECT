@@ -310,3 +310,17 @@ describe("8. a short figure says it is short", () => {
     }
   });
 });
+
+// ── 9. One period control, one date line ────────────────────────────────────
+
+describe("9. the page does not restate what PeriodSelector renders", () => {
+  test("the date window is printed exactly once", () => {
+    // PeriodSelector already renders the chips, the literal window and any clamp
+    // adjustments. The first cut of this page added its own copy and the report
+    // showed "Showing 18 Aug – 16 Sep 2026" twice.
+    expect(SHARE_PAGE).toContain("<PeriodSelector");
+    expect(SHARE_PAGE).not.toMatch(/Showing <span/);
+    expect(SHARE_PAGE).not.toMatch(/times shown in/);
+    expect(SHARE_PAGE).not.toMatch(/range\.adjustments/);
+  });
+});
