@@ -168,7 +168,7 @@ export async function loadClientReport(args: {
   // Site-side events are real timestamps and ARE compared in real time.
   const eventFilter = { gte: range.since, lte: range.until };
 
-  const [conversions, anyTraffic, meta, google, googleConn, metaToken, campaigns, tracker] =
+  const [conversions, anyTraffic, meta, google, googleConn, metaToken, campaigns, messagingCoverage, tracker] =
     await Promise.all([
       agencyScoped(prisma.trackingEvent).aggregate({
         where: { hotelClientId, eventType: "conversion", createdAt: eventFilter },
@@ -208,8 +208,22 @@ export async function loadClientReport(args: {
       agencyScoped(prisma.adCampaignSnapshot).aggregate({
         where: { hotelClientId, archived: false, date: dayFilter },
         _sum: { messagingStarted: true },
-        _max: { date: true },
         _count: { messagingStarted: true },
+      }),
+      // COVERAGE IS MEASURED ON ROWS THAT CARRY THE FIGURE, which is not the
+      // same as the newest row. A campaign row can arrive with a NULL
+      // messagingStarted — and does: in production on 2026-09-16 rows existed
+      // through the 16th while the last one carrying a messaging figure was the
+      // 10th. Taking _max.date over ALL rows therefore reported the tile as
+      // fully covered while it was six days short. The filter is the fix.
+      agencyScoped(prisma.adCampaignSnapshot).aggregate({
+        where: {
+          hotelClientId,
+          archived: false,
+          date: dayFilter,
+          messagingStarted: { not: null },
+        },
+        _max: { date: true },
       }),
       whenMigrated("operations tracker", [], () =>
         agencyScoped(prisma.manualLeadDaily).findMany({
@@ -382,7 +396,10 @@ export async function loadClientReport(args: {
   // table was current while the campaign table had written nothing since the
   // 10th. Reading this tile's coverage off `meta` suppressed the warning on the
   // one figure that needed it, which is why it gets its own.
-  const campaignNote = coverageNote("Meta Ads campaign reporting", campaigns._max.date);
+  const campaignNote = coverageNote(
+    "Meta Ads campaign reporting",
+    messagingCoverage._max.date,
+  );
   const googleNote = coverageNote("Google Ads", google._max.date);
   // completeThrough is the tracker's own answer for "the latest day with a row",
   // already computed by the summary — deriving it a second time here is how the

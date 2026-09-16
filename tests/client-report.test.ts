@@ -307,12 +307,20 @@ describe("8. a short figure says it is short", () => {
     expect(LOADER).toMatch(/totalRoomNights:\s*trackerNote/);
   });
 
+  test("coverage is measured on rows that carry the figure, not the newest row", () => {
+    // A campaign row can arrive with a NULL messagingStarted, and does: in
+    // production rows existed through 2026-09-16 while the last one carrying a
+    // messaging figure was the 10th. An unfiltered _max.date called the tile
+    // fully covered while it was six days short.
+    expect(LOADER).toMatch(/messagingStarted:\s*\{\s*not:\s*null\s*\}/);
+  });
+
   test("campaign figures take campaign coverage, not account-level coverage", () => {
     // AdSnapshot (account) and AdCampaignSnapshot (campaign) fall behind
     // INDEPENDENTLY: on 2026-09-16 the account table was current while the
     // campaign table had written nothing since the 10th. Sharing one note
     // suppressed the warning on the only tile that needed it.
-    expect(LOADER).toMatch(/campaignNote = coverageNote\([^)]*campaigns\._max\.date\)/);
+    expect(LOADER).toMatch(/campaignNote = coverageNote\([\s\S]{0,120}messagingCoverage\._max\.date/);
     expect(LOADER).toMatch(/whatsappMessages:\s*campaignNote/);
     expect(LOADER).toMatch(/metaSpend:\s*showAdSpend \? metaNote/);
   });
