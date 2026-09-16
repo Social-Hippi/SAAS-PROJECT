@@ -68,20 +68,52 @@ export async function ingestKrayaLead(
   const scoped = agencyScopedFor(agencyId, prisma.whatsAppConversation);
   const existing = await scoped.findFirst({
     where: { hotelClientId, phoneHash },
-    select: { id: true, ctwaClid: true, sourceId: true, firstMessageAt: true },
+    select: {
+      id: true,
+      ctwaClid: true,
+      sourceId: true,
+      sourceType: true,
+      sourceUrl: true,
+      headline: true,
+      firstMessageAt: true,
+    },
   });
 
   const ref = lead.referral;
 
-  // The referral is written on create, and on update ONLY into empty fields.
+  // The referral is written on create, and on update ONLY into fields that are
+  // still empty — FIELD BY FIELD, not all-or-nothing.
   //
-  // Kraya re-sends the whole lead on every stage change, and a lead edited by
-  // hand can come back with the wa_ref_* attributes blank. Assigning them
+  // Never overwrite: Kraya re-sends the whole lead on every stage change, and a
+  // hand-edited lead can come back with the wa_ref_* attributes blank. Assigning
   // unconditionally would erase the ad the moment somebody moved the lead to
-  // "Booking Confirmed" — deleting the attribution at the exact instant it
-  // became worth having.
-  const gainsAttribution =
-    ref != null && existing != null && existing.ctwaClid == null && existing.sourceId == null;
+  // "Booking Confirmed" — deleting the attribution at the instant it became
+  // worth having.
+  //
+  // But always FILL: an all-or-nothing gate ("write nothing unless every field
+  // is empty") looks equivalent and is not. A row holding a click id but no ad
+  // id can never gain the ad id, because the click id makes the gate false. That
+  // is not hypothetical — it happened here. Eighty rows had a corrupted ad id
+  // cleared for re-import while their click ids were left in place, and the gate
+  // then refused every one of them. Per-field filling has no such hole.
+  const fill = <T,>(current: T | null, incoming: T | null): T | null | undefined =>
+    current == null && incoming != null ? incoming : undefined;
+
+  const referralUpdate = ref
+    ? {
+        ctwaClid: fill(existing?.ctwaClid ?? null, ref.ctwaClid),
+        sourceId: fill(existing?.sourceId ?? null, ref.sourceId),
+        sourceType: fill(existing?.sourceType ?? null, ref.sourceType),
+        sourceUrl: fill(existing?.sourceUrl ?? null, ref.sourceUrl),
+        headline: fill(existing?.headline ?? null, ref.headline),
+      }
+    : {};
+
+  // Undefined entries are dropped, so Prisma leaves those columns untouched.
+  const referralFields = Object.fromEntries(
+    Object.entries(referralUpdate).filter(([, v]) => v !== undefined),
+  );
+  const gainsAttribution = Object.keys(referralFields).length > 0;
 
   const conversationId = existing
     ? (
@@ -93,15 +125,7 @@ export async function ingestKrayaLead(
             pipelineName: lead.pipeline,
             lastMessageAt: dates.lastSeenAt ?? now,
             messageCount: { increment: 1 },
-            ...(gainsAttribution
-              ? {
-                  ctwaClid: ref.ctwaClid,
-                  sourceId: ref.sourceId,
-                  sourceType: ref.sourceType,
-                  sourceUrl: ref.sourceUrl,
-                  headline: ref.headline,
-                }
-              : {}),
+            ...referralFields,
           },
           select: { id: true },
         })
