@@ -207,6 +207,8 @@ model Agency {
   bookingJourneyMatches      BookingJourneyMatch[]
   hotelMembers               HotelMember[]
   hotelUserInvites           HotelUserInvite[]
+  whatsappConnections   WhatsAppConnection[]
+  whatsappConversations WhatsAppConversation[]
 }
 
 model AgencyMember {
@@ -371,6 +373,8 @@ model HotelClient {
   members                    HotelMember[]
   userInvites                HotelUserInvite[]
 
+  whatsappConnection    WhatsAppConnection?
+  whatsappConversations WhatsAppConversation[]
   @@index([agencyId])
   // Created by 20260611140000_add_hotel_soft_delete but never declared here, so
   // the schema and the database had drifted since June: every `prisma migrate
@@ -2261,6 +2265,118 @@ model BookingJourneyMatch {
   @@index([hotelClientId, matchConfidence])
   @@index([visitorId])
   @@index([trackingEventId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLICK-TO-WHATSAPP ATTRIBUTION
+//
+// A guest taps a WhatsApp ad, chats, and then books by phone, by QR, or by the
+// property typing it into their system. No website is involved, so the snippet
+// never sees them and the booking looks organic forever.
+//
+// Meta closes that gap itself: a conversation started from an ad carries a
+// `referral` block on its FIRST inbound message, naming the ad and carrying a
+// click id (`ctwa_clid`). That is not an inference — Meta is telling us which ad
+// produced this conversation. The phone number then joins it to the booking.
+//
+// WE ONLY LISTEN. Nothing here sends a message, stores a conversation body, or
+// keeps a raw phone number. The product claim is attribution, not messaging.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One hotel's WhatsApp Business number, connected by the hotel itself.
+///
+/// Per-hotel like MetaToken / InstagramConnection / Ga4Connection, because each
+/// property connects its OWN reservations number — the agency never owns them.
+model WhatsAppConnection {
+  id            String @id @default(cuid())
+  agencyId      String
+  hotelClientId String @unique // one WhatsApp number per hotel
+
+  /// Meta's id for the phone number. THE ROUTING KEY: an inbound webhook names
+  /// it in `value.metadata.phone_number_id`, and it is how a payload is resolved
+  /// to a tenant. Unique so two hotels can never claim the same number.
+  phoneNumberId String @unique
+  /// The WhatsApp Business Account this number belongs to.
+  wabaId        String
+  /// Human-readable ("+91 99004 49954"), for the UI only — never a join key.
+  displayPhoneNumber String?
+
+  /// AES-256-GCM ciphertext of the access token, read only through
+  /// getTokenForApiCall so every access is audited. Null until configured.
+  credentials String? @db.Text
+
+  /// pending | active | error | disconnected.
+  status String @default("pending")
+  /// When a message was last actually received — the honest health signal, the
+  /// same one BookingConnection uses. A connection nobody has messaged looks
+  /// identical to a broken one until this is set.
+  lastMessageReceivedAt DateTime?
+  lastError             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agency        Agency                 @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient   HotelClient            @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  conversations WhatsAppConversation[]
+
+  @@index([agencyId])
+}
+
+/// One person's WhatsApp conversation with one hotel, and the ad that started it.
+///
+/// A CONVERSATION, not a message log: one row per contact, updated as they
+/// message again. We keep no message bodies — the attribution question only
+/// needs "who, and from which ad".
+model WhatsAppConversation {
+  id            String @id @default(cuid())
+  agencyId      String
+  hotelClientId String
+  connectionId  String
+
+  /// The contact, hashed with the SAME salted chain as VisitorIdentity.phoneHash
+  /// and Booking.guestPhoneHash (lib/pii.ts over a normalized SHA-256), so a
+  /// conversation joins to a booking WITHOUT either side storing a raw number.
+  ///
+  /// Normalization matters more than it looks: WhatsApp reports "919900449954"
+  /// and a hotel's own system commonly stores "9900449954". Both are folded to
+  /// one canonical form by normalizePhone() before hashing, or these hashes
+  /// would never collide and nothing would ever match.
+  phoneHash String
+
+  /// ── The ad that started it (referral block, FIRST inbound message only) ──
+  ///
+  /// Meta attaches these once, when the conversation begins from an ad. A later
+  /// message in the same conversation carries no referral, so they are written
+  /// on create and never overwritten — a second message must not blank the very
+  /// evidence this table exists for.
+  ///
+  /// All nullable: a person who messages the hotel directly, without an ad, is a
+  /// real conversation with no attribution, and that is recorded honestly rather
+  /// than dropped.
+  ctwaClid   String? /// Click-to-WhatsApp click id. The STRONGEST evidence here.
+  sourceId   String? /// The ad id.
+  sourceType String? /// "ad" | "post".
+  sourceUrl  String?
+  headline   String?
+
+  firstMessageAt DateTime
+  lastMessageAt  DateTime
+  messageCount   Int      @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agency      Agency             @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient        @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  connection  WhatsAppConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  /// One row per contact per hotel — a repeat messager updates, never duplicates.
+  @@unique([hotelClientId, phoneHash])
+  @@index([agencyId])
+  @@index([hotelClientId, firstMessageAt])
+  @@index([hotelClientId, phoneHash]) // the booking join
+  @@index([ctwaClid])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
