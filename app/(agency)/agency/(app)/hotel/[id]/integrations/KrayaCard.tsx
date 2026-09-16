@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { CopyButton } from "@/components/ui/CopyButton";
 import {
   connectKraya,
@@ -146,6 +146,8 @@ export function KrayaCard({
         </form>
       )}
 
+      {connection && <ImportExport hotelId={hotelId} />}
+
       <div className="flex flex-wrap items-center gap-3">
         <form action={connectAction} className="inline-flex items-center gap-2">
           <input type="hidden" name="hotelId" value={hotelId} />
@@ -182,6 +184,79 @@ export function KrayaCard({
           pasted back into it.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Upload a Kraya lead export.
+ *
+ * Kraya has no read API, so this is both the backfill for everything that
+ * existed before the webhook was switched on, AND the only way to repair a gap
+ * afterwards — Kraya retries twice and then drops a delivery for good.
+ *
+ * Idempotent, so re-uploading the same file updates rather than duplicates.
+ */
+function ImportExport({ hotelId }: { hotelId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <div className="space-y-2 border-t border-line pt-4">
+      <p className="text-sm font-medium text-ink">Import a Kraya export</p>
+      <p className="text-xs text-ink-tertiary">
+        Kraya cannot be read through its API, so history only arrives this way —
+        and re-uploading later fills any gap left by a missed webhook. Safe to
+        repeat: leads already imported are updated, not duplicated.
+      </p>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const form = e.currentTarget;
+          const data = new FormData(form);
+          data.set("hotelId", hotelId);
+          setBusy(true);
+          setError(null);
+          setResult(null);
+          try {
+            const res = await fetch("/api/integrations/kraya/import", {
+              method: "POST",
+              body: data,
+            });
+            const json = await res.json();
+            if (!res.ok) setError(json.error ?? "Import failed.");
+            else
+              setResult(
+                `${json.conversations} enquiries · ${json.bookings} bookings · ${json.attributed} with an ad` +
+                  (json.failed ? ` · ${json.failed} failed` : ""),
+              );
+          } catch {
+            setError("Import failed. Please try again.");
+          } finally {
+            setBusy(false);
+            form.reset();
+          }
+        }}
+        className="flex flex-wrap items-center gap-2"
+      >
+        <input
+          type="file"
+          name="file"
+          accept=".xlsx,.xls,.csv"
+          required
+          className="text-xs text-ink-secondary file:mr-2 file:rounded-lg file:border file:border-line-strong file:bg-elevated file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-ink-secondary"
+        />
+        <button
+          type="submit"
+          disabled={busy}
+          className="rounded-lg border border-line-strong bg-elevated px-3 py-2 text-sm font-medium text-ink-secondary hover:bg-line-strong disabled:opacity-60"
+        >
+          {busy ? "Importing…" : "Import"}
+        </button>
+      </form>
+      {result && <p className="text-xs text-success">Imported: {result}</p>}
+      {error && <p className="text-xs text-danger">{error}</p>}
     </div>
   );
 }

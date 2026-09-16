@@ -38,10 +38,25 @@ export type KrayaTenant = {
   confirmedStageName: string | null;
 };
 
+/**
+ * Dates the webhook cannot supply.
+ *
+ * Kraya's webhook payload carries no timestamps at all, so the live path can
+ * only date a lead by when it arrived. The EXPORT carries `Created at`, `Stage
+ * updated at` and a full stage history, so an import can place each lead — and
+ * each booking — on the day it actually happened.
+ */
+export type KrayaDates = {
+  firstSeenAt?: Date | null;
+  lastSeenAt?: Date | null;
+  confirmedAt?: Date | null;
+};
+
 export async function ingestKrayaLead(
   tenant: KrayaTenant,
   lead: KrayaLead,
   now = new Date(),
+  dates: KrayaDates = {},
 ): Promise<KrayaIngestResult | null> {
   const { agencyId, hotelClientId } = tenant;
 
@@ -76,7 +91,7 @@ export async function ingestKrayaLead(
             krayaLeadId: lead.leadId,
             stageName: lead.stage,
             pipelineName: lead.pipeline,
-            lastMessageAt: now,
+            lastMessageAt: dates.lastSeenAt ?? now,
             messageCount: { increment: 1 },
             ...(gainsAttribution
               ? {
@@ -108,8 +123,8 @@ export async function ingestKrayaLead(
             sourceType: ref?.sourceType ?? null,
             sourceUrl: ref?.sourceUrl ?? null,
             headline: ref?.headline ?? null,
-            firstMessageAt: now,
-            lastMessageAt: now,
+            firstMessageAt: dates.firstSeenAt ?? now,
+            lastMessageAt: dates.lastSeenAt ?? dates.firstSeenAt ?? now,
             messageCount: 1,
           },
           select: { id: true },
@@ -123,9 +138,21 @@ export async function ingestKrayaLead(
     // bookedAt is the moment WE learned of it, not the moment it was confirmed.
     // Kraya's webhook carries no timestamps — the stage history that does is only
     // in the export, which is also how backfill dates these properly.
+    // KEYED ON THE PHONE HASH, not on lead.leadId.
+    //
+    // The same booking reaches us two ways — live from the webhook, which knows
+    // Kraya's numeric lead id, and from the export, which carries no id at all.
+    // Keying on the id would file those as two separate bookings for one guest,
+    // and a backfill would silently double every confirmed booking it touched.
+    //
+    // The phone hash is the identity BOTH paths share, and it is Kraya's own
+    // deduplication model: one lead per number. Kraya has no reservation id to
+    // offer — a lead is not a reservation — so there is nothing more reconcilable
+    // to use.
     const scopedBooking = agencyScopedFor(agencyId, prisma.booking);
+    const externalBookingId = phoneHash;
     const priorBooking = await scopedBooking.findFirst({
-      where: { hotelClientId, provider: "kraya", externalBookingId: lead.leadId },
+      where: { hotelClientId, provider: "kraya", externalBookingId },
       select: { id: true },
     });
 
@@ -137,7 +164,7 @@ export async function ingestKrayaLead(
       bookingChannel: "whatsapp",
       guestPhoneHash: phoneHash,
       guestEmailHash: hashGuestEmail(lead.email),
-      bookedAt: now,
+      bookedAt: dates.confirmedAt ?? now,
     };
 
     if (priorBooking) {
@@ -149,7 +176,7 @@ export async function ingestKrayaLead(
           agencyId,
           hotelClientId,
           provider: "kraya",
-          externalBookingId: lead.leadId,
+          externalBookingId,
           ...data,
         },
       });

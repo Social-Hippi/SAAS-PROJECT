@@ -143,10 +143,18 @@ describe("5. identity and isolation", () => {
     expect(INGEST).toMatch(/agencyScopedFor\(agencyId, prisma\.booking\)/);
   });
 
-  test("the booking is idempotent on Kraya's lead id", () => {
-    // A lead is upserted on every stage change; without this a guest would gain
-    // a booking each time somebody touched their record.
-    expect(INGEST).toMatch(/provider: "kraya", externalBookingId: lead\.leadId/);
+  test("the booking is idempotent on the phone hash, not the lead id", () => {
+    // A lead is upserted on every stage change, so SOME key is required or a
+    // guest gains a booking each time anyone touches their record.
+    //
+    // The key is the phone hash rather than Kraya's lead id because the same
+    // booking reaches us two ways: live from the webhook, which knows the
+    // numeric id, and from the export, which carries none. Keying on the id
+    // would file one guest's booking twice, and a backfill would silently double
+    // every confirmed booking it touched.
+    expect(INGEST).toMatch(/const externalBookingId = phoneHash;/);
+    expect(INGEST).toMatch(/provider: "kraya", externalBookingId\b/);
+    expect(INGEST).not.toMatch(/externalBookingId: lead\.leadId/);
   });
 
   test("bookingChannel is how it was booked, not where it came from", () => {
