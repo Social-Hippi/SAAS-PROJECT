@@ -316,24 +316,37 @@ export async function loadShareViews(args: {
 
   // Google reports calls two ways and they OVERLAP, so they are never summed:
   // a call from a call asset that the advertiser also tracks as a conversion is
-  // in both. Preferring the conversion count means preferring the calls the
-  // advertiser himself marked as valuable; call-asset calls are the fallback,
-  // which at least counts real connected calls when no call conversion action
-  // has been set up.
+  // in both, and one total would count it twice.
   //
-  // Fractional conversions are rounded for display — Google attributes calls
-  // fractionally, and "3.7 calls" is not a number to put in front of a hotel.
+  // RAW CALL-ASSET CALLS WIN. They are every call Google actually connected;
+  // call conversions are only the subset that met the rules the advertiser
+  // configured, usually a minimum duration. On Aster over a month the two read
+  // 56 against 15.5, and the conversion figure quietly dropped four calls from
+  // two Coffeeberry campaigns that have no call conversion action at all —
+  // campaigns whose calls would have vanished from the hotel's own report with
+  // nothing on the page to say so.
+  //
+  // It is a whole number, too. Google splits conversion credit across
+  // touchpoints, so that side arrives fractional — "12.83 calls" is not a
+  // figure to put in front of a hotel.
+  //
+  // The trade is that a raw count includes calls that rang for three seconds.
+  // That overstates rather than hides, and it is the direction a client can
+  // check for themselves against their own phone log.
   const googleCalls: MetricValue<number> = !googleConnected
     ? unavailable("Google Ads is not connected.")
-    : google._count.callConversions > 0
-      ? ok(Math.round(num(google._sum.callConversions)))
-      : google._count.phoneCalls > 0
-        ? ok(num(google._sum.phoneCalls))
+    : google._count.phoneCalls > 0
+      ? ok(num(google._sum.phoneCalls))
+      : google._count.callConversions > 0
+        ? // Fallback only: no call-asset figure anywhere in the window, so a
+          // conversion count is better than refusing to report. Rounded,
+          // because the fractional form is not presentable.
+          ok(Math.round(num(google._sum.callConversions)))
         : // Not `unavailable`: there is no integration to reconnect and no
-          // setting of ours to switch on. Either Google has no call conversion
-          // action configured for this account, or no campaign-day in this
-          // window carries a call figure yet. Zero would be a lie about a
-          // measurement we do not have.
+          // setting of ours to switch on. Either Google has no call measurement
+          // configured for this account, or no campaign-day in this window
+          // carries a call figure yet. Zero would be a lie about a measurement
+          // we do not have.
           notTraceable<number>(GOOGLE_CALLS_NOT_CAPTURED);
 
   const messagesGenerated: MetricValue<number> = !metaConnected
