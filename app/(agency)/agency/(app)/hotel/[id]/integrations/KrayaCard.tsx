@@ -148,16 +148,6 @@ export function KrayaCard({
 
       {connection && <ImportExport hotelId={hotelId} />}
 
-      {/* Kraya sends the booking but never its amount, so return on ad spend
-          stays incomplete until somebody values these by hand. */}
-      {connection && (
-        <a
-          href={`/agency/hotel/${hotelId}/whatsapp-bookings`}
-          className="inline-flex items-center gap-2 rounded-lg border border-line-strong bg-elevated px-3 py-2 text-sm font-medium text-ink-secondary hover:bg-line-strong"
-        >
-          Enter WhatsApp booking values →
-        </a>
-      )}
 
       <div className="flex flex-wrap items-center gap-3">
         <form action={connectAction} className="inline-flex items-center gap-2">

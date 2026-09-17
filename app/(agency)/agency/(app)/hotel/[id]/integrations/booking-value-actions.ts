@@ -81,7 +81,7 @@ export async function saveBookingValue(
 
   // The hotel's share link reads these figures, so it has to be rebuilt too —
   // otherwise the agency sees the new amount and the client keeps seeing the old.
-  revalidatePath(`/agency/hotel/${hotelId}/whatsapp-bookings`);
+  revalidatePath(`/agency/hotel/${hotelId}/integrations`);
   revalidatePath("/share", "layout");
   return { error: null, ok: true };
 }
