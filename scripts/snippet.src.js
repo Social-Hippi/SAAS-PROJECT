@@ -595,13 +595,29 @@
     }
 
     // 6. Conversion detection.
-    function urlMatch(p) {
+    // A hotel may confirm bookings on SEVERAL paths — a card gateway callback,
+    // a pay-at-hotel page, a book-now-pay-later flow. They arrive newline-
+    // separated in one setting, and every one is tried.
+    //
+    // NOT pipe-separated: the glob builder below escapes "|", so a pipe-joined
+    // list would compile to a pattern matching a literal pipe, and therefore
+    // nothing — with no error anywhere.
+    function urlMatchOne(p) {
       if (!p) return false;
       if (p.indexOf("*") >= 0) {
         var rx = new RegExp(p.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*"));
         return rx.test(location.pathname) || rx.test(location.pathname + location.search);
       }
       return location.pathname.indexOf(p) >= 0 || location.href.indexOf(p) >= 0;
+    }
+    function urlMatch(p) {
+      if (!p) return false;
+      var list = String(p).split("\n");
+      for (var i = 0; i < list.length; i++) {
+        var one = list[i].replace(/^\s+|\s+$/g, "");
+        if (one && urlMatchOne(one)) return true;
+      }
+      return false;
     }
     function checkUrl() {
       if (cfg && (cfg.method === "url_change" || cfg.method === "both") && urlMatch(cfg.thankYouUrlPattern)) convert();
