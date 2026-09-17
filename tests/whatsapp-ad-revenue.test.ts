@@ -29,13 +29,17 @@ const VALUES = readCode("lib/whatsapp-booking-values.ts");
 const REPORT = readCode("components/dashboard/ShareReport.tsx");
 const ACTION = readCode("app/(agency)/agency/(app)/hotel/[id]/whatsapp-bookings/actions.ts");
 const PAGE = readCode("app/(agency)/agency/(app)/hotel/[id]/whatsapp-bookings/page.tsx");
+const LIST = readCode(
+  "app/(agency)/agency/(app)/hotel/[id]/whatsapp-bookings/BookingValueList.tsx",
+);
 const SCHEMA = readCode("prisma/schema.prisma");
 
 const booking = (over: Partial<WhatsAppBookingValue> = {}): WhatsAppBookingValue => ({
   id: "b1",
   bookedAt: new Date("2026-09-12T10:00:00Z"),
-  guestName: "A Guest",
-  externalBookingId: "K-1",
+  krayaLeadId: "KR-1",
+  stageName: "Booking confirmed",
+  pipelineName: "Coffeeberry",
   traced: false,
   marked: false,
   amount: null,
@@ -161,8 +165,25 @@ describe("5. multi-tenancy holds on the hand-written paths", () => {
     expect(ACTION).toMatch(/agencyScoped\(prisma\.booking\)\.update/);
   });
 
-  test("guest names are admin-only, as on the journeys screen", () => {
+  test("the screen is admin-only, as on the journeys screen", () => {
     expect(PAGE).toMatch(/requireAdmin\(\)/);
+  });
+
+  test("no contact detail is shown — the handle is Kraya's own lead id", () => {
+    // The Kraya import deliberately stores neither names nor numbers, and
+    // externalBookingId is a salted phone hash that identifies nothing to a
+    // human. Showing the lead id keeps the screen usable at no PII cost.
+    expect(VALUES).toMatch(/l\."krayaLeadId"/);
+    expect(VALUES).not.toMatch(/guestName|externalBookingId/);
+    expect(LIST).toMatch(/booking\.krayaLeadId/);
+    expect(LIST).not.toMatch(/guestName|phone/i);
+  });
+
+  test("one guest with several conversations still yields one row", () => {
+    // A plain join would return the booking once per conversation and multiply
+    // both the list and the total built from it.
+    expect(VALUES).toMatch(/LEFT JOIN LATERAL/);
+    expect(VALUES).toMatch(/LIMIT 1/);
   });
 });
 

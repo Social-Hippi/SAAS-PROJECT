@@ -8,8 +8,9 @@ import { saveBookingValue, type BookingValueState } from "./actions";
 export type BookingRow = {
   id: string;
   bookedAtLabel: string;
-  guestName: string | null;
-  externalBookingId: string;
+  krayaLeadId: string | null;
+  stageName: string | null;
+  pipelineName: string | null;
   traced: boolean;
   marked: boolean;
   amount: number | null;
@@ -46,7 +47,7 @@ export function BookingValueList({
         <thead>
           <tr className="border-b border-line bg-page text-left">
             <Th>Booked</Th>
-            <Th>Guest</Th>
+            <Th>Kraya lead</Th>
             <Th>Came from an ad</Th>
             <Th>Booking value ({currency})</Th>
             <Th> </Th>
@@ -76,9 +77,14 @@ function Row({ hotelId, booking }: { hotelId: string; booking: BookingRow }) {
   return (
     <tr className="border-b border-line last:border-0 align-middle">
       <td className="whitespace-nowrap px-4 py-3 text-ink-secondary">{booking.bookedAtLabel}</td>
+      {/* Kraya's own lead id, not a name or a number: the import stores neither,
+          and this is what a person types into Kraya to find the reservation and
+          read the amount off it. */}
       <td className="px-4 py-3">
-        <span className="text-ink">{booking.guestName ?? "—"}</span>
-        <span className="block text-xs text-ink-disabled">{booking.externalBookingId}</span>
+        <span className="font-mono text-xs text-ink">{booking.krayaLeadId ?? "—"}</span>
+        <span className="block text-xs text-ink-disabled">
+          {[booking.pipelineName, booking.stageName].filter(Boolean).join(" · ") || "—"}
+        </span>
       </td>
       <td className="px-4 py-3">
         <form action={action} id={`f-${booking.id}`} className="contents">

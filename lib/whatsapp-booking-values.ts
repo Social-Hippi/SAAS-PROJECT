@@ -28,8 +28,18 @@ import { prisma } from "@/lib/prisma";
 export type WhatsAppBookingValue = {
   id: string;
   bookedAt: Date;
-  guestName: string | null;
-  externalBookingId: string;
+  /**
+   * How a person finds this booking again.
+   *
+   * NOT the guest's name, and not their number. The Kraya import deliberately
+   * takes neither — `externalBookingId` is a salted phone hash, which identifies
+   * nothing to a human. So the handle shown is Kraya's OWN lead id, with the
+   * stage and pipeline it sits in: enough to look the lead up in Kraya and read
+   * the amount off it, while storing no contact detail at all.
+   */
+  krayaLeadId: string | null;
+  stageName: string | null;
+  pipelineName: string | null;
   /** The conversation carries a real ad sourceId. A record, not a judgement. */
   traced: boolean;
   /** The agency's own mark. Irrelevant while `traced` is true. */
@@ -42,8 +52,9 @@ export type WhatsAppBookingValue = {
 type Row = {
   id: string;
   bookedAt: Date;
-  guestName: string | null;
-  externalBookingId: string;
+  krayaLeadId: string | null;
+  stageName: string | null;
+  pipelineName: string | null;
   traced: boolean;
   agencyAdAttributed: boolean;
   agencyRevenue: Prisma.Decimal | null;
@@ -70,11 +81,12 @@ export async function listWhatsAppBookingValues(
   const rows = await prisma.$queryRaw<Row[]>`
     SELECT b.id,
            b."bookedAt",
-           b."guestName",
-           b."externalBookingId",
            b."agencyAdAttributed",
            b."agencyRevenue",
            b."agencyRevenueAt",
+           l."krayaLeadId",
+           l."stageName",
+           l."pipelineName",
            EXISTS (
              SELECT 1 FROM "WhatsAppConversation" c
               WHERE c."agencyId" = b."agencyId"
@@ -84,6 +96,18 @@ export async function listWhatsAppBookingValues(
                 AND c."firstMessageAt" <= b."bookedAt"
            ) AS traced
       FROM "Booking" b
+      -- LATERAL, not a plain join: one number can hold several conversations,
+      -- and a plain join would return the booking once per conversation and
+      -- multiply the list. LIMIT 1 keeps exactly one row per booking.
+      LEFT JOIN LATERAL (
+        SELECT c."krayaLeadId", c."stageName", c."pipelineName"
+          FROM "WhatsAppConversation" c
+         WHERE c."agencyId" = b."agencyId"
+           AND c."hotelClientId" = b."hotelClientId"
+           AND c."phoneHash" = b."guestPhoneHash"
+         ORDER BY c."lastMessageAt" DESC NULLS LAST
+         LIMIT 1
+      ) l ON TRUE
      WHERE b."agencyId" = ${agencyId}
        AND b."hotelClientId" = ${hotelClientId}
        AND b.provider = 'kraya'
@@ -94,8 +118,9 @@ export async function listWhatsAppBookingValues(
   return rows.map((r) => ({
     id: r.id,
     bookedAt: r.bookedAt,
-    guestName: r.guestName,
-    externalBookingId: r.externalBookingId,
+    krayaLeadId: r.krayaLeadId,
+    stageName: r.stageName,
+    pipelineName: r.pipelineName,
     traced: r.traced,
     marked: r.agencyAdAttributed,
     amount: r.agencyRevenue == null ? null : Number(r.agencyRevenue),
