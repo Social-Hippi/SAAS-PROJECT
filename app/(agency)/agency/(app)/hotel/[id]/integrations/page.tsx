@@ -32,6 +32,8 @@ import { MetaSyncButton } from "./MetaSyncButton";
 import { BookingConnectionCard } from "./BookingConnectionCard";
 import { KrayaCard } from "./KrayaCard";
 import { BookingDomainsCard } from "./BookingDomainsCard";
+import { ConversionDetectionCard } from "./ConversionDetectionCard";
+import { splitThankYouPatterns } from "@/lib/conversion-patterns";
 import { HotelAdAccountSelect } from "./HotelAdAccountSelect";
 import { ConnectionHistory } from "./ConnectionHistory";
 import { archivedAccountSummaries } from "@/lib/meta-archive";
@@ -147,6 +149,9 @@ export default async function HotelIntegrationsPage({
       // The cross-domain setting that decides whether an ad click survives the
       // hop to a booking engine on another host.
       bookingDomains: true,
+      // Which URLs count as a completed booking. Editable for the same reason
+      // bookingDomains is: it could only ever be set at hotel creation.
+      thankYouUrlPattern: true,
       siteId: true,
       snippetStatus: true,
       lastEventAt: true,
@@ -453,6 +458,12 @@ export default async function HotelIntegrationsPage({
     .filter((h): h is string => Boolean(h) && h !== ownHost && !h.includes("translate.goog"))
     .filter((h, i, a) => a.indexOf(h) === i)
     .sort();
+
+  // How many bookings this detection has actually produced — the honest check on
+  // whether the configured paths are right.
+  const conversionsSeen = await agencyScoped(prisma.trackingEvent).count({
+    where: { hotelClientId: hotel.id, eventType: "conversion" },
+  });
 
   // Kraya — the hotel's WhatsApp CRM. Its stage names are learned from the leads
   // themselves rather than configured, so the "which stage means booked" control
@@ -954,6 +965,12 @@ export default async function HotelIntegrationsPage({
               hotelId={hotel.id}
               domains={hotel.bookingDomains}
               bookingHostsSeen={bookingHostsSeen}
+            />
+
+            <ConversionDetectionCard
+              hotelId={hotel.id}
+              patterns={splitThankYouPatterns(hotel.thankYouUrlPattern)}
+              conversionsSeen={conversionsSeen}
             />
 
             <div className="rounded-lg border-l-4 border-info bg-info/10 p-3 text-xs text-ink-secondary">
