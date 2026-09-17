@@ -31,6 +31,7 @@ import { TestConnection } from "../install/TestConnection";
 import { MetaSyncButton } from "./MetaSyncButton";
 import { BookingConnectionCard } from "./BookingConnectionCard";
 import { KrayaCard } from "./KrayaCard";
+import { BookingDomainsCard } from "./BookingDomainsCard";
 import { HotelAdAccountSelect } from "./HotelAdAccountSelect";
 import { ConnectionHistory } from "./ConnectionHistory";
 import { archivedAccountSummaries } from "@/lib/meta-archive";
@@ -143,6 +144,9 @@ export default async function HotelIntegrationsPage({
       id: true,
       name: true,
       websiteUrl: true,
+      // The cross-domain setting that decides whether an ad click survives the
+      // hop to a booking engine on another host.
+      bookingDomains: true,
       siteId: true,
       snippetStatus: true,
       lastEventAt: true,
@@ -426,6 +430,29 @@ export default async function HotelIntegrationsPage({
       lastError: true,
     },
   });
+
+  // Hosts that have actually sent tracking, minus the hotel's own site — the
+  // likely answers for the booking-domain setting. Offering what has really been
+  // seen beats asking an operator to recall a hostname.
+  const seenHosts = await prisma.$queryRaw<{ host: string }[]>`
+    SELECT DISTINCT split_part(regexp_replace("pageUrl", '^https?://', ''), '/', 1) AS host
+    FROM "TrackingEvent"
+    WHERE "agencyId" = ${member.agencyId}
+      AND "hotelClientId" = ${hotel.id}
+      AND "createdAt" > NOW() - INTERVAL '60 days'
+    LIMIT 50`;
+  const ownHost = (() => {
+    try {
+      return new URL(hotel.websiteUrl).hostname.toLowerCase().replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  })();
+  const bookingHostsSeen = seenHosts
+    .map((r) => r.host?.toLowerCase().replace(/^www\./, ""))
+    .filter((h): h is string => Boolean(h) && h !== ownHost && !h.includes("translate.goog"))
+    .filter((h, i, a) => a.indexOf(h) === i)
+    .sort();
 
   // Kraya — the hotel's WhatsApp CRM. Its stage names are learned from the leads
   // themselves rather than configured, so the "which stage means booked" control
@@ -919,6 +946,15 @@ export default async function HotelIntegrationsPage({
                 Last event received: {fmtDate(hotel.lastEventAt)}
               </p>
             )}
+
+            {/* Sits with the snippet because it governs what the snippet does:
+                whether a booking link carries the visitor's identity to a
+                booking engine on another host. */}
+            <BookingDomainsCard
+              hotelId={hotel.id}
+              domains={hotel.bookingDomains}
+              bookingHostsSeen={bookingHostsSeen}
+            />
 
             <div className="rounded-lg border-l-4 border-info bg-info/10 p-3 text-xs text-ink-secondary">
               <p className="font-semibold text-ink">Capture booking revenue</p>
