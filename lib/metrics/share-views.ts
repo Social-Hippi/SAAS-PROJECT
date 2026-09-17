@@ -1,0 +1,457 @@
+import "server-only";
+
+import { prisma } from "@/lib/prisma";
+import { agencyScopedFor } from "@/lib/tenant";
+import {
+  ok,
+  ratio,
+  sum,
+  notTraceable,
+  unavailable,
+  isOk,
+  type MetricValue,
+} from "@/lib/metrics/metric-value";
+import { canonicalSourceType } from "@/lib/metrics/canonical";
+import { zonedDayString } from "@/lib/timezone";
+import { whenMigrated } from "@/lib/missing-table";
+import { summariseTrackerDays, type TrackerDay } from "@/lib/ops-tracker/metrics";
+import { datesInRange } from "@/lib/metrics/contact-report";
+import { REPORTING_CURRENCY } from "@/lib/ad-spend";
+import type { ResolvedRange } from "@/lib/attribution";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE HOTEL'S REPORT, IN TWO VIEWS THAT ARE NEVER MIXED.
+//
+// One report used to show platform figures beside the property's own record, and
+// the two invite an arithmetic nobody can defend: ₹1,13,597 of ad spend next to
+// 519 calls reads as ₹219 a call, and it is not — nothing anywhere records which
+// channel produced those calls. Splitting them is the point.
+//
+//   ADS    every figure is "what advertising produced". Never a total: WhatsApp
+//          bookings here is bookings traced to an ad, not every booking the
+//          property confirmed.
+//
+//   CLIENT what the property itself recorded, carrying no attribution language
+//          at all. Bigger numbers, and deliberately no ratio anywhere near them.
+//
+// The split is also what finally makes return on ad spend honest. Dividing ALL
+// revenue by ad spend produced 0.07x on a hotel whose business runs on WhatsApp —
+// a number that read as "your ads lost money" and meant nothing. Ad revenue over
+// ad spend is a real ratio.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type AdsView = {
+  /** Revenue from website bookings that carried an ad click id. NOT all revenue. */
+  totalRevenue: MetricValue<number>;
+  /** Ad revenue ÷ ad spend. Both sides are ads, so this one is a true ROAS. */
+  returnOnAdSpend: MetricValue<number>;
+  googleSpend: MetricValue<number>;
+  metaSpend: MetricValue<number>;
+  /** Google click-to-call + call conversions. Kept apart from Meta's. */
+  googleCalls: MetricValue<number>;
+  /** Meta click-to-call, connected only. */
+  metaCalls: MetricValue<number>;
+  /** Meta messaging conversations — WhatsApp, Instagram and Messenger together. */
+  messagesGenerated: MetricValue<number>;
+  /** Kraya leads whose conversation began at an ad. */
+  enquiriesFromAds: MetricValue<number>;
+  /** Kraya bookings traceable to an ad. Never the property's total. */
+  whatsappBookings: MetricValue<number>;
+};
+
+export type ClientView = {
+  whatsappMessages: MetricValue<number>;
+  calls: MetricValue<number>;
+  totalRoomNights: MetricValue<number>;
+  totalRevenue: MetricValue<number>;
+};
+
+export type ShareViews = {
+  ads: AdsView;
+  client: ClientView;
+  currency: string;
+  /** Per-tile coverage warning, keyed by tile. */
+  staleNote: Record<string, string | undefined>;
+  /** The first ad-attributed WhatsApp enquiry, or null. */
+  whatsappAttributionSince: Date | null;
+};
+
+// ── Copy ─────────────────────────────────────────────────────────────────────
+
+export const ADS_CAPTION = {
+  totalRevenue:
+    "Booking value from website bookings we could trace back to one of your ads. Bookings that arrived another way are in the client view.",
+  returnOnAdSpend:
+    "Revenue from ads ÷ money spent on ads. Both sides count only advertising, so this is what the advertising returned.",
+  googleSpend: "Spend as Google Ads reports it.",
+  metaSpend: "Spend as Meta reports it.",
+  googleCalls: "Calls connected from Google ads.",
+  metaCalls: "Calls connected from Meta ads. Counted only once the call connects.",
+  messagesGenerated:
+    "Conversations started from your Meta ads. Meta reports WhatsApp, Instagram and Messenger together in this one figure.",
+  enquiriesFromAds:
+    "People who messaged on WhatsApp after tapping one of your ads, as recorded by the property's own system.",
+  whatsappBookings:
+    "Bookings the reservations team confirmed whose conversation began at one of your ads. Not every WhatsApp booking — those are in the client view.",
+} as const;
+
+export const CLIENT_CAPTION = {
+  whatsappMessages: "WhatsApp enquiries logged by the property's own team.",
+  calls:
+    "Calls logged by the property's own team. Every call received, not only calls from ads — so it cannot be credited to any one channel.",
+  totalRoomNights:
+    "Room nights confirmed by the property. One booking can be several nights.",
+  totalRevenue: "Booking value recorded by the property.",
+} as const;
+
+/**
+ * Google does not break its conversions down by action type for us.
+ *
+ * The sync asks for a single `conversions` total and never segments by
+ * `segments.conversion_action_name`, so a call, a form fill and a booking arrive
+ * as one undifferentiated number. It cannot be split after the fact, and
+ * substituting the total would report every conversion as a call.
+ */
+export const GOOGLE_CALLS_NOT_CAPTURED =
+  "Google does not send us calls separately from its other conversions yet, so this figure is not available. It is not a zero.";
+
+/**
+ * The property records no booking value anywhere we can read.
+ *
+ * Its operations sheet has enquiries, room nights and dispositions but no money
+ * column, and website revenue belongs to the ads view. Until a value is recorded
+ * this is unknowable rather than zero.
+ */
+export const CLIENT_REVENUE_NOT_RECORDED =
+  "The property's own records do not include a booking value, so this cannot be shown. Revenue traced to advertising is in the ads view.";
+
+const NO_AD_ACTIVITY = "No advertising activity was recorded in this period.";
+const NO_CAMPAIGN_REPORTING =
+  "Meta has not reported campaign-level results for this period, so this figure is not available. It is not a zero.";
+const WHATSAPP_NOT_CONNECTED =
+  "The property's WhatsApp system is not connected, so enquiries and bookings from it cannot be shown.";
+
+// ── Loader ───────────────────────────────────────────────────────────────────
+
+export async function loadShareViews(args: {
+  agencyId: string;
+  hotelClientId: string;
+  range: ResolvedRange;
+  /** The hotel's showAdSpendToHotel flag. */
+  showAdSpend: boolean;
+}): Promise<ShareViews> {
+  const { agencyId, hotelClientId, range, showAdSpend } = args;
+
+  const dayFilter = {
+    gte: new Date(`${zonedDayString(range.since, range.timezone)}T00:00:00.000Z`),
+    lte: new Date(`${zonedDayString(range.until, range.timezone)}T00:00:00.000Z`),
+  };
+  const eventFilter = { gte: range.since, lte: range.until };
+  const scoped = <D>(m: D) => agencyScopedFor(agencyId, m);
+
+  const [
+    conversions,
+    anyTraffic,
+    meta,
+    metaCoverage,
+    google,
+    googleConn,
+    metaToken,
+    campaigns,
+    messagingCoverage,
+    krayaConn,
+    adEnquiries,
+    tracker,
+  ] = await Promise.all([
+    // Every conversion in the window, classified individually below — the ads
+    // view counts only those an ad click id can be traced to.
+    scoped(prisma.trackingEvent).findMany({
+      where: { hotelClientId, eventType: "conversion", createdAt: eventFilter },
+      select: {
+        conversionValue: true,
+        utmSource: true,
+        utmMedium: true,
+        utmContent: true,
+        gclid: true,
+        gbraid: true,
+        wbraid: true,
+        fbclid: true,
+      },
+    }),
+    scoped(prisma.trackingEvent).count({ where: { hotelClientId, createdAt: eventFilter } }),
+    scoped(prisma.adSnapshot).aggregate({
+      where: { hotelClientId, archived: false, date: dayFilter },
+      _sum: { spend: true },
+      _max: { date: true },
+      _count: true,
+    }),
+    scoped(prisma.adSnapshot).aggregate({
+      where: { hotelClientId, archived: false, date: dayFilter, spend: { gt: 0 } },
+      _max: { date: true },
+    }),
+    scoped(prisma.googleAdsCampaignSnapshot).aggregate({
+      where: { hotelClientId, date: dayFilter },
+      _sum: { spend: true },
+      _max: { date: true },
+      _count: true,
+    }),
+    scoped(prisma.googleAdsConnection).findFirst({
+      where: { hotelClientId },
+      select: { status: true },
+    }),
+    scoped(prisma.metaToken).findFirst({ where: { hotelClientId }, select: { status: true } }),
+    scoped(prisma.adCampaignSnapshot).aggregate({
+      where: { hotelClientId, archived: false, date: dayFilter },
+      _sum: { messagingStarted: true, calls: true },
+      _count: { messagingStarted: true, calls: true },
+    }),
+    // Coverage measured on rows that CARRY the figure, not the newest row: a
+    // campaign row can arrive with a null messaging figure.
+    scoped(prisma.adCampaignSnapshot).aggregate({
+      where: {
+        hotelClientId,
+        archived: false,
+        date: dayFilter,
+        messagingStarted: { not: null },
+      },
+      _max: { date: true },
+    }),
+    scoped(prisma.krayaConnection).findFirst({ where: { hotelClientId }, select: { id: true } }),
+    scoped(prisma.whatsAppConversation).count({
+      where: { hotelClientId, sourceId: { not: null }, firstMessageAt: eventFilter },
+    }),
+    whenMigrated("operations tracker", [], () =>
+      scoped(prisma.manualLeadDaily).findMany({
+        where: { hotelClientId, date: dayFilter },
+        orderBy: { date: "asc" },
+      }),
+    ),
+  ]);
+
+  const num = (v: unknown): number => (v == null ? 0 : Number(v));
+
+  // ── Spend ──────────────────────────────────────────────────────────────────
+  const googleConnected = googleConn != null && googleConn.status !== "REVOKED";
+  const metaConnected = metaToken != null && metaToken.status !== "REVOKED";
+
+  const spendOf = (
+    label: string,
+    connected: boolean,
+    agg: { _sum: { spend: unknown }; _count: number },
+  ): MetricValue<number> =>
+    !connected
+      ? unavailable(`${label} is not connected.`)
+      : agg._count === 0
+        ? unavailable(NO_AD_ACTIVITY)
+        : ok(num(agg._sum.spend));
+
+  const googleSpend = spendOf("Google Ads", googleConnected, google);
+  const metaSpend = spendOf("Meta Ads", metaConnected, meta);
+
+  // ── Ad-attributed revenue ──────────────────────────────────────────────────
+  //
+  // Classified per conversion through the canonical layer, so a Google Hotel Ads
+  // free booking link is NOT counted as paid — it is organic revenue that happens
+  // to come from Google, and crediting it to ad spend is exactly the error the
+  // split exists to remove.
+  let adRevenue = 0;
+  let adBookings = 0;
+  for (const c of conversions) {
+    const value = num(c.conversionValue);
+    const type = canonicalSourceType({ ...c, value });
+    if (type === "meta_ads" || type === "google_ads") {
+      adRevenue += value;
+      adBookings += 1;
+    }
+  }
+
+  const totalRevenue: MetricValue<number> =
+    anyTraffic === 0
+      ? unavailable(
+          "No website activity was recorded in this period, so booking value cannot be reported.",
+        )
+      : ok(adRevenue);
+
+  // WHY A ZERO HERE NEEDS EXPLAINING, when the doctrine everywhere else is that
+  // ok(0) is a finding and must not be dressed up as a gap.
+  //
+  // It is a finding only if the measurement was capable of producing a non-zero.
+  // Tracing a website booking to an ad needs the click id to survive the hop to
+  // the booking engine, and that only began working once the hotel's booking
+  // domains were configured — before which 4,057 ad clicks reached the site and
+  // none reached the booking engine. So a zero in a window that predates the fix
+  // means "we could not see it", not "the ads produced nothing", and the two read
+  // identically on a tile.
+  //
+  // The note does not change the figure. It says what the figure can and cannot
+  // be taken to mean, which is the only honest way to show a zero here.
+  const noAdBookingsYet = adBookings === 0;
+
+  // A platform that was never connected contributes a real zero: an account that
+  // does not exist spent nothing. One that IS connected but reported nothing
+  // stays unknown, and `sum` makes the whole total unknown — the honest answer.
+  const contribution = (connected: boolean, m: MetricValue<number>) =>
+    connected ? m : ok(0);
+  const totalSpend = sum([
+    contribution(googleConnected, googleSpend),
+    contribution(metaConnected, metaSpend),
+  ]);
+
+  const returnOnAdSpend = ratio(totalRevenue, totalSpend, {
+    zeroDenominatorReason:
+      "No advertising spend was recorded in this period, so there is nothing to divide by.",
+  });
+
+  // ── Calls, kept apart by platform ──────────────────────────────────────────
+  const metaCalls: MetricValue<number> = !metaConnected
+    ? unavailable("Meta Ads is not connected.")
+    : campaigns._count.calls === 0
+      ? unavailable(NO_CAMPAIGN_REPORTING)
+      : ok(num(campaigns._sum.calls));
+
+  // Not `unavailable`: there is no integration to reconnect and no setting to
+  // switch on. The field is simply not requested from Google yet.
+  const googleCalls = notTraceable<number>(GOOGLE_CALLS_NOT_CAPTURED);
+
+  const messagesGenerated: MetricValue<number> = !metaConnected
+    ? unavailable("Meta Ads is not connected.")
+    : campaigns._count.messagingStarted === 0
+      ? unavailable(NO_CAMPAIGN_REPORTING)
+      : ok(num(campaigns._sum.messagingStarted));
+
+  // ── WhatsApp, from the property's own system ───────────────────────────────
+  const enquiriesFromAds: MetricValue<number> = krayaConn
+    ? ok(adEnquiries)
+    : unavailable(WHATSAPP_NOT_CONNECTED);
+
+  // Bookings whose enquiry began at an ad. COUNT(DISTINCT) because one guest can
+  // hold several conversations, and an enquiry starting AFTER the booking cannot
+  // have caused it.
+  let whatsappBookings: MetricValue<number> = unavailable(WHATSAPP_NOT_CONNECTED);
+  if (krayaConn) {
+    const rows = await prisma.$queryRaw<{ n: bigint }[]>`
+      SELECT COUNT(DISTINCT b.id) AS n
+      FROM "Booking" b
+      JOIN "WhatsAppConversation" c
+        ON c."agencyId" = b."agencyId"
+       AND c."hotelClientId" = b."hotelClientId"
+       AND c."phoneHash" = b."guestPhoneHash"
+      WHERE b."agencyId" = ${agencyId}
+        AND b."hotelClientId" = ${hotelClientId}
+        AND b.provider = 'kraya'
+        AND b."bookedAt" >= ${range.since}
+        AND b."bookedAt" <= ${range.until}
+        AND c."sourceId" IS NOT NULL
+        AND c."firstMessageAt" <= b."bookedAt"`;
+    whatsappBookings = ok(Number(rows[0]?.n ?? 0));
+  }
+
+  const firstAdEnquiry = krayaConn
+    ? await scoped(prisma.whatsAppConversation).findFirst({
+        where: { hotelClientId, sourceId: { not: null } },
+        orderBy: { firstMessageAt: "asc" },
+        select: { firstMessageAt: true },
+      })
+    : null;
+
+  // ── The property's own record ──────────────────────────────────────────────
+  const trackerSummary = summariseTrackerDays(
+    tracker.map(
+      (r): TrackerDay => ({
+        date: r.date.toISOString().slice(0, 10),
+        enquiries: r.enquiries,
+        repeatContacts: r.repeatContacts,
+        roomNightsConfirmed: r.roomNightsConfirmed,
+        junkSpam: r.junkSpam,
+        soldOut: r.soldOut,
+        inhouse: r.inhouse,
+        lowBudget: r.lowBudget,
+        lessRoom: r.lessRoom,
+        whatsappLeads: r.whatsappLeads,
+        whatsappConfirmed: r.whatsappConfirmed,
+        totalCallsReceived: r.totalCallsReceived,
+        storedTotalLeads: r.storedTotalLeads,
+        storedConversionRate:
+          r.storedConversionRate == null ? null : Number(r.storedConversionRate),
+      }),
+    ),
+    datesInRange(range),
+  );
+
+  const client: ClientView = {
+    whatsappMessages: trackerSummary.whatsappLeads,
+    calls: trackerSummary.totalCallsReceived,
+    totalRoomNights: isOk(trackerSummary.roomNightsConfirmed)
+      ? trackerSummary.roomNightsConfirmed
+      : notTraceable(
+          "Room nights are recorded by the property's own reservations team. None have been recorded for this period.",
+        ),
+    totalRevenue: notTraceable(CLIENT_REVENUE_NOT_RECORDED),
+  };
+
+  // ── Coverage ───────────────────────────────────────────────────────────────
+  const periodEndsOn = zonedDayString(
+    new Date(Math.min(range.until.getTime(), Date.now())),
+    range.timezone,
+  );
+  const coverageNote = (label: string, newest: Date | null): string | undefined => {
+    if (newest == null) return undefined;
+    const day = zonedDayString(newest, range.timezone);
+    return day < periodEndsOn
+      ? `${label} has data up to ${day}, so this figure does not cover the whole period.`
+      : undefined;
+  };
+
+  const metaNote = coverageNote("Meta Ads", metaCoverage._max.date ?? meta._max.date);
+  const googleNote = coverageNote("Google Ads", google._max.date);
+  const campaignNote = coverageNote("Meta Ads campaign reporting", messagingCoverage._max.date);
+  const trackerNote = coverageNote(
+    "The property's operations tracker",
+    trackerSummary.completeThrough
+      ? new Date(`${trackerSummary.completeThrough}T00:00:00.000Z`)
+      : null,
+  );
+
+  const withheld = unavailable<number>("Ad spend is not shared on this report.");
+
+  const NO_AD_BOOKING_YET =
+    "No website booking has been traced to an ad in this period. Tracing needs the " +
+    "ad click to reach the booking engine, so this cannot be read as the ads " +
+    "producing nothing — bookings taken on WhatsApp or by phone are counted separately.";
+
+  return {
+    ads: {
+      totalRevenue,
+      returnOnAdSpend: showAdSpend ? returnOnAdSpend : withheld,
+      googleSpend: showAdSpend ? googleSpend : withheld,
+      metaSpend: showAdSpend ? metaSpend : withheld,
+      googleCalls,
+      metaCalls,
+      messagesGenerated,
+      enquiriesFromAds,
+      whatsappBookings,
+    },
+    client,
+    currency: REPORTING_CURRENCY,
+    staleNote: Object.fromEntries(
+      Object.entries({
+        // Revenue and ROAS both depend on ad spend being complete.
+        // A zero that has not been explained is the misleading one.
+        totalRevenue: noAdBookingsYet ? NO_AD_BOOKING_YET : undefined,
+        returnOnAdSpend: showAdSpend
+          ? noAdBookingsYet
+            ? NO_AD_BOOKING_YET
+            : (googleNote ?? metaNote)
+          : undefined,
+        googleSpend: showAdSpend ? googleNote : undefined,
+        metaSpend: showAdSpend ? metaNote : undefined,
+        metaCalls: campaignNote,
+        messagesGenerated: campaignNote,
+        clientCalls: trackerNote,
+        clientWhatsappMessages: trackerNote,
+        clientTotalRoomNights: trackerNote,
+      }).filter(([, v]) => v != null),
+    ) as Record<string, string | undefined>,
+    whatsappAttributionSince: firstAdEnquiry?.firstMessageAt ?? null,
+  };
+}

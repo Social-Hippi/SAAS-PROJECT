@@ -16,7 +16,9 @@ import { readCode } from "./helpers/read-code";
 // A hotel owner opens the link to learn four things — what came in, what it
 // cost, who got in touch, how many booked — and twenty-five panels of
 // attribution working-out is not that. /share/<uuid> now renders nine figures
-// from lib/metrics/client-report.ts and nothing else.
+// from lib/metrics/share-views.ts and nothing else — now in two views that are
+// never mixed, because platform figures beside the property's own record invite
+// an arithmetic nobody can defend.
 //
 // So the invariant INVERTS: the share page must NOT reach the full dashboard.
 // What the old merge was protecting against — a second surface quietly growing
@@ -57,9 +59,9 @@ describe("1. the share page renders the nine-figure client report", () => {
 
   test("the share page renders the client report instead", () => {
     expect(SHARE_PAGE).toContain(
-      'import { ClientReport } from "@/components/dashboard/ClientReport"',
+      'import { ShareReport, type ShareView } from "@/components/dashboard/ShareReport"',
     );
-    expect(SHARE_PAGE).toContain("<ClientReport");
+    expect(SHARE_PAGE).toContain("<ShareReport");
   });
 
   test("the share page cannot reach the full dashboard at all", () => {
@@ -92,7 +94,7 @@ describe("1. the share page renders the nine-figure client report", () => {
     // agencyId comes off the ShareLink row and is installed as the request-scoped
     // override, so every query inside stays filtered by agencyId. A share page
     // that loaded data outside runWithAgencyScope would be reading unscoped.
-    expect(SHARE_PAGE).toContain("loadClientReport");
+    expect(SHARE_PAGE).toContain("loadShareViews");
     expect(SHARE_PAGE).toMatch(/runWithAgencyScope\(link\.agencyId/);
   });
 
