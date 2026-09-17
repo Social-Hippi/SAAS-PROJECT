@@ -9,6 +9,7 @@ export type BookingRow = {
   id: string;
   bookedAtLabel: string;
   krayaLeadId: string | null;
+  phoneLast4: string | null;
   stageName: string | null;
   pipelineName: string | null;
   traced: boolean;
@@ -81,7 +82,10 @@ function Row({ hotelId, booking }: { hotelId: string; booking: BookingRow }) {
           and this is what a person types into Kraya to find the reservation and
           read the amount off it. */}
       <td className="px-4 py-3">
-        <span className="font-mono text-xs text-ink">{booking.krayaLeadId ?? "—"}</span>
+        <span className="font-mono text-xs text-ink">
+          {booking.krayaLeadId ??
+            (booking.phoneLast4 ? `Imported lead · ⋯${booking.phoneLast4}` : "Imported lead")}
+        </span>
         <span className="block text-xs text-ink-disabled">
           {[booking.pipelineName, booking.stageName].filter(Boolean).join(" · ") || "—"}
         </span>

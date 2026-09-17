@@ -32,12 +32,15 @@ const PAGE = readCode("app/(agency)/agency/(app)/hotel/[id]/whatsapp-bookings/pa
 const LIST = readCode(
   "app/(agency)/agency/(app)/hotel/[id]/whatsapp-bookings/BookingValueList.tsx",
 );
+const INGEST = readCode("lib/kraya-ingest.ts");
+const REDACT = readCode("scripts/redact-kraya-lead-phones.ts");
 const SCHEMA = readCode("prisma/schema.prisma");
 
 const booking = (over: Partial<WhatsAppBookingValue> = {}): WhatsAppBookingValue => ({
   id: "b1",
   bookedAt: new Date("2026-09-12T10:00:00Z"),
   krayaLeadId: "KR-1",
+  phoneLast4: null,
   stageName: "Booking confirmed",
   pipelineName: "Coffeeberry",
   traced: false,
@@ -169,14 +172,46 @@ describe("5. multi-tenancy holds on the hand-written paths", () => {
     expect(PAGE).toMatch(/requireAdmin\(\)/);
   });
 
-  test("no contact detail is shown — the handle is Kraya's own lead id", () => {
+  test("a synthesised lead id never reaches the screen", () => {
+    // The spreadsheet path builds its lead id out of the raw phone number, so
+    // rendering that field verbatim put full phone numbers on the page. The id
+    // is an internal key: it identifies the row to us and nothing to a person.
+    expect(VALUES).toMatch(/startsWith\("export:"\) \? null : r\.krayaLeadId/);
+    expect(INGEST).toMatch(/function safeLeadId/);
+    expect(INGEST).toMatch(/\$\{EXPORT_PREFIX\}\$\{phoneHash\}/);
+    // The raw value must not be written to the column any more.
+    expect(INGEST).not.toMatch(/krayaLeadId: lead\.leadId/);
+  });
+
+  test("only four digits of a number are ever kept", () => {
+    expect(INGEST).toMatch(/digits\.slice\(-4\)/);
+    expect(INGEST).toMatch(/if \(!leadId\.startsWith\(EXPORT_PREFIX\)\) return null;/);
+    expect(SCHEMA).toMatch(/phoneLast4\s+String\?/);
+    // Agency app only — it must never be handed to a hotel's report.
+    expect(readCode("lib/metrics/share-views.ts")).not.toMatch(/phoneLast4/);
+    expect(REPORT).not.toMatch(/phoneLast4/);
+  });
+
+  test("the backfill verifies rather than trusts, and defaults to a dry run", () => {
+    // Copying phoneHash instead of recomputing would paper over a disagreement
+    // between the two, and a later re-import keyed on the recomputed value would
+    // then match nothing.
+    expect(REDACT).toMatch(/hashGuestPhone\(raw\)/);
+    expect(REDACT).toMatch(/hash !== r\.phoneHash/);
+    expect(REDACT).toMatch(/const WRITE = process\.argv\.includes\("--write"\)/);
+    // Idempotent: a row already rewritten is left alone.
+    expect(REDACT).toMatch(/\^\[0-9\]\+\$/);
+  });
+
+  test("no contact detail beyond four digits is shown", () => {
     // The Kraya import deliberately stores neither names nor numbers, and
     // externalBookingId is a salted phone hash that identifies nothing to a
     // human. Showing the lead id keeps the screen usable at no PII cost.
     expect(VALUES).toMatch(/l\."krayaLeadId"/);
     expect(VALUES).not.toMatch(/guestName|externalBookingId/);
     expect(LIST).toMatch(/booking\.krayaLeadId/);
-    expect(LIST).not.toMatch(/guestName|phone/i);
+    expect(LIST).toMatch(/booking\.phoneLast4/);
+    expect(LIST).not.toMatch(/guestName/);
   });
 
   test("one guest with several conversations still yields one row", () => {
