@@ -113,7 +113,7 @@ export const CLIENT_CAPTION = {
  * substituting the total would report every conversion as a call.
  */
 export const GOOGLE_CALLS_NOT_CAPTURED =
-  "Google does not send us calls separately from its other conversions yet, so this figure is not available. It is not a zero.";
+  "Google has not reported calls separately for this account in this period, so this figure is not available. It is not a zero.";
 
 /**
  * The property records no booking value anywhere we can read.
@@ -191,9 +191,13 @@ export async function loadShareViews(args: {
     }),
     scoped(prisma.googleAdsCampaignSnapshot).aggregate({
       where: { hotelClientId, date: dayFilter },
-      _sum: { spend: true },
+      _sum: { spend: true, callConversions: true, phoneCalls: true },
       _max: { date: true },
-      _count: true,
+      // Counted per field, not `_all`. Prisma's per-field count skips nulls, so
+      // these say how many campaign-days actually CARRY a call figure — which is
+      // what separates "Google reported no calls" from "we never retrieved it".
+      // `_all` cannot make that distinction: it counts rows with spend too.
+      _count: { _all: true, callConversions: true, phoneCalls: true },
     }),
     scoped(prisma.googleAdsConnection).findFirst({
       where: { hotelClientId },
@@ -237,16 +241,17 @@ export async function loadShareViews(args: {
   const spendOf = (
     label: string,
     connected: boolean,
-    agg: { _sum: { spend: unknown }; _count: number },
+    rows: number,
+    total: unknown,
   ): MetricValue<number> =>
     !connected
       ? unavailable(`${label} is not connected.`)
-      : agg._count === 0
+      : rows === 0
         ? unavailable(NO_AD_ACTIVITY)
-        : ok(num(agg._sum.spend));
+        : ok(num(total));
 
-  const googleSpend = spendOf("Google Ads", googleConnected, google);
-  const metaSpend = spendOf("Meta Ads", metaConnected, meta);
+  const googleSpend = spendOf("Google Ads", googleConnected, google._count._all, google._sum.spend);
+  const metaSpend = spendOf("Meta Ads", metaConnected, meta._count, meta._sum.spend);
 
   // ── Ad-attributed revenue ──────────────────────────────────────────────────
   //
@@ -309,9 +314,27 @@ export async function loadShareViews(args: {
       ? unavailable(NO_CAMPAIGN_REPORTING)
       : ok(num(campaigns._sum.calls));
 
-  // Not `unavailable`: there is no integration to reconnect and no setting to
-  // switch on. The field is simply not requested from Google yet.
-  const googleCalls = notTraceable<number>(GOOGLE_CALLS_NOT_CAPTURED);
+  // Google reports calls two ways and they OVERLAP, so they are never summed:
+  // a call from a call asset that the advertiser also tracks as a conversion is
+  // in both. Preferring the conversion count means preferring the calls the
+  // advertiser himself marked as valuable; call-asset calls are the fallback,
+  // which at least counts real connected calls when no call conversion action
+  // has been set up.
+  //
+  // Fractional conversions are rounded for display — Google attributes calls
+  // fractionally, and "3.7 calls" is not a number to put in front of a hotel.
+  const googleCalls: MetricValue<number> = !googleConnected
+    ? unavailable("Google Ads is not connected.")
+    : google._count.callConversions > 0
+      ? ok(Math.round(num(google._sum.callConversions)))
+      : google._count.phoneCalls > 0
+        ? ok(num(google._sum.phoneCalls))
+        : // Not `unavailable`: there is no integration to reconnect and no
+          // setting of ours to switch on. Either Google has no call conversion
+          // action configured for this account, or no campaign-day in this
+          // window carries a call figure yet. Zero would be a lie about a
+          // measurement we do not have.
+          notTraceable<number>(GOOGLE_CALLS_NOT_CAPTURED);
 
   const messagesGenerated: MetricValue<number> = !metaConnected
     ? unavailable("Meta Ads is not connected.")
