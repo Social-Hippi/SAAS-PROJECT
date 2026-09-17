@@ -20,7 +20,31 @@
     var src = new URL(me.src);
     var siteId = src.searchParams.get("id");
     if (!siteId) return;
-    var base = src.origin;
+    // API ORIGIN — the canonical host, NOT whichever one the tag was pasted from.
+    //
+    // Deriving this from the script's own src looks obviously right and is a
+    // trap. A hotel that pastes the apex form of the tag makes every API call to
+    // the apex, and an apex that redirects to www breaks the CONFIG fetch while
+    // leaving everything else working:
+    //
+    //   sendBeacon / text-plain POSTs   follow the redirect silently → visits
+    //                                   keep arriving, so nothing looks wrong
+    //   fetch(..., {mode:"cors"})       a redirect with no CORS header on it is
+    //                                   blocked → config never loads
+    //
+    // Without config there is no thank-you pattern and no booking-domain list, so
+    // conversions are never detected and booking links are never decorated. On
+    // asterholidays.com that silently cost every ad click its identity across the
+    // hop to the booking engine, while 15,671 visits recorded perfectly.
+    //
+    // __HT_BASE__ is replaced at build time with NEXT_PUBLIC_APP_URL. The script
+    // origin remains the fallback, so a preview deployment still talks to itself.
+    // `typeof` guarded so the SOURCE stays evaluable on its own: the snippet
+    // tests boot this file directly in jsdom, where a bare __HT_BASE__ is an
+    // undefined identifier and throws a ReferenceError before anything runs.
+    // esbuild substitutes inside typeof too, so the built file is unaffected.
+    var CANONICAL_BASE = typeof __HT_BASE__ === "string" ? __HT_BASE__ : "";
+    var base = /^https?:\/\//.test(CANONICAL_BASE) ? CANONICAL_BASE.replace(/\/+$/, "") : src.origin;
     var DEBUG = src.searchParams.get("debug") === "1";
 
     var VERSION = "2.5.0"; // v2.5 adds cross-domain journey handoff; v2.4 adds ad click ids; v2.3 = coupon capture; v2.2 = click/form/identify; v2.1 = funnel stages; v2.0 = journeys; v1 = visit.
