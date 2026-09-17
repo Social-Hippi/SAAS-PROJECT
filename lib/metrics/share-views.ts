@@ -1,5 +1,7 @@
 import "server-only";
 
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "@/lib/prisma";
 import { agencyScopedFor } from "@/lib/tenant";
 import {
@@ -43,7 +45,16 @@ import type { ResolvedRange } from "@/lib/attribution";
 export type AdsView = {
   /** Revenue from website bookings that carried an ad click id. NOT all revenue. */
   totalRevenue: MetricValue<number>;
-  /** Ad revenue ÷ ad spend. Both sides are ads, so this one is a true ROAS. */
+  /**
+   * Value of WhatsApp bookings counted as coming from an ad, typed in by the
+   * agency because Kraya records the booking but never its amount.
+   */
+  whatsappAdRevenue: MetricValue<number>;
+  /**
+   * (website ad revenue + WhatsApp ad revenue) ÷ ad spend. Every term is ads, so
+   * this one is a true ROAS — and it stays unknown while either side is, rather
+   * than dividing by a total that is quietly missing a channel.
+   */
   returnOnAdSpend: MetricValue<number>;
   googleSpend: MetricValue<number>;
   metaSpend: MetricValue<number>;
@@ -81,8 +92,10 @@ export type ShareViews = {
 export const ADS_CAPTION = {
   totalRevenue:
     "Booking value from website bookings we could trace back to one of your ads. Bookings that arrived another way are in the client view.",
+  whatsappAdRevenue:
+    "Value of the WhatsApp bookings your agency counted as coming from an ad, entered from the reservations record. Kraya logs the booking but not the amount, so this figure is keyed in rather than measured.",
   returnOnAdSpend:
-    "Revenue from ads ÷ money spent on ads. Both sides count only advertising, so this is what the advertising returned.",
+    "Website booking value plus WhatsApp booking value, divided by money spent on ads. Every part counts only advertising, so this is what the advertising returned.",
   googleSpend: "Spend as Google Ads reports it.",
   metaSpend: "Spend as Meta reports it.",
   googleCalls: "Calls connected from Google ads.",
@@ -112,6 +125,9 @@ export const CLIENT_CAPTION = {
  * as one undifferentiated number. It cannot be split after the fact, and
  * substituting the total would report every conversion as a call.
  */
+export const WHATSAPP_REVENUE_NOT_ENTERED =
+  "No amount has been entered yet for the WhatsApp bookings counted as coming from an ad, so their value is not available. It is not a zero.";
+
 export const GOOGLE_CALLS_NOT_CAPTURED =
   "Google has not reported calls separately for this account in this period, so this figure is not available. It is not a zero.";
 
@@ -302,11 +318,6 @@ export async function loadShareViews(args: {
     contribution(metaConnected, metaSpend),
   ]);
 
-  const returnOnAdSpend = ratio(totalRevenue, totalSpend, {
-    zeroDenominatorReason:
-      "No advertising spend was recorded in this period, so there is nothing to divide by.",
-  });
-
   // ── Calls, kept apart by platform ──────────────────────────────────────────
   const metaCalls: MetricValue<number> = !metaConnected
     ? unavailable("Meta Ads is not connected.")
@@ -381,6 +392,84 @@ export async function loadShareViews(args: {
         AND c."firstMessageAt" <= b."bookedAt"`;
     whatsappBookings = ok(Number(rows[0]?.n ?? 0));
   }
+
+  // ── Value of those bookings, as the agency entered it ──────────────────────
+  //
+  // Kraya records that a booking happened, never what it was worth, so this is
+  // the one figure on the report a person types. It is counted for two kinds of
+  // booking and the difference matters:
+  //
+  //   TRACED    the conversation carries a real sourceId — the record proves the
+  //             ad; and
+  //   MARKED    the agency ticked `agencyAdAttributed` — an opinion, needed
+  //             because ad tracing only began part-way through, so an earlier
+  //             booking carries no ad even where one plainly caused it.
+  //
+  // Both are in, because the hotel asked for every booking believed to come from
+  // an ad. The caption says so rather than passing judgement off as record.
+  //
+  // `valued` and `countable` are returned separately so a half-filled list
+  // cannot masquerade as a complete total: a sum over 3 of 11 bookings is not
+  // "the revenue", it is a third of it, and ROAS built on it would understate
+  // without a word on the page.
+  let whatsappAdRevenue: MetricValue<number> = unavailable(WHATSAPP_NOT_CONNECTED);
+  let whatsappRevenueNote: string | undefined;
+  if (krayaConn) {
+    const rows = await prisma.$queryRaw<
+      { total: Prisma.Decimal | null; valued: bigint; countable: bigint }[]
+    >`
+      SELECT COALESCE(SUM(v."agencyRevenue"), 0) AS total,
+             COUNT(v."agencyRevenue")            AS valued,
+             COUNT(*)                            AS countable
+      FROM (
+        SELECT DISTINCT b.id, b."agencyRevenue"
+        FROM "Booking" b
+        LEFT JOIN "WhatsAppConversation" c
+          ON c."agencyId" = b."agencyId"
+         AND c."hotelClientId" = b."hotelClientId"
+         AND c."phoneHash" = b."guestPhoneHash"
+         AND c."sourceId" IS NOT NULL
+         AND c."firstMessageAt" <= b."bookedAt"
+        WHERE b."agencyId" = ${agencyId}
+          AND b."hotelClientId" = ${hotelClientId}
+          AND b.provider = 'kraya'
+          AND b."bookedAt" >= ${range.since}
+          AND b."bookedAt" <= ${range.until}
+          AND (c.id IS NOT NULL OR b."agencyAdAttributed" = TRUE)
+      ) v`;
+    const countable = Number(rows[0]?.countable ?? 0);
+    const valued = Number(rows[0]?.valued ?? 0);
+    const total = num(rows[0]?.total);
+
+    whatsappAdRevenue =
+      countable === 0
+        ? // No booking here is claimed to come from an ad at all. A real zero:
+          // nothing was counted, so nothing is missing.
+          ok(0)
+        : valued === 0
+          ? notTraceable<number>(WHATSAPP_REVENUE_NOT_ENTERED)
+          : ok(total);
+
+    if (countable > 0 && valued < countable) {
+      const missing = countable - valued;
+      whatsappRevenueNote =
+        `${missing} of ${countable} WhatsApp booking${countable === 1 ? "" : "s"} ` +
+        `counted as coming from an ad ${missing === 1 ? "has" : "have"} no amount entered yet, ` +
+        "so this figure is lower than the true total.";
+    }
+  }
+
+  // Both revenue lines, never one. `sum` propagates an unknown instead of
+  // treating it as zero, so while the WhatsApp side is unentered the ratio reads
+  // "not available" rather than a confident 0.00x — which is what it used to
+  // show on a property whose business runs on WhatsApp, and which was a
+  // measurement gap being presented as a business result.
+  const adRevenueAllChannels = sum([totalRevenue, whatsappAdRevenue]);
+
+  const returnOnAdSpend = ratio(adRevenueAllChannels, totalSpend, {
+    zeroDenominatorReason:
+      "No advertising spend was recorded in this period, so there is nothing to divide by.",
+  });
 
   const firstAdEnquiry = krayaConn
     ? await scoped(prisma.whatsAppConversation).findFirst({
@@ -458,6 +547,7 @@ export async function loadShareViews(args: {
   return {
     ads: {
       totalRevenue,
+      whatsappAdRevenue,
       returnOnAdSpend: showAdSpend ? returnOnAdSpend : withheld,
       googleSpend: showAdSpend ? googleSpend : withheld,
       metaSpend: showAdSpend ? metaSpend : withheld,
@@ -474,10 +564,14 @@ export async function loadShareViews(args: {
         // Revenue and ROAS both depend on ad spend being complete.
         // A zero that has not been explained is the misleading one.
         totalRevenue: noAdBookingsYet ? NO_AD_BOOKING_YET : undefined,
+        whatsappAdRevenue: whatsappRevenueNote,
+        // ROAS now spans both revenue lines, so it inherits whichever gap is
+        // actually depressing it. A half-filled WhatsApp list understates the
+        // ratio just as surely as an untraced website booking, and the reader
+        // is owed the reason on the tile that carries the number.
         returnOnAdSpend: showAdSpend
-          ? noAdBookingsYet
-            ? NO_AD_BOOKING_YET
-            : (googleNote ?? metaNote)
+          ? (whatsappRevenueNote ??
+            (noAdBookingsYet ? NO_AD_BOOKING_YET : (googleNote ?? metaNote)))
           : undefined,
         googleSpend: showAdSpend ? googleNote : undefined,
         metaSpend: showAdSpend ? metaNote : undefined,

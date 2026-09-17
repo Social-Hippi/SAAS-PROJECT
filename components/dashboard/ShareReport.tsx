@@ -112,13 +112,25 @@ function AdsView({
         <span className="font-medium text-ink-secondary">Your own records</span>.
       </p>
 
-      <Group title="Results" columns={2}>
+      {/* Two revenue lines before the ratio that divides their sum, in the order
+          the reader has to add them: website, then WhatsApp, then the result.
+          They are separate tiles because they are known in different ways — the
+          first is traced, the second is typed in by the agency — and one merged
+          "revenue" figure would hide which half is measured. */}
+      <Group title="Results" columns={showAdSpend ? 3 : 2}>
         <Tile
-          label="Revenue from ads"
+          label="Revenue from ads / website"
           value={data.ads.totalRevenue}
           format="currency"
           caption={ADS_CAPTION.totalRevenue}
           staleNote={n.totalRevenue}
+        />
+        <Tile
+          label="Revenue from WhatsApp ad bookings"
+          value={data.ads.whatsappAdRevenue}
+          format="currency"
+          caption={ADS_CAPTION.whatsappAdRevenue}
+          staleNote={n.whatsappAdRevenue}
         />
         {showAdSpend && (
           <Tile

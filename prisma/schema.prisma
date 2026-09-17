@@ -2193,6 +2193,36 @@ model Booking {
   taxAmount        Decimal? @db.Decimal(12, 2)
   refundedAmount   Decimal? @db.Decimal(12, 2)
 
+  /// ── Revenue the AGENCY entered by hand ───────────────────────────────────
+  ///
+  /// Kraya records that a WhatsApp booking happened but never what it was worth,
+  /// so the only way a WhatsApp booking reaches return-on-ad-spend is for the
+  /// agency to type the amount off the reservations record.
+  ///
+  /// SEPARATE FROM grossAmount ON PURPOSE. That field's contract is "as supplied
+  /// by the source". Writing a typed figure into it would make a person's entry
+  /// indistinguishable from the provider's own number, and every provenance
+  /// claim this report makes rests on that line holding.
+  ///
+  /// NULL MEANS NOT ENTERED, WHICH IS NOT ZERO. A booking nobody has valued yet
+  /// must never depress a revenue total or the ratio built on it.
+  agencyRevenue         Decimal?  @db.Decimal(12, 2)
+  /// ISO-4217 for agencyRevenue. Recorded rather than assumed, so a property
+  /// that does not bill in rupees cannot have its figures silently added to
+  /// rupee totals.
+  agencyRevenueCurrency String?
+  /// The agency's judgement that this booking came from an ad, for the bookings
+  /// the record cannot prove. WhatsApp ad tracing only began 11 Sep 2026, so
+  /// every earlier booking carries no ad even where one plainly caused it.
+  ///
+  /// THIS IS AN OPINION AND IS REPORTED AS ONE. A booking whose conversation
+  /// carries a real sourceId is counted from that instead and needs no flag.
+  agencyAdAttributed    Boolean   @default(false)
+  /// Audit for both of the above. These figures are shown to the hotel, so who
+  /// entered them and when has to be answerable.
+  agencyRevenueBy       String?
+  agencyRevenueAt       DateTime?
+
   /// The provider's original record, kept for audit and for repairing a bad
   /// import without re-fetching. May contain PII — never exposed to hotel views.
   rawPayload Json?
@@ -2217,6 +2247,9 @@ model Booking {
   @@index([hotelClientId, journeySessionId])
   @@index([hotelClientId, journeyVisitorId])
   @@index([connectionId])
+  // The share report sums agency-entered revenue for one hotel over a date
+  // window, filtered to the bookings marked as coming from an ad.
+  @@index([hotelClientId, agencyAdAttributed, bookedAt])
 }
 
 /// Append-only booking lifecycle. A cancellation or refund is a NEW ROW, never
