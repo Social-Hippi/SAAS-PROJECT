@@ -5,10 +5,8 @@ import { rateLimit, clientIpFromHeaders } from "@/lib/ratelimit";
 import { resolveShareLink } from "@/lib/share-link-access";
 import { runWithAgencyScope, agencyScoped } from "@/lib/tenant";
 import { resolveRange } from "@/lib/attribution";
-import { loadClientReport } from "@/lib/metrics/client-report";
-import { ClientReport } from "@/components/dashboard/ClientReport";
-import { WhatsAppAttribution } from "@/components/dashboard/WhatsAppAttribution";
-import { loadWhatsAppAttribution } from "@/lib/metrics/whatsapp-attribution-report";
+import { ShareReport, type ShareView } from "@/components/dashboard/ShareReport";
+import { loadShareViews } from "@/lib/metrics/share-views";
 import { PeriodSelector } from "@/components/dashboard/PeriodSelector";
 import { PasswordGate } from "./PasswordGate";
 
@@ -131,12 +129,16 @@ export default async function SharePage({
   const sp = await searchParams;
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
+  // Which view. Anything other than "client" is the ads view, so a mangled or
+  // guessed parameter lands on the default rather than on an empty page.
+  const view: ShareView = one(sp.view) === "client" ? "client" : "ads";
+
   // HOW A SESSION-LESS PAGE READS SESSION-SCOPED DATA. The agencyId comes off
   // the ShareLink ROW — never from the URL — and is installed as the
   // request-scoped tenant override. agencyScoped() prefers that override over
   // its Clerk lookup, so every query below stays filtered by agencyId AND
   // hotelClientId exactly as it is for the agency.
-  const { range, report, whatsapp } = await runWithAgencyScope(link.agencyId, async () => {
+  const { range, views } = await runWithAgencyScope(link.agencyId, async () => {
     // The property's own timezone decides where a day starts. A report that cuts
     // days in UTC shows a hotelier figures that disagree with their own diary.
     const hotel = await agencyScoped(prisma.hotelClient).findFirst({
@@ -147,21 +149,13 @@ export default async function SharePage({
       { range: one(sp.range), from: one(sp.from), to: one(sp.to) },
       { timezone: hotel?.timezone },
     );
-    const [report, whatsapp] = await Promise.all([
-      loadClientReport({
-        hotelClientId: link.hotelClientId,
-        range: resolved,
-        showAdSpend: link.showAdSpend,
-      }),
-      // Renders nothing when the hotel has no Kraya connection, so a property
-      // without WhatsApp reporting simply does not see the section.
-      loadWhatsAppAttribution({
-        agencyId: link.agencyId,
-        hotelClientId: link.hotelClientId,
-        range: resolved,
-      }),
-    ]);
-    return { range: resolved, report, whatsapp };
+    const views = await loadShareViews({
+      agencyId: link.agencyId,
+      hotelClientId: link.hotelClientId,
+      range: resolved,
+      showAdSpend: link.showAdSpend,
+    });
+    return { range: resolved, views };
   });
 
   return (
@@ -187,12 +181,20 @@ export default async function SharePage({
             window twice. */}
         <PeriodSelector basePath={`/share/${uuid}`} range={range} />
 
-        <ClientReport data={report} showAdSpend={link.showAdSpend} />
-
-        <WhatsAppAttribution
-          data={whatsapp}
-          periodLabel={range.dateLabel}
+        <ShareReport
+          data={views}
+          view={view}
+          basePath={`/share/${uuid}`}
+          showAdSpend={link.showAdSpend}
           timezone={range.timezone}
+          // The period and property must survive a view switch, or changing view
+          // silently resets the window the reader was looking at.
+          preserve={{
+            range: one(sp.range),
+            from: one(sp.from),
+            to: one(sp.to),
+            property: one(sp.property),
+          }}
         />
 
         <p className="pt-2 text-center text-xs text-ink-disabled">
