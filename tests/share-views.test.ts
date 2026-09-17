@@ -23,6 +23,8 @@ import { ADS_CAPTION, CLIENT_CAPTION } from "@/lib/metrics/share-views";
 const LOADER = readCode("lib/metrics/share-views.ts");
 const REPORT = readCode("components/dashboard/ShareReport.tsx");
 const PAGE = readCode("app/share/[uuid]/page.tsx");
+const SYNC = readCode("lib/google-ads-sync.ts");
+const SCHEMA = readCode("prisma/schema.prisma");
 
 describe("1. the ads view counts only what advertising produced", () => {
   test("revenue is classified per conversion, not taken as a total", () => {
@@ -74,14 +76,65 @@ describe("3. calls are kept apart by platform", () => {
     expect(LOADER).not.toMatch(/googleCalls \+ metaCalls|metaCalls \+ googleCalls/);
   });
 
-  test("Google calls is not_traceable, naming the missing field", () => {
-    // No integration to reconnect and no setting to switch on — the sync simply
-    // does not segment by conversion action name.
-    expect(LOADER).toMatch(/const googleCalls = notTraceable<number>\(GOOGLE_CALLS_NOT_CAPTURED\)/);
+  test("Google's two call measurements are preferred, never added", () => {
+    // They OVERLAP: a call from a call asset that the advertiser also tracks as
+    // a conversion is in both, so one total double-counts it. Conversions win
+    // because they are the calls the advertiser marked as valuable.
+    expect(LOADER).toMatch(/google\._count\.callConversions > 0/);
+    expect(LOADER).toMatch(/google\._count\.phoneCalls > 0/);
+    expect(LOADER).not.toMatch(/callConversions\s*\+\s*[^)]*phoneCalls/);
+    expect(SYNC).not.toMatch(/callConversions\s*\+\s*[^)]*phoneCalls/);
+  });
+
+  test("a fractional conversion count is rounded before a hotel sees it", () => {
+    // Google attributes calls fractionally; "3.7 calls" is not a figure to put
+    // in front of a client.
+    expect(LOADER).toMatch(/Math\.round\(num\(google\._sum\.callConversions\)\)/);
+  });
+
+  test("no call figure retrieved stays not_traceable, never zero", () => {
+    expect(LOADER).toMatch(/notTraceable<number>\(GOOGLE_CALLS_NOT_CAPTURED\)/);
     // Asserted on the constant's own text, not the comment explaining it:
     // readCode strips comments so prose cannot satisfy a source assertion.
-    expect(LOADER).toMatch(/does not send us calls separately/);
+    expect(LOADER).toMatch(/has not reported calls separately/);
     expect(LOADER).toMatch(/It is not a zero/);
+  });
+
+  test("coverage is counted per field, so null never reads as zero calls", () => {
+    // `_count: { _all: true }` counts rows that have spend. Only a per-field
+    // count says how many campaign-days actually carry a call figure.
+    expect(LOADER).toMatch(/_count: \{ _all: true, callConversions: true, phoneCalls: true \}/);
+    // A day whose extra query failed has not had zero calls.
+    expect(SYNC).toMatch(/callConversions: callConversionsByKey\.get\([^)]*\) \?\? null/);
+    // Scoped to the write site: the accumulator's own `?? 0` is correct there,
+    // it is seeding a running sum, not deciding what a missing day means.
+    expect(SYNC).not.toMatch(/callConversions: callConversionsByKey\.get\([^)]*\) \?\? 0/);
+    expect(SYNC).not.toMatch(/phoneCalls: phoneCallsByKey\.get\([^)]*\) \?\? 0/);
+    expect(SCHEMA).toMatch(/callConversions\s+Float\?/);
+    expect(SCHEMA).toMatch(/phoneCalls\s+Int\?/);
+  });
+
+  test("fetching calls can never cost the spend sync", () => {
+    // Adding these fields to the main query would mean one unsupported field
+    // costs spend, impressions and clicks for every hotel at once. Separate
+    // queries in their own try/catch cost only the call figures.
+    const main = SYNC.slice(0, SYNC.indexOf("callConversionsByKey"));
+    expect(main).not.toMatch(/conversion_action_category|metrics\.phone_calls/);
+    for (const q of ["segments.conversion_action_category", "metrics.phone_calls"]) {
+      const at = SYNC.indexOf(q);
+      expect(at).toBeGreaterThan(-1);
+      // Each sits inside a try that swallows its own failure.
+      const before = SYNC.slice(0, at);
+      expect(before.lastIndexOf("try {")).toBeGreaterThan(before.lastIndexOf("} catch"));
+    }
+    expect(SYNC.match(/} catch \(err\) \{\s*console\.warn\(/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+
+  test("the conversion category is filtered in code, not in the WHERE clause", () => {
+    // An enum value Google renames turns a filtered query into an error; an
+    // unrecognised value here simply matches nothing.
+    expect(SYNC).toMatch(/conversionActionCategory[\s\S]{0,60}!== "PHONE_CALL_LEAD"/);
+    expect(SYNC).not.toMatch(/WHERE[\s\S]{0,200}conversion_action_category\s*=/);
   });
 });
 

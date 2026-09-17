@@ -181,6 +181,80 @@ export async function syncGoogleAdsConnection(conn: Conn, days = 30): Promise<Go
     return { ok: false, tokenExpired, error: msg };
   }
 
+  // ── Calls, from two separate best-effort queries ──────────────────────────
+  //
+  // BEST-EFFORT, AND SEPARATE FROM THE MAIN QUERY ON PURPOSE. Adding these
+  // fields to the query above would mean one unsupported field costs the whole
+  // sync — spend, impressions and clicks included — for every hotel at once.
+  // Here a failure costs only the call figures, which then stay null and render
+  // as "not available" rather than as zero calls.
+  //
+  // TWO MEASUREMENTS, NEVER SUMMED. A call from a call asset that the advertiser
+  // also tracks as a conversion appears in both, so one total would count it
+  // twice and nothing downstream could unpick it.
+  //
+  // The category is filtered in code rather than in the WHERE clause: an enum
+  // value Google renames would turn a filtered query into an error, while an
+  // unrecognised value here simply matches nothing.
+  const callConversionsByKey = new Map<string, number>();
+  try {
+    const callRows = await searchStream(
+      accessToken,
+      conn.customerId,
+      `
+    SELECT
+      campaign.id,
+      segments.date,
+      segments.conversion_action_category,
+      metrics.all_conversions
+    FROM campaign
+    WHERE segments.date BETWEEN '${start}' AND '${end}'
+  `,
+      conn.loginCustomerId ?? loginCustomerId(),
+    );
+    for (const r of callRows) {
+      const campaignId = String(((r.campaign ?? {}) as { id?: string | number }).id ?? "");
+      const seg = (r.segments ?? {}) as { date?: string; conversionActionCategory?: string };
+      if (!campaignId || !seg.date) continue;
+      if (String(seg.conversionActionCategory ?? "").toUpperCase() !== "PHONE_CALL_LEAD") continue;
+      const value = numStr(((r.metrics ?? {}) as { allConversions?: number }).allConversions);
+      const key = `${campaignId}|${seg.date}`;
+      callConversionsByKey.set(key, (callConversionsByKey.get(key) ?? 0) + value);
+    }
+  } catch (err) {
+    console.warn(
+      `${LOG} ${conn.hotelClientId} call conversions skipped: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+
+  const phoneCallsByKey = new Map<string, number>();
+  try {
+    const phoneRows = await searchStream(
+      accessToken,
+      conn.customerId,
+      `
+    SELECT
+      campaign.id,
+      segments.date,
+      metrics.phone_calls
+    FROM campaign
+    WHERE segments.date BETWEEN '${start}' AND '${end}'
+  `,
+      conn.loginCustomerId ?? loginCustomerId(),
+    );
+    for (const r of phoneRows) {
+      const campaignId = String(((r.campaign ?? {}) as { id?: string | number }).id ?? "");
+      const seg = (r.segments ?? {}) as { date?: string };
+      if (!campaignId || !seg.date) continue;
+      const value = numStr(((r.metrics ?? {}) as { phoneCalls?: string | number }).phoneCalls);
+      phoneCallsByKey.set(`${campaignId}|${seg.date}`, value);
+    }
+  } catch (err) {
+    console.warn(
+      `${LOG} ${conn.hotelClientId} phone calls skipped: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+
   // Parse + upsert one row per campaign-day. Metrics rows only exist for days with
   // activity, so an account with no active campaigns simply yields 0 rows (success).
   let campaignDays = 0;
@@ -213,6 +287,14 @@ export async function syncGoogleAdsConnection(conn: Conn, days = 30): Promise<Go
         clicks: Math.round(numStr(metrics.clicks)),
         conversions: numStr(metrics.conversions),
         conversionsValue: money2(numStr(metrics.conversionsValue)),
+        // `?? null` rather than `?? 0`: a day whose extra query failed has NOT
+        // had zero calls, and writing 0 would report a measurement gap as a
+        // finding on the hotel's own report.
+        callConversions: callConversionsByKey.get(`${campaignId}|${dateStr}`) ?? null,
+        phoneCalls: (() => {
+          const v = phoneCallsByKey.get(`${campaignId}|${dateStr}`);
+          return v == null ? null : Math.round(v);
+        })(),
       };
       await prisma.googleAdsCampaignSnapshot.upsert({
         where: { hotelClientId_campaignId_date: { hotelClientId: conn.hotelClientId, campaignId, date } },

@@ -1926,6 +1926,25 @@ model GoogleAdsCampaignSnapshot {
   conversions            Float // Google conversions can be fractional
   conversionsValue       Decimal  @db.Decimal(12, 2)
 
+  /// ── Calls, from TWO different Google measurements ────────────────────────
+  ///
+  /// Deliberately separate columns, NEVER summed. They overlap: a call from a
+  /// call asset that the advertiser also tracks as a conversion appears in both,
+  /// so one total would count it twice and no later code could unpick it.
+  ///
+  /// Both nullable because they are fetched by their own best-effort queries —
+  /// null means "not retrieved", which is not zero calls. A row written before
+  /// these existed, or on a day the extra query failed, must not read as a day
+  /// with no calls.
+  ///
+  /// callConversions: conversions whose action category is PHONE_CALL_LEAD — the
+  /// calls the advertiser configured as valuable. Fractional, like every Google
+  /// conversion count.
+  callConversions        Float?
+  /// phoneCalls: calls received from call assets and call-only ads, as Google
+  /// counts them. A raw call count, not a conversion.
+  phoneCalls             Int?
+
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
 
