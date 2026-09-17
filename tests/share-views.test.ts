@@ -78,18 +78,30 @@ describe("3. calls are kept apart by platform", () => {
 
   test("Google's two call measurements are preferred, never added", () => {
     // They OVERLAP: a call from a call asset that the advertiser also tracks as
-    // a conversion is in both, so one total double-counts it. Conversions win
-    // because they are the calls the advertiser marked as valuable.
-    expect(LOADER).toMatch(/google\._count\.callConversions > 0/);
+    // a conversion is in both, so one total double-counts it.
     expect(LOADER).toMatch(/google\._count\.phoneCalls > 0/);
+    expect(LOADER).toMatch(/google\._count\.callConversions > 0/);
     expect(LOADER).not.toMatch(/callConversions\s*\+\s*[^)]*phoneCalls/);
     expect(SYNC).not.toMatch(/callConversions\s*\+\s*[^)]*phoneCalls/);
   });
 
-  test("a fractional conversion count is rounded before a hotel sees it", () => {
-    // Google attributes calls fractionally; "3.7 calls" is not a figure to put
-    // in front of a client.
+  test("raw call-asset calls are preferred over the conversion count", () => {
+    // Conversions are only the subset meeting the advertiser's rules. On Aster
+    // the two read 56 against 15.5, and the conversion figure silently dropped
+    // four calls from two campaigns with no call conversion action at all.
+    const phoneAt = LOADER.indexOf("google._count.phoneCalls > 0");
+    const convAt = LOADER.indexOf("google._count.callConversions > 0");
+    expect(phoneAt).toBeGreaterThan(-1);
+    expect(convAt).toBeGreaterThan(-1);
+    expect(phoneAt).toBeLessThan(convAt);
+  });
+
+  test("the fallback conversion count is rounded before a hotel sees it", () => {
+    // Google splits conversion credit across touchpoints, so that side arrives
+    // fractional; "12.83 calls" is not a figure to put in front of a client.
     expect(LOADER).toMatch(/Math\.round\(num\(google\._sum\.callConversions\)\)/);
+    // The preferred figure is already whole and must not be mangled.
+    expect(LOADER).not.toMatch(/Math\.round\(num\(google\._sum\.phoneCalls\)\)/);
   });
 
   test("no call figure retrieved stays not_traceable, never zero", () => {
