@@ -107,15 +107,28 @@ export const METRIC_LABEL: Record<MetricUnknownState, string> = {
 /**
  * Tooltip copy. Business language only — the owner should never have to know
  * what a click id is to understand why a number is missing.
+ *
+ * EACH LINE SAYS WHAT THE STATE MEANS AND NEVER WHY IT HAPPENED. The cause
+ * belongs to `reason`, which is written per metric and appended after this; a
+ * cause asserted here is asserted over all 21 call sites at once, and will be
+ * wrong at most of them.
+ *
+ * It used to be. `not_traceable` read "the tracking needed to measure this is
+ * not set up on your website yet", which was true of one call site and false of
+ * the rest — it told a hotel to go and check their website snippet when the
+ * actual reason was "Instagram doesn't report likes on stories", or that their
+ * agency had not yet typed in a booking amount. `unavailable` promised that
+ * "reconnecting it will restore the figure" on figures with nothing to
+ * reconnect, ad spend deliberately withheld from the report among them.
  */
 export const METRIC_TOOLTIP: Record<MetricUnknownState, string> = {
   not_attributable:
     "This activity happened, but we could not confidently connect it to a campaign. The real figure may be higher than what we credit here.",
   not_traceable:
-    "The tracking needed to measure this is not set up on your website yet, so we have no data to report — this is not a zero.",
+    "The information needed to measure this was never recorded, so there is no figure to report — this is not a zero.",
   unavailable:
-    "We normally receive this from a connected account, but that connection is currently unavailable. Reconnecting it will restore the figure.",
-  not_applicable: "This measure does not apply to this channel.",
+    "This figure normally comes from a source we read automatically, and it is not available for this period — this is not a zero.",
+  not_applicable: "This measure does not apply here.",
 };
 
 // ── Derivation ───────────────────────────────────────────────────────────────
