@@ -192,15 +192,24 @@ describe("5. multi-tenancy holds on the hand-written paths", () => {
     expect(REPORT).not.toMatch(/phoneLast4/);
   });
 
-  test("the backfill verifies rather than trusts, and defaults to a dry run", () => {
-    // Copying phoneHash instead of recomputing would paper over a disagreement
-    // between the two, and a later re-import keyed on the recomputed value would
-    // then match nothing.
-    expect(REDACT).toMatch(/hashGuestPhone\(raw\)/);
-    expect(REDACT).toMatch(/hash !== r\.phoneHash/);
+  test("the backfill aligns to the row's own hash and needs no salt", () => {
+    // The new id must match what a future ingest writes, and the ingest builds
+    // it from the phoneHash it looked the row up by. Recomputing from the
+    // plaintext could only disagree — normalizePhone has been corrected once,
+    // so an old row's number may normalise differently today.
+    expect(REDACT).toMatch(/const hash = r\.phoneHash;/);
+    expect(REDACT).not.toMatch(/hashGuestPhone/);
+    // No salt means a local run cannot repeat the unsalted-write failure.
+    expect(REDACT).not.toMatch(/PII_SALT|piiSalt|saltedHash/);
     expect(REDACT).toMatch(/const WRITE = process\.argv\.includes\("--write"\)/);
     // Idempotent: a row already rewritten is left alone.
     expect(REDACT).toMatch(/\^\[0-9\]\+\$/);
+  });
+
+  test("no script imports a server-only module", () => {
+    // `server-only` throws under plain tsx, so such an import makes a script
+    // unrunnable — which is how this one first shipped.
+    expect(REDACT).not.toMatch(/booking-identity|"@\/lib\/pii"/);
   });
 
   test("no contact detail beyond four digits is shown", () => {

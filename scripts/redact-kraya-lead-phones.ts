@@ -11,10 +11,20 @@
  *     krayaLeadId  export:<phoneHash>   deterministic, unique, no contact detail
  *     phoneLast4   the last four digits, and nothing more of the number
  *
- * The hash is recomputed from the plaintext in the column, NOT copied from
- * `phoneHash` on the row: if the two ever disagreed, copying would paper over
- * the disagreement, and a later re-import keyed on the recomputed value would
- * then fail to match. Rows where they disagree are reported and skipped.
+ * THE HASH IS THE ROW'S OWN `phoneHash`, not one recomputed from the plaintext.
+ *
+ * That is deliberate, and it is the opposite of what this script did first. The
+ * value has to match what a future ingest will write for this row, and the
+ * ingest builds it from the `phoneHash` it has just looked the row up by
+ * (`findFirst where phoneHash` — the unique key on this table). Aligning to the
+ * stored hash therefore guarantees the match. Recomputing from the plaintext
+ * could only introduce a disagreement: `normalizePhone` has been corrected once
+ * already, so an old row's plaintext may normalise differently today than when
+ * its hash was written — and in that case the stored hash is the one the whole
+ * system joins on, and the fresh one would be the wrong answer.
+ *
+ * It also means this script needs NO PII salt, and so cannot repeat the failure
+ * where a local run without the real salt wrote rows nobody could match.
  *
  * Idempotent: a row already carrying a hashed id is left alone, so a re-run
  * after a partial failure is safe.
@@ -23,14 +33,9 @@
  *
  *   npx tsx scripts/redact-kraya-lead-phones.ts
  *   npx tsx scripts/redact-kraya-lead-phones.ts --write
- *
- * REQUIRES the real PII_SALT / ENCRYPTION_KEY for the target database. Running
- * it against production with a dev fallback salt would mint hashes that match
- * nothing, silently detaching every rewritten lead from its bookings.
  */
 import "./load-env";
 import { prisma } from "@/lib/prisma";
-import { hashGuestPhone } from "@/lib/booking-identity";
 
 const PREFIX = "export:";
 const WRITE = process.argv.includes("--write");
@@ -43,7 +48,6 @@ async function main() {
 
   let rewritten = 0;
   let alreadyHashed = 0;
-  let mismatched = 0;
   let unusable = 0;
 
   for (const r of rows) {
@@ -56,15 +60,12 @@ async function main() {
       continue;
     }
 
-    const hash = hashGuestPhone(raw);
-    if (!hash) {
+    // The row's own hash: the value the ingest looks this row up by, and so the
+    // value a future re-import will rebuild the id from.
+    const hash = r.phoneHash;
+    if (!hash || !/^[0-9a-f]{64}$/.test(hash)) {
       unusable += 1;
-      console.warn(`  unusable number on ${r.id} — left as it is for inspection`);
-      continue;
-    }
-    if (hash !== r.phoneHash) {
-      mismatched += 1;
-      console.warn(`  ${r.id}: recomputed hash differs from phoneHash — skipped`);
+      console.warn(`  ${r.id}: no usable phoneHash on the row — skipped for inspection`);
       continue;
     }
 
@@ -81,8 +82,7 @@ async function main() {
   console.log(
     `\n${WRITE ? "Rewrote" : "Would rewrite"} ${rewritten} row(s).` +
       `\n  already hashed: ${alreadyHashed}` +
-      `\n  hash mismatch (skipped): ${mismatched}` +
-      `\n  unusable number (skipped): ${unusable}` +
+      `\n  no usable phoneHash (skipped): ${unusable}` +
       (WRITE ? "" : "\n\nDry run — pass --write to apply."),
   );
 }
