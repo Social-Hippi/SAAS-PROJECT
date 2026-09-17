@@ -35,9 +35,14 @@ export type WhatsAppBookingValue = {
    * takes neither — `externalBookingId` is a salted phone hash, which identifies
    * nothing to a human. So the handle shown is Kraya's OWN lead id, with the
    * stage and pipeline it sits in: enough to look the lead up in Kraya and read
-   * the amount off it, while storing no contact detail at all.
+   * the amount off it.
+   *
+   * A lead that arrived by spreadsheet has no Kraya id at all, and falls back to
+   * the last four digits of the number — the whole of what is kept of a contact
+   * detail, and only because without it those leads cannot be found to value.
    */
   krayaLeadId: string | null;
+  phoneLast4: string | null;
   stageName: string | null;
   pipelineName: string | null;
   /** The conversation carries a real ad sourceId. A record, not a judgement. */
@@ -53,6 +58,7 @@ type Row = {
   id: string;
   bookedAt: Date;
   krayaLeadId: string | null;
+  phoneLast4: string | null;
   stageName: string | null;
   pipelineName: string | null;
   traced: boolean;
@@ -85,6 +91,7 @@ export async function listWhatsAppBookingValues(
            b."agencyRevenue",
            b."agencyRevenueAt",
            l."krayaLeadId",
+           l."phoneLast4",
            l."stageName",
            l."pipelineName",
            EXISTS (
@@ -100,7 +107,7 @@ export async function listWhatsAppBookingValues(
       -- and a plain join would return the booking once per conversation and
       -- multiply the list. LIMIT 1 keeps exactly one row per booking.
       LEFT JOIN LATERAL (
-        SELECT c."krayaLeadId", c."stageName", c."pipelineName"
+        SELECT c."krayaLeadId", c."phoneLast4", c."stageName", c."pipelineName"
           FROM "WhatsAppConversation" c
          WHERE c."agencyId" = b."agencyId"
            AND c."hotelClientId" = b."hotelClientId"
@@ -118,7 +125,10 @@ export async function listWhatsAppBookingValues(
   return rows.map((r) => ({
     id: r.id,
     bookedAt: r.bookedAt,
-    krayaLeadId: r.krayaLeadId,
+    // A synthesised id is an internal key, not something to show: it identifies
+    // the row to us and nothing to a person. Only a real Kraya id is displayable.
+    krayaLeadId: r.krayaLeadId?.startsWith("export:") ? null : r.krayaLeadId,
+    phoneLast4: r.phoneLast4,
     stageName: r.stageName,
     pipelineName: r.pipelineName,
     traced: r.traced,

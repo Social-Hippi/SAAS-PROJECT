@@ -56,6 +56,7 @@ export default async function WhatsAppBookingsPage({
     id: b.id,
     bookedAtLabel: zonedDayString(b.bookedAt, hotel.timezone),
     krayaLeadId: b.krayaLeadId,
+    phoneLast4: b.phoneLast4,
     stageName: b.stageName,
     pipelineName: b.pipelineName,
     traced: b.traced,

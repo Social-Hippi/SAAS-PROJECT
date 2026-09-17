@@ -2476,6 +2476,19 @@ model WhatsAppConversation {
   /// stable id a renamed or re-numbered contact would duplicate.
   krayaLeadId String?
 
+  /// The last four digits of the guest's number, and NOTHING more of it.
+  ///
+  /// Deliberate, minimal, and the only fragment of a contact detail stored
+  /// anywhere on this row. A spreadsheet export carries no Kraya lead id, so a
+  /// lead that arrived that way has no handle a person can look up — and the
+  /// agency has to find it in Kraya to read the booking amount off it. Four
+  /// digits identify nobody on their own while making that lookup possible.
+  ///
+  /// Shown only inside the authenticated agency app, never on a hotel's report.
+  /// A lead that arrived by webhook carries Kraya's real id and does not need
+  /// this, so it stays null there.
+  phoneLast4 String?
+
   /// The lead's current stage and pipeline, VERBATIM as Kraya spells them.
   ///
   /// Deliberately not mapped to an internal vocabulary. These are the hotel's own

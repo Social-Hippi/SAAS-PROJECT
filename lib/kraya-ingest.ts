@@ -23,6 +23,39 @@ import { isConfirmedStage, type KrayaLead } from "@/lib/kraya-webhook";
 // the same person without either side storing a contact detail.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** The spreadsheet-import prefix. A synthesised id, never one Kraya issued. */
+const EXPORT_PREFIX = "export:";
+
+/**
+ * The stored lead id, with any raw phone number taken out of it.
+ *
+ * A spreadsheet export carries no Kraya lead id, so the importer synthesises one
+ * from the phone — which is the ONE identity both paths share, and the only
+ * thing that makes a re-import land on the row a webhook already created. That
+ * is sound; putting the number itself in a stored column was not. It survived
+ * into 4,002 production rows and, being a stored field, onto any screen that
+ * showed it.
+ *
+ * Hashing keeps every property the synthesised id needed — deterministic, unique
+ * per guest, identical across a re-import — and stores no contact detail. The
+ * real Kraya id from a webhook is passed through untouched.
+ */
+function safeLeadId(leadId: string, phoneHash: string): string {
+  return leadId.startsWith(EXPORT_PREFIX) ? `${EXPORT_PREFIX}${phoneHash}` : leadId;
+}
+
+/**
+ * The last four digits of a number, or null.
+ *
+ * The whole of what we keep of a contact detail, and only for a lead that has no
+ * real Kraya id to be found by. See WhatsAppConversation.phoneLast4.
+ */
+function phoneLast4Of(leadId: string, phone: string): string | null {
+  if (!leadId.startsWith(EXPORT_PREFIX)) return null;
+  const digits = String(phone ?? "").replace(/[^0-9]/g, "");
+  return digits.length >= 4 ? digits.slice(-4) : null;
+}
+
 export type KrayaIngestResult = {
   conversation: "created" | "updated";
   /** Set when this lead crossed into the confirmed stage. */
@@ -64,6 +97,11 @@ export async function ingestKrayaLead(
   // Unusable number. Storing it would mint a join key matching every other
   // unusable one, and the booking join is the entire point of this row.
   if (!phoneHash) return null;
+
+  // Never store `lead.leadId` directly: the spreadsheet path builds it from the
+  // raw phone number.
+  const krayaLeadId = safeLeadId(lead.leadId, phoneHash);
+  const phoneLast4 = phoneLast4Of(lead.leadId, lead.phone);
 
   const scoped = agencyScopedFor(agencyId, prisma.whatsAppConversation);
   const existing = await scoped.findFirst({
@@ -120,7 +158,10 @@ export async function ingestKrayaLead(
         await scoped.update({
           where: { id: existing.id },
           data: {
-            krayaLeadId: lead.leadId,
+            krayaLeadId,
+            // Only filled in for an imported lead, and never cleared by a later
+            // webhook — the row keeps whichever handle it has.
+            ...(phoneLast4 ? { phoneLast4 } : {}),
             stageName: lead.stage,
             pipelineName: lead.pipeline,
             lastMessageAt: dates.lastSeenAt ?? now,
@@ -139,7 +180,8 @@ export async function ingestKrayaLead(
             // ours. connectionId is nullable for exactly this case.
             connectionId: null,
             phoneHash,
-            krayaLeadId: lead.leadId,
+            krayaLeadId,
+            phoneLast4,
             stageName: lead.stage,
             pipelineName: lead.pipeline,
             ctwaClid: ref?.ctwaClid ?? null,
