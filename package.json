@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack -p 3002",
-    "build:snippet": "esbuild scripts/snippet.src.js --minify --legal-comments=none --banner:js=\"/* HotelTrack tracking snippet — generated from scripts/snippet.src.js */\" --outfile=public/t.js",
+    "build:snippet": "node scripts/build-snippet.mjs",
     "postinstall": "prisma generate",
     "prebuild": "npm run build:snippet",
     "build": "next build",
