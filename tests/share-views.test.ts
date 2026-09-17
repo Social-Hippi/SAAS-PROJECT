@@ -35,7 +35,14 @@ describe("1. the ads view counts only what advertising produced", () => {
   });
 
   test("ROAS divides ad revenue by ad spend — both sides ads", () => {
-    expect(LOADER).toMatch(/ratio\(totalRevenue, totalSpend/);
+    // Ad revenue is now BOTH channels: website bookings traced to an ad, plus
+    // the WhatsApp ad bookings the agency valued. Website-only understated it
+    // badly on a property whose business runs on WhatsApp.
+    expect(LOADER).toMatch(/const adRevenueAllChannels = sum\(\[totalRevenue, whatsappAdRevenue\]\)/);
+    expect(LOADER).toMatch(/ratio\(adRevenueAllChannels, totalSpend/);
+    // Still only advertising on both sides — the client view's own revenue must
+    // never reach this ratio.
+    expect(LOADER).not.toMatch(/ratio\([^,]*client[^,]*, totalSpend/i);
   });
 
   test("WhatsApp bookings counts only those traced to an ad", () => {
