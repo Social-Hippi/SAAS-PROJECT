@@ -55,8 +55,9 @@ export default async function WhatsAppBookingsPage({
   const rows: BookingRow[] = bookings.map((b) => ({
     id: b.id,
     bookedAtLabel: zonedDayString(b.bookedAt, hotel.timezone),
-    guestName: b.guestName,
-    externalBookingId: b.externalBookingId,
+    krayaLeadId: b.krayaLeadId,
+    stageName: b.stageName,
+    pipelineName: b.pipelineName,
     traced: b.traced,
     marked: b.marked,
     amount: b.amount,
