@@ -30,7 +30,11 @@ import { disconnectMetaToken } from "@/app/(agency)/agency/(app)/settings/action
 import { TestConnection } from "../install/TestConnection";
 import { MetaSyncButton } from "./MetaSyncButton";
 import { BookingConnectionCard } from "./BookingConnectionCard";
+import { resolveRange } from "@/lib/attribution";
+import { zonedDayString } from "@/lib/timezone";
 import { KrayaCard } from "./KrayaCard";
+import { BookingValueList, ValueSummary, type BookingRow } from "./BookingValueList";
+import { listWhatsAppBookingValues, summariseValues } from "@/lib/whatsapp-booking-values";
 import { BookingDomainsCard } from "./BookingDomainsCard";
 import { ConversionDetectionCard } from "./ConversionDetectionCard";
 import { splitThankYouPatterns } from "@/lib/conversion-patterns";
@@ -163,6 +167,11 @@ export default async function HotelIntegrationsPage({
       budgetResetDay: true,
       funnelStageRules: true,
       otaCommissionRate: true,
+      // Needed by the WhatsApp booking-value section below: its date window is
+      // resolved in the property's own timezone, and its raw query binds the
+      // agency id explicitly.
+      timezone: true,
+      agencyId: true,
     },
   });
   if (!hotel) notFound();
@@ -514,6 +523,40 @@ export default async function HotelIntegrationsPage({
       bookingCount,
     };
   }
+
+  // ── WhatsApp booking values ────────────────────────────────────────────────
+  //
+  // ADMIN ONLY, and loaded only when Kraya is connected. The rows carry the last
+  // four digits of a guest's number — the one contact fragment stored anywhere —
+  // and this page is open to every agency member, unlike the journeys screen
+  // this section's policy is borrowed from. Gating the LOAD rather than just the
+  // render means an analyst's request never reads the data at all.
+  const canValueBookings = member.role === "admin" && krayaView != null;
+  const wabRangeKey = typeof sp.wab === "string" ? sp.wab : "30";
+  const wabRange = canValueBookings
+    ? resolveRange({ range: wabRangeKey }, { timezone: hotel.timezone })
+    : null;
+  const bookingValues =
+    wabRange != null
+      ? await listWhatsAppBookingValues(
+          hotel.agencyId,
+          hotel.id,
+          wabRange.since,
+          wabRange.until,
+        )
+      : [];
+  const bookingValueSummary = summariseValues(bookingValues);
+  const bookingValueRows: BookingRow[] = bookingValues.map((b) => ({
+    id: b.id,
+    bookedAtLabel: zonedDayString(b.bookedAt, hotel.timezone),
+    krayaLeadId: b.krayaLeadId,
+    phoneLast4: b.phoneLast4,
+    stageName: b.stageName,
+    pipelineName: b.pipelineName,
+    traced: b.traced,
+    marked: b.marked,
+    amount: b.amount,
+  }));
 
   // ── Summary ────────────────────────────────────────────────────────────────
   const summary = summarize({
@@ -1126,6 +1169,60 @@ export default async function HotelIntegrationsPage({
         }
       >
         <KrayaCard hotelId={hotel.id} appUrl={appUrl} connection={krayaView} />
+
+        {canValueBookings && (
+          <div className="mt-6 space-y-4 border-t border-line pt-6">
+            <div>
+              <p className="text-sm font-medium text-ink">WhatsApp booking values</p>
+              <p className="mt-1 max-w-[70ch] text-sm text-ink-tertiary">
+                Kraya records that a booking happened but not what it was worth. Enter
+                the value from the reservations record, and tick the bookings you
+                believe came from an ad. Both feed the hotel&apos;s report — a booking
+                with no value entered is left out of the total rather than counted as
+                zero.
+              </p>
+            </div>
+
+            {/* `wab` rather than `range`: this page carries other providers'
+                query params and must not have its own range collide with them. */}
+            <nav className="flex flex-wrap gap-2 text-sm">
+              {[
+                ["7", "Last 7 days"],
+                ["30", "Last 30 days"],
+                ["90", "Last 90 days"],
+                ["365", "Last year"],
+              ].map(([value, label]) => (
+                <Link
+                  key={value}
+                  href={`/agency/hotel/${hotel.id}/integrations?wab=${value}#kraya`}
+                  className={`rounded-lg border px-3 py-1.5 ${
+                    wabRangeKey === value
+                      ? "border-brand bg-brand text-white"
+                      : "border-line-strong bg-card text-ink-secondary hover:bg-line-strong"
+                  }`}
+                >
+                  {label}
+                </Link>
+              ))}
+            </nav>
+
+            <ValueSummary
+              countable={bookingValueSummary.countable}
+              valued={bookingValueSummary.valued}
+              total={bookingValueSummary.total}
+            />
+
+            {/* Capped height: the list runs to hundreds of rows and this card
+                sits among a dozen others, so it scrolls rather than burying them. */}
+            <div className="max-h-[32rem] overflow-y-auto">
+              <BookingValueList
+                hotelId={hotel.id}
+                bookings={bookingValueRows}
+                currency="INR"
+              />
+            </div>
+          </div>
+        )}
       </IntegrationCard>
     </div>
   );

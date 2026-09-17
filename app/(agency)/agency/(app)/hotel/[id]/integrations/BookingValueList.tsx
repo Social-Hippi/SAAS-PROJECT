@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 
 import { formatCurrency } from "@/lib/format";
-import { saveBookingValue, type BookingValueState } from "./actions";
+import { saveBookingValue, type BookingValueState } from "./booking-value-actions";
 
 export type BookingRow = {
   id: string;

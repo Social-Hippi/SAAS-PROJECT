@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 import { readCode } from "./helpers/read-code";
 import {
   countsAsAdBooking,
@@ -27,10 +30,12 @@ import {
 const LOADER = readCode("lib/metrics/share-views.ts");
 const VALUES = readCode("lib/whatsapp-booking-values.ts");
 const REPORT = readCode("components/dashboard/ShareReport.tsx");
-const ACTION = readCode("app/(agency)/agency/(app)/hotel/[id]/whatsapp-bookings/actions.ts");
-const PAGE = readCode("app/(agency)/agency/(app)/hotel/[id]/whatsapp-bookings/page.tsx");
+const ACTION = readCode(
+  "app/(agency)/agency/(app)/hotel/[id]/integrations/booking-value-actions.ts",
+);
+const PAGE = readCode("app/(agency)/agency/(app)/hotel/[id]/integrations/page.tsx");
 const LIST = readCode(
-  "app/(agency)/agency/(app)/hotel/[id]/whatsapp-bookings/BookingValueList.tsx",
+  "app/(agency)/agency/(app)/hotel/[id]/integrations/BookingValueList.tsx",
 );
 const INGEST = readCode("lib/kraya-ingest.ts");
 const REDACT = readCode("scripts/redact-kraya-lead-phones.ts");
@@ -168,8 +173,15 @@ describe("5. multi-tenancy holds on the hand-written paths", () => {
     expect(ACTION).toMatch(/agencyScoped\(prisma\.booking\)\.update/);
   });
 
-  test("the screen is admin-only, as on the journeys screen", () => {
-    expect(PAGE).toMatch(/requireAdmin\(\)/);
+  test("valuing is admin-only even though the page is not", () => {
+    // The section now lives on the integrations page, which every agency member
+    // can open. The rows carry phoneLast4, so the LOAD is gated, not just the
+    // render — an analyst's request never reads the data at all.
+    expect(PAGE).toMatch(/const canValueBookings = member\.role === "admin" && krayaView != null;/);
+    expect(PAGE).toMatch(/canValueBookings\s*\?[\s\S]{0,80}resolveRange/);
+    expect(PAGE).toMatch(/\{canValueBookings && \(/);
+    // No separate route to bypass the gate through.
+    expect(existsSync(join(process.cwd(), "app/(agency)/agency/(app)/hotel/[id]/whatsapp-bookings"))).toBe(false);
   });
 
   test("a synthesised lead id never reaches the screen", () => {
@@ -242,5 +254,6 @@ describe("6. saving keeps the three states apart", () => {
 
   test("the hotel's share link is rebuilt, not just the agency screen", () => {
     expect(ACTION).toMatch(/revalidatePath\("\/share", "layout"\)/);
+    expect(ACTION).toMatch(/revalidatePath\(`\/agency\/hotel\/\$\{hotelId\}\/integrations`\)/);
   });
 });
