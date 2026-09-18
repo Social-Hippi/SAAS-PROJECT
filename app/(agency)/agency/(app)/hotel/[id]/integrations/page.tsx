@@ -34,6 +34,8 @@ import { resolveRange } from "@/lib/attribution";
 import { zonedDayString } from "@/lib/timezone";
 import { KrayaCard } from "./KrayaCard";
 import { countHeldPushes } from "@/lib/booking-push-capture";
+import { loadLeadBreakdown } from "@/lib/kraya-lead-breakdown";
+import { LeadBreakdown } from "./LeadBreakdown";
 import { webhookBaseUrl } from "@/lib/webhook-url";
 import { BookingValueList, ValueSummary, type BookingRow } from "./BookingValueList";
 import { listWhatsAppBookingValues, summariseValues } from "@/lib/whatsapp-booking-values";
@@ -532,6 +534,25 @@ export default async function HotelIntegrationsPage({
       bookingCount,
     };
   }
+
+  // ── Kraya leads by property and bucket ─────────────────────────────────────
+  // Counts only — no guest, number or lead id — so every member sees it,
+  // unlike the admin-only booking-values table below. Loaded only when Kraya
+  // is connected.
+  const LBP_WINDOWS: Record<string, string> = {
+    "7": "the last 7 days",
+    "30": "the last 30 days",
+    "90": "the last 90 days",
+    "365": "the last year",
+  };
+  const lbpKey = typeof sp.lbp === "string" && sp.lbp in LBP_WINDOWS ? sp.lbp : "30";
+  const leadBreakdown =
+    krayaView != null
+      ? await (async () => {
+          const r = resolveRange({ range: lbpKey }, { timezone: hotel.timezone });
+          return loadLeadBreakdown(hotel.agencyId, hotel.id, r.since, r.until);
+        })()
+      : null;
 
   // ── WhatsApp booking values ────────────────────────────────────────────────
   //
@@ -1183,6 +1204,18 @@ export default async function HotelIntegrationsPage({
       >
         <KrayaCard hotelId={hotel.id} appUrl={appUrl} connection={krayaView} />
 
+        {leadBreakdown && (
+          <div className="mt-6 border-t border-line pt-6">
+            <LeadBreakdown
+              hotelId={hotel.id}
+              rangeKey={lbpKey}
+              windowLabel={LBP_WINDOWS[lbpKey]}
+              properties={leadBreakdown}
+              preserve={{ wab: wabRangeKey }}
+            />
+          </div>
+        )}
+
         {canValueBookings && (
           <div className="mt-6 space-y-4 border-t border-line pt-6">
             <div>
@@ -1207,7 +1240,7 @@ export default async function HotelIntegrationsPage({
               ].map(([value, label]) => (
                 <Link
                   key={value}
-                  href={`/agency/hotel/${hotel.id}/integrations?wab=${value}#kraya`}
+                  href={`/agency/hotel/${hotel.id}/integrations?wab=${value}&lbp=${lbpKey}#kraya`}
                   className={`rounded-lg border px-3 py-1.5 ${
                     wabRangeKey === value
                       ? "border-brand bg-brand text-white"
