@@ -5,6 +5,7 @@ import { rateLimit, clientIpFromHeaders } from "@/lib/ratelimit";
 import { getBookingProvider } from "@/lib/booking-provider";
 import { ingestBookingEvents } from "@/lib/booking-ingest";
 import { getTokenForApiCall } from "@/lib/token-access";
+import { holdPush, stampPush } from "@/lib/booking-push-capture";
 import "@/lib/booking-providers/simplotel";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -132,6 +133,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ provider: 
   const contentType = (request.headers.get("content-type") ?? "").toLowerCase();
   if (!contentType.includes("application/json")) {
     logPush({ provider, connectionId: connection.id, outcome: "bad_content_type" });
+    await stampPush(connection, "bad_content_type");
     return json(415, { error: "Expected application/json" });
   }
 
@@ -143,12 +145,14 @@ export async function POST(request: Request, ctx: { params: Promise<{ provider: 
   }
   if (rawBody.length > MAX_BODY_BYTES) {
     logPush({ provider, connectionId: connection.id, outcome: "body_too_large", bytes: rawBody.length });
+    await stampPush(connection, "body_too_large");
     return json(413, { error: "Body too large" });
   }
   try {
     JSON.parse(rawBody);
   } catch {
     logPush({ provider, connectionId: connection.id, outcome: "malformed_json" });
+    await stampPush(connection, "malformed_json");
     return json(400, { error: "Malformed JSON" });
   }
 
@@ -174,16 +178,27 @@ export async function POST(request: Request, ctx: { params: Promise<{ provider: 
   // 7. Provider-specific mapping. Until Simplotel supplies a payload sample this
   //    refuses every body — see lib/booking-providers/simplotel.ts. A guessed
   //    mapping would produce confident, wrong bookings.
+  //
+  //    A body that cannot be mapped is HELD, not dropped, and answered 202. It
+  //    is authenticated, it is very likely a real booking, and it is the sample
+  //    the parser has to be written from: answering 422 and discarding it lost
+  //    both, and providers rarely retry a 4xx. Repeated 4xx responses can also
+  //    get an endpoint disabled on the provider's side, which would stop the
+  //    bookings that follow as well. 202 is the honest status — accepted, not
+  //    yet processed — and the held body is replayed once the parser exists.
   if (!adapter.parseWebhook) {
     return json(501, { error: "Provider cannot parse webhooks" });
   }
   const parsed = adapter.parseWebhook(rawBody, request.headers);
   if (!parsed.ok) {
     logPush({ provider, connectionId: connection.id, outcome: "unmapped_payload", reason: parsed.error });
-    return json(422, { error: parsed.error });
+    return (await held(connection, provider, "unmapped_payload", parsed.error, rawBody))
+      ? json(202, { held: true })
+      : json(503, { error: "Temporarily unavailable" });
   }
   if (!parsed.value.length) {
     logPush({ provider, connectionId: connection.id, outcome: "no_events" });
+    await stampPush(connection, "no_events");
     return json(204, {});
   }
 
@@ -206,13 +221,43 @@ export async function POST(request: Request, ctx: { params: Promise<{ provider: 
     matches: results.map((r) => (r.ok ? (r.match?.method ?? null) : null)).filter(Boolean),
   });
 
-  if (accepted === 0) {
-    return json(422, {
-      error: "No event could be ingested",
-      details: results.flatMap((r) => (r.ok ? [] : r.errors)),
-    });
+  // Anything the ingester refused is held too, so fixing the cause and
+  // replaying recovers it. Replay is safe for the events that DID go in:
+  // ingestion is idempotent on the provider's reservation id.
+  if (rejected > 0) {
+    const reason = results.flatMap((r) => (r.ok ? [] : r.errors)).join("; ") || null;
+    const outcome = accepted === 0 ? "rejected" : "partial";
+    if (!(await held(connection, provider, outcome, reason, rawBody))) {
+      return json(503, { error: "Temporarily unavailable" });
+    }
+    return accepted === 0
+      ? json(202, { held: true, accepted, rejected })
+      : json(200, { accepted, rejected, held: true });
   }
+
+  await stampPush(connection, "accepted");
   return json(200, { accepted, rejected });
+}
+
+/**
+ * Holds a body, reporting whether it was kept. A false return means the caller
+ * must answer 5xx so a retrying provider sends it again — telling the provider
+ * it was accepted when it was not would lose the booking with no trace.
+ */
+async function held(
+  connection: { id: string; agencyId: string; hotelClientId: string },
+  provider: string,
+  outcome: "unmapped_payload" | "rejected" | "partial",
+  reason: string | null,
+  rawBody: string,
+): Promise<boolean> {
+  try {
+    await holdPush(connection, provider, outcome, reason, rawBody);
+    return true;
+  } catch {
+    logPush({ provider, connectionId: connection.id, outcome: "hold_failed" });
+    return false;
+  }
 }
 
 /** Anything but POST. */

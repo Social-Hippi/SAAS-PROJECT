@@ -149,10 +149,11 @@ describe("transport and authentication", () => {
     // copying that shape would otherwise get a 401 indistinguishable from a
     // wrong secret — and the round trip to discover why runs to weeks.
     //
-    // 422 is the PASS here: authentication succeeded and the request reached the
-    // adapter, which refuses every body until the payload contract is agreed.
+    // 202 is the PASS here: authentication succeeded and the request reached the
+    // adapter, which cannot map any body until the payload contract is agreed —
+    // so the body is held for replay rather than refused.
     const res = await pushRawAuth("{}", SECRET_A);
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(202);
   });
 
   test("a bare token that is not the secret is still refused", async () => {
@@ -179,16 +180,57 @@ describe("transport and authentication", () => {
 // ── Payload contract boundary ────────────────────────────────────────────
 
 describe("payload contract boundary", () => {
-  test("an AUTHENTICATED push is accepted, then refused at the mapping with 422", async () => {
+  test("an AUTHENTICATED push that cannot be mapped is HELD and answered 202", async () => {
+    // It used to be answered 422 and dropped. That lost the booking AND the
+    // sample the parser has to be written from, and providers rarely retry a
+    // 4xx — so the first real pushes would have been lost for good.
     const res = await push(JSON.stringify({ anything: "at all" }));
-    expect(res.status).toBe(422);
-    expect((await res.json()).error).toBe(PAYLOAD_CONTRACT_PENDING);
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ held: true });
   });
 
   test("no booking is created while the contract is pending", async () => {
     const before = await prisma.booking.count({ where: { hotelClientId: fx.hotelA } });
     await push(JSON.stringify({ reservation_id: "R1", total: 5000 }));
     expect(await prisma.booking.count({ where: { hotelClientId: fx.hotelA } })).toBe(before);
+  });
+
+  test("the held body is stored ENCRYPTED, recoverable, and never in plain text", async () => {
+    const marker = "HELD_MARKER_guest@example.test";
+    await push(JSON.stringify({ reservation_id: "R-HOLD", guest_email: marker }));
+    const row = await prisma.bookingPushCapture.findFirst({
+      where: { connectionId: fx.connA.id },
+      orderBy: { receivedAt: "desc" },
+    });
+    expect(row).not.toBeNull();
+    expect(row!.outcome).toBe("unmapped_payload");
+    expect(row!.reason).toBe(PAYLOAD_CONTRACT_PENDING);
+    expect(row!.replayedAt).toBeNull();
+    // Guest PII must not sit in the column in the clear…
+    expect(row!.bodyEncrypted).not.toContain(marker);
+    // …but must come back intact, or replay has nothing to work from.
+    const { decryptToken } = await import("@/lib/encryption");
+    expect(JSON.parse(decryptToken(row!.bodyEncrypted).reveal()).guest_email).toBe(marker);
+  });
+
+  test("the connection records that the provider reached us", async () => {
+    // Vercel keeps about an hour of logs. Without this stamp, "did they reach
+    // us at all?" had no answer an hour after a provider tried.
+    await push(JSON.stringify({ reservation_id: "R-STAMP" }));
+    const conn = await prisma.bookingConnection.findUnique({
+      where: { id: fx.connA.id },
+      select: { lastPushAt: true, lastPushOutcome: true },
+    });
+    expect(conn!.lastPushAt).not.toBeNull();
+    expect(conn!.lastPushOutcome).toBe("unmapped_payload");
+  });
+
+  test("an UNAUTHENTICATED caller can hold nothing", async () => {
+    // Otherwise the table is a free storage bucket for anyone who finds the URL.
+    const before = await prisma.bookingPushCapture.count();
+    await push(JSON.stringify({ spam: true }), { auth: "sk_wrong_secret_value_00000000000000" });
+    await push(JSON.stringify({ spam: true }), { auth: null });
+    expect(await prisma.bookingPushCapture.count()).toBe(before);
   });
 });
 
@@ -225,13 +267,15 @@ describe("tenant safety", () => {
   test("a body naming another agency/hotel cannot redirect the write", async () => {
     // Authenticated as tenant A but asking for tenant B — the body has no say.
     const res = await push(JSON.stringify({ agencyId: fx.agencyB, hotelClientId: fx.hotelB }));
-    expect(res.status).toBe(422); // stopped at mapping, not at tenant confusion
+    expect(res.status).toBe(202); // held at mapping, not routed by the body
     expect(await prisma.booking.count({ where: { hotelClientId: fx.hotelB } })).toBe(0);
+    // The held copy belongs to the tenant the SECRET named, never the body's.
+    expect(await prisma.bookingPushCapture.count({ where: { hotelClientId: fx.hotelB } })).toBe(0);
   });
 
   test("tenant B's secret resolves to tenant B, never tenant A", async () => {
     const res = await push(JSON.stringify({}), { auth: SECRET_B });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(202);
     const line = logs.filter((l) => l.includes("[BOOKING-PUSH]")).at(-1) ?? "";
     expect(line).not.toContain(fx.connA.id);
   });
