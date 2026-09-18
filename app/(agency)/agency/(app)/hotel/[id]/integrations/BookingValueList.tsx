@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 
+import { CopyButton } from "@/components/ui/CopyButton";
 import { formatCurrency } from "@/lib/format";
 import { saveBookingValue, type BookingValueState } from "./booking-value-actions";
 
@@ -10,6 +11,8 @@ export type BookingRow = {
   bookedAtLabel: string;
   krayaLeadId: string | null;
   phoneLast4: string | null;
+  /** Full number, decrypted server-side. Admin-only — see the page's load gate. */
+  phone: string | null;
   stageName: string | null;
   pipelineName: string | null;
   traced: boolean;
@@ -48,7 +51,7 @@ export function BookingValueList({
         <thead>
           <tr className="border-b border-line bg-page text-left">
             <Th>Booked</Th>
-            <Th>Kraya lead</Th>
+            <Th>Guest number</Th>
             <Th>Came from an ad</Th>
             <Th>Booking value ({currency})</Th>
             <Th> </Th>
@@ -78,16 +81,33 @@ function Row({ hotelId, booking }: { hotelId: string; booking: BookingRow }) {
   return (
     <tr className="border-b border-line last:border-0 align-middle">
       <td className="whitespace-nowrap px-4 py-3 text-ink-secondary">{booking.bookedAtLabel}</td>
-      {/* Kraya's own lead id, not a name or a number: the import stores neither,
-          and this is what a person types into Kraya to find the reservation and
-          read the amount off it. */}
+      {/* The guest's number, because that is what Kraya can be searched by —
+          its own lead id cannot. Copyable, so it goes into Kraya's search box
+          exactly as Kraya sent it. Until Kraya next sends this lead (or an
+          export is imported) only the last four digits are known. */}
       <td className="px-4 py-3">
-        <span className="font-mono text-xs text-ink">
-          {booking.krayaLeadId ??
-            (booking.phoneLast4 ? `Imported lead · ⋯${booking.phoneLast4}` : "Imported lead")}
-        </span>
+        {booking.phone ? (
+          <span className="inline-flex items-center gap-2">
+            <span className="font-mono text-sm text-ink">{booking.phone}</span>
+            <CopyButton
+              text={booking.phone}
+              label="Copy"
+              className="rounded-md border border-line-strong bg-elevated px-2 py-0.5 text-xs font-medium text-ink-secondary hover:bg-line-strong"
+            />
+          </span>
+        ) : (
+          <span className="font-mono text-xs text-ink-tertiary">
+            {booking.phoneLast4 ? `⋯${booking.phoneLast4}` : "Number not received yet"}
+          </span>
+        )}
         <span className="block text-xs text-ink-disabled">
-          {[booking.pipelineName, booking.stageName].filter(Boolean).join(" · ") || "—"}
+          {[
+            booking.krayaLeadId ? `Lead ${booking.krayaLeadId}` : null,
+            booking.pipelineName,
+            booking.stageName,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "—"}
         </span>
       </td>
       <td className="px-4 py-3">

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { agencyScopedFor } from "@/lib/tenant";
 import { hashGuestEmail, hashGuestPhone } from "@/lib/booking-identity";
 import { isConfirmedStage, type KrayaLead } from "@/lib/kraya-webhook";
+import { encryptToken } from "@/lib/encryption";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kraya lead → conversation, and sometimes → booking.
@@ -17,10 +18,16 @@ import { isConfirmedStage, type KrayaLead } from "@/lib/kraya-webhook";
 // with a consequence, which is why it is configuration rather than a guess —
 // see KrayaConnection.confirmedStageName.
 //
-// WHAT WE DO NOT TAKE: names, notes, message bodies. Phone and email exist here
-// only long enough to be hashed, through the same chain as Booking.guestPhoneHash
-// so a Kraya lead and a booking engine reservation for the same guest resolve to
-// the same person without either side storing a contact detail.
+// WHAT WE DO NOT TAKE: names, notes, message bodies. Phone and email are hashed
+// through the same chain as Booking.guestPhoneHash, so a Kraya lead and a
+// booking engine reservation for the same guest resolve to the same person —
+// the hash is the identity every join uses.
+//
+// THE ONE EXCEPTION: the phone number is ALSO kept, encrypted, in
+// WhatsAppConversation.phoneEncrypted, because the agency has to find the lead
+// in Kraya to read a booking's value off it and Kraya cannot be searched by its
+// own lead id. It is readable only server-side, only by agency admins, and
+// never on a hotel-facing view. Email is not kept.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** The spreadsheet-import prefix. A synthesised id, never one Kraya issued. */
@@ -54,6 +61,26 @@ function phoneLast4Of(leadId: string, phone: string): string | null {
   if (!leadId.startsWith(EXPORT_PREFIX)) return null;
   const digits = String(phone ?? "").replace(/[^0-9]/g, "");
   return digits.length >= 4 ? digits.slice(-4) : null;
+}
+
+/**
+ * The number as Kraya sent it, encrypted — or null.
+ *
+ * Stored as received rather than normalised, because its one use is being
+ * pasted into Kraya's own search, which matches Kraya's own format.
+ *
+ * NEVER THROWS. This is display data; the hash is the identity. A missing key
+ * or a failed encryption must not stop a lead being recorded and joined — it
+ * only means the agency sees the last four digits instead of the full number.
+ */
+function encryptPhone(phone: string): string | null {
+  const v = String(phone ?? "").trim();
+  if (!v) return null;
+  try {
+    return encryptToken(v);
+  } catch {
+    return null;
+  }
 }
 
 export type KrayaIngestResult = {
@@ -102,6 +129,7 @@ export async function ingestKrayaLead(
   // raw phone number.
   const krayaLeadId = safeLeadId(lead.leadId, phoneHash);
   const phoneLast4 = phoneLast4Of(lead.leadId, lead.phone);
+  const phoneEncrypted = encryptPhone(lead.phone);
 
   const scoped = agencyScopedFor(agencyId, prisma.whatsAppConversation);
   const existing = await scoped.findFirst({
@@ -162,6 +190,7 @@ export async function ingestKrayaLead(
             // Only filled in for an imported lead, and never cleared by a later
             // webhook — the row keeps whichever handle it has.
             ...(phoneLast4 ? { phoneLast4 } : {}),
+            ...(phoneEncrypted ? { phoneEncrypted } : {}),
             stageName: lead.stage,
             pipelineName: lead.pipeline,
             lastMessageAt: dates.lastSeenAt ?? now,
@@ -182,6 +211,7 @@ export async function ingestKrayaLead(
             phoneHash,
             krayaLeadId,
             phoneLast4,
+            phoneEncrypted,
             stageName: lead.stage,
             pipelineName: lead.pipeline,
             ctwaClid: ref?.ctwaClid ?? null,

@@ -46,6 +46,7 @@ const booking = (over: Partial<WhatsAppBookingValue> = {}): WhatsAppBookingValue
   bookedAt: new Date("2026-09-12T10:00:00Z"),
   krayaLeadId: "KR-1",
   phoneLast4: null,
+  phone: null,
   stageName: "Booking confirmed",
   pipelineName: "Coffeeberry",
   traced: false,
@@ -224,15 +225,29 @@ describe("5. multi-tenancy holds on the hand-written paths", () => {
     expect(REDACT).not.toMatch(/booking-identity|"@\/lib\/pii"/);
   });
 
-  test("no contact detail beyond four digits is shown", () => {
-    // The Kraya import deliberately stores neither names nor numbers, and
-    // externalBookingId is a salted phone hash that identifies nothing to a
-    // human. Showing the lead id keeps the screen usable at no PII cost.
-    expect(VALUES).toMatch(/l\."krayaLeadId"/);
-    expect(VALUES).not.toMatch(/guestName|externalBookingId/);
-    expect(LIST).toMatch(/booking\.krayaLeadId/);
+  test("the full number is shown to admins, so the lead can be found in Kraya", () => {
+    // Reversed at the agency's request. Kraya cannot be searched by its own lead
+    // id, and a hash identifies nobody, so the number itself is what makes the
+    // amount findable. It is copyable, and shown as Kraya sent it.
+    expect(VALUES).toMatch(/c\."phoneEncrypted"/);
+    expect(VALUES).toMatch(/phone: decryptPhone\(r\.phoneEncrypted\)/);
+    expect(LIST).toMatch(/booking\.phone \?/);
+    expect(LIST).toMatch(/<CopyButton\s+text=\{booking\.phone\}/);
+    // Falls back to the last four digits until Kraya sends the number again.
     expect(LIST).toMatch(/booking\.phoneLast4/);
-    expect(LIST).not.toMatch(/guestName/);
+    expect(VALUES).not.toMatch(/guestName|externalBookingId/);
+  });
+
+  test("the number never reaches a hotel-facing view", () => {
+    for (const src of [readCode("lib/metrics/share-views.ts"), REPORT]) {
+      expect(src).not.toMatch(/phoneEncrypted|decryptPhone|booking\.phone\b/);
+    }
+  });
+
+  test("one unreadable number cannot take down the table", () => {
+    // A rotated key or a damaged value falls back to the last four digits.
+    const fn = VALUES.slice(VALUES.indexOf("function decryptPhone"));
+    expect(fn.slice(0, fn.indexOf("\n}\n"))).toMatch(/catch \{\s*return null;/);
   });
 
   test("one guest with several conversations still yields one row", () => {

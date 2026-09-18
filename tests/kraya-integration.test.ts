@@ -141,6 +141,23 @@ describe("5. identity and isolation", () => {
     expect(INGEST).not.toMatch(/phone:\s*lead\.phone/);
   });
 
+  test("the number is kept ONLY encrypted, never in plain text", () => {
+    // Kept so the agency can find the lead in Kraya. Ciphertext at rest; the
+    // hash stays the identity every join uses.
+    expect(INGEST).toMatch(/return encryptToken\(v\);/);
+    expect(INGEST).toMatch(/const phoneEncrypted = encryptPhone\(lead\.phone\);/);
+    expect(INGEST).not.toMatch(/phoneEncrypted:\s*lead\.phone/);
+    // Email is still not kept in any form beyond its hash.
+    expect(INGEST).not.toMatch(/emailEncrypted/);
+  });
+
+  test("a failed encryption never stops a lead being recorded", () => {
+    // The number is display data; the hash is the identity. Losing the number
+    // must not lose the lead or its booking join.
+    const fn = INGEST.slice(INGEST.indexOf("function encryptPhone"));
+    expect(fn.slice(0, fn.indexOf("\n}\n"))).toMatch(/catch \{\s*return null;/);
+  });
+
   test("an unusable phone is refused", () => {
     expect(INGEST).toMatch(/if \(!phoneHash\) return null;/);
   });
