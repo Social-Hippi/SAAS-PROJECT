@@ -151,6 +151,24 @@ describe("5. identity and isolation", () => {
     expect(INGEST).not.toMatch(/emailEncrypted/);
   });
 
+  test("an import never replaces a real Kraya lead id with a synthesised one", () => {
+    // An export carries no lead id, so the importer mints `export:<hash>`. On
+    // 18 Sep a re-import overwrote ~35 real ids the webhook had supplied. The
+    // same fill-never-downgrade rule the referral fields already follow.
+    expect(INGEST).toMatch(
+      /\.\.\.\(keepExistingLeadId\(existing\.krayaLeadId, krayaLeadId\) \? \{\} : \{ krayaLeadId \}\)/,
+    );
+    const fn = INGEST.slice(INGEST.indexOf("function keepExistingLeadId"));
+    const body = fn.slice(0, fn.indexOf("\n}\n"));
+    // Keep only when the stored id is real AND the incoming one is not — so a
+    // real id still upgrades a synthesised one.
+    expect(body).toMatch(/return isReal\(current\) && !isReal\(incoming\);/);
+    expect(body).toMatch(/!id\.startsWith\(EXPORT_PREFIX\)/);
+    // The unconditional overwrite must be gone from the update.
+    const update = INGEST.slice(INGEST.indexOf("await scoped.update({"));
+    expect(update.slice(0, update.indexOf("select:"))).not.toMatch(/^\s+krayaLeadId,$/m);
+  });
+
   test("a failed encryption never stops a lead being recorded", () => {
     // The number is display data; the hash is the identity. Losing the number
     // must not lose the lead or its booking join.

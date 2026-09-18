@@ -51,6 +51,12 @@ function safeLeadId(leadId: string, phoneHash: string): string {
   return leadId.startsWith(EXPORT_PREFIX) ? `${EXPORT_PREFIX}${phoneHash}` : leadId;
 }
 
+/** Whether a stored lead id should survive this write. See the update site. */
+function keepExistingLeadId(current: string | null, incoming: string): boolean {
+  const isReal = (id: string | null) => id != null && !id.startsWith(EXPORT_PREFIX);
+  return isReal(current) && !isReal(incoming);
+}
+
 /**
  * The last four digits of a number, or null.
  *
@@ -142,6 +148,7 @@ export async function ingestKrayaLead(
       sourceUrl: true,
       headline: true,
       firstMessageAt: true,
+      krayaLeadId: true,
     },
   });
 
@@ -186,7 +193,14 @@ export async function ingestKrayaLead(
         await scoped.update({
           where: { id: existing.id },
           data: {
-            krayaLeadId,
+            // A REAL Kraya id is never replaced by a synthesised one. An export
+            // carries no lead id, so importing one used to overwrite the id the
+            // webhook had supplied with our own `export:<hash>` key — 35-odd real
+            // ids were lost that way on the 18 Sep re-import. The same rule the
+            // referral fields below follow: fill, never downgrade. A real id
+            // still replaces a synthesised one, which is how an imported lead
+            // gains Kraya's id when the webhook later sends it.
+            ...(keepExistingLeadId(existing.krayaLeadId, krayaLeadId) ? {} : { krayaLeadId }),
             // Only filled in for an imported lead, and never cleared by a later
             // webhook — the row keeps whichever handle it has.
             ...(phoneLast4 ? { phoneLast4 } : {}),
