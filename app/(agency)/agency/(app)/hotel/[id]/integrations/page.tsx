@@ -30,12 +30,13 @@ import { disconnectMetaToken } from "@/app/(agency)/agency/(app)/settings/action
 import { TestConnection } from "../install/TestConnection";
 import { MetaSyncButton } from "./MetaSyncButton";
 import { BookingConnectionCard } from "./BookingConnectionCard";
-import { resolveRange } from "@/lib/attribution";
 import { zonedDayString } from "@/lib/timezone";
 import { KrayaCard } from "./KrayaCard";
 import { countHeldPushes } from "@/lib/booking-push-capture";
 import { loadLeadBreakdown } from "@/lib/kraya-lead-breakdown";
+import { readSectionRange, resolveSectionRange, sectionRangeParams } from "@/lib/section-range";
 import { LeadBreakdown } from "./LeadBreakdown";
+import { SectionRangePicker } from "./SectionRangePicker";
 import { webhookBaseUrl } from "@/lib/webhook-url";
 import { BookingValueList, ValueSummary, type BookingRow } from "./BookingValueList";
 import { listWhatsAppBookingValues, summariseValues } from "@/lib/whatsapp-booking-values";
@@ -539,19 +540,15 @@ export default async function HotelIntegrationsPage({
   // Counts only — no guest, number or lead id — so every member sees it,
   // unlike the admin-only booking-values table below. Loaded only when Kraya
   // is connected.
-  const LBP_WINDOWS: Record<string, string> = {
-    "7": "the last 7 days",
-    "30": "the last 30 days",
-    "90": "the last 90 days",
-    "365": "the last year",
-  };
-  const lbpKey = typeof sp.lbp === "string" && sp.lbp in LBP_WINDOWS ? sp.lbp : "30";
+  //
+  // Each section's range lives under its own prefix (`lbp`, `wab`) and is
+  // resolved by lib/section-range — presets, "Last year", and custom dates all
+  // through resolveRange's validation.
+  const lbpState = readSectionRange(sp, "lbp");
+  const lbpRange = krayaView != null ? resolveSectionRange(lbpState, hotel.timezone) : null;
   const leadBreakdown =
-    krayaView != null
-      ? await (async () => {
-          const r = resolveRange({ range: lbpKey }, { timezone: hotel.timezone });
-          return loadLeadBreakdown(hotel.agencyId, hotel.id, r.since, r.until);
-        })()
+    lbpRange != null
+      ? await loadLeadBreakdown(hotel.agencyId, hotel.id, lbpRange.since, lbpRange.until)
       : null;
 
   // ── WhatsApp booking values ────────────────────────────────────────────────
@@ -562,10 +559,8 @@ export default async function HotelIntegrationsPage({
   // this section's policy is borrowed from. Gating the LOAD rather than just the
   // render means an analyst's request never reads the data at all.
   const canValueBookings = member.role === "admin" && krayaView != null;
-  const wabRangeKey = typeof sp.wab === "string" ? sp.wab : "30";
-  const wabRange = canValueBookings
-    ? resolveRange({ range: wabRangeKey }, { timezone: hotel.timezone })
-    : null;
+  const wabState = readSectionRange(sp, "wab");
+  const wabRange = canValueBookings ? resolveSectionRange(wabState, hotel.timezone) : null;
   const bookingValues =
     wabRange != null
       ? await listWhatsAppBookingValues(
@@ -1204,14 +1199,21 @@ export default async function HotelIntegrationsPage({
       >
         <KrayaCard hotelId={hotel.id} appUrl={appUrl} connection={krayaView} />
 
-        {leadBreakdown && (
+        {leadBreakdown && lbpRange && (
           <div className="mt-6 border-t border-line pt-6">
             <LeadBreakdown
-              hotelId={hotel.id}
-              rangeKey={lbpKey}
-              windowLabel={LBP_WINDOWS[lbpKey]}
+              windowLabel={lbpRange.dateLabel}
               properties={leadBreakdown}
-              preserve={{ wab: wabRangeKey }}
+              picker={
+                <SectionRangePicker
+                  basePath={`/agency/hotel/${hotel.id}/integrations`}
+                  prefix="lbp"
+                  state={lbpState}
+                  resolved={lbpRange}
+                  preserve={sectionRangeParams("wab", wabState)}
+                  anchor="kraya"
+                />
+              }
             />
           </div>
         )}
@@ -1231,26 +1233,16 @@ export default async function HotelIntegrationsPage({
 
             {/* `wab` rather than `range`: this page carries other providers'
                 query params and must not have its own range collide with them. */}
-            <nav className="flex flex-wrap gap-2 text-sm">
-              {[
-                ["7", "Last 7 days"],
-                ["30", "Last 30 days"],
-                ["90", "Last 90 days"],
-                ["365", "Last year"],
-              ].map(([value, label]) => (
-                <Link
-                  key={value}
-                  href={`/agency/hotel/${hotel.id}/integrations?wab=${value}&lbp=${lbpKey}#kraya`}
-                  className={`rounded-lg border px-3 py-1.5 ${
-                    wabRangeKey === value
-                      ? "border-brand bg-brand text-white"
-                      : "border-line-strong bg-card text-ink-secondary hover:bg-line-strong"
-                  }`}
-                >
-                  {label}
-                </Link>
-              ))}
-            </nav>
+            {wabRange && (
+              <SectionRangePicker
+                basePath={`/agency/hotel/${hotel.id}/integrations`}
+                prefix="wab"
+                state={wabState}
+                resolved={wabRange}
+                preserve={sectionRangeParams("lbp", lbpState)}
+                anchor="kraya"
+              />
+            )}
 
             <ValueSummary
               countable={bookingValueSummary.countable}
