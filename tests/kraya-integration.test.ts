@@ -169,6 +169,39 @@ describe("5. identity and isolation", () => {
     expect(update.slice(0, update.indexOf("select:"))).not.toMatch(/^\s+krayaLeadId,$/m);
   });
 
+  test("an older export row never rewinds a lead's stage", () => {
+    // 18 Sep: an export generated before 17 Sep moved a guest the team had
+    // confirmed back to "Interested - Follow-Up", because its row — dated
+    // 11 Sep — still said so.
+    expect(INGEST).toMatch(/const seenAt = dates\.lastSeenAt \?\? now;/);
+    expect(INGEST).toMatch(
+      /const isStaleRow =\s*existing\?\.lastMessageAt != null && seenAt\.getTime\(\) < existing\.lastMessageAt\.getTime\(\);/,
+    );
+    expect(INGEST).toMatch(
+      /\.\.\.\(isStaleRow\s*\?\s*\{\}\s*:\s*\{ stageName: lead\.stage, pipelineName: lead\.pipeline, lastMessageAt: seenAt \}\)/,
+    );
+    // The unconditional writes must be gone from the update.
+    const update = INGEST.slice(INGEST.indexOf("await scoped.update({"));
+    const data = update.slice(0, update.indexOf("select:"));
+    expect(data).not.toMatch(/^\s+stageName: lead\.stage,$/m);
+    expect(data).not.toMatch(/lastMessageAt: dates\.lastSeenAt \?\? now/);
+  });
+
+  test("a stale row still fills what only ever fills", () => {
+    // The number, lead id and ad sticker are not gated on freshness: none of
+    // them can move a lead backwards.
+    const update = INGEST.slice(INGEST.indexOf("await scoped.update({"));
+    const data = update.slice(0, update.indexOf("select:"));
+    expect(data).toMatch(/\.\.\.\(phoneEncrypted \? \{ phoneEncrypted \} : \{\}\)/);
+    expect(data).toMatch(/\.\.\.referralFields/);
+    expect(data).toMatch(/keepExistingLeadId/);
+  });
+
+  test("a webhook is dated by its arrival, so it always applies", () => {
+    // The webhook path passes no dates; `now` is later than anything stored.
+    expect(INGEST).toMatch(/const seenAt = dates\.lastSeenAt \?\? now;/);
+  });
+
   test("a failed encryption never stops a lead being recorded", () => {
     // The number is display data; the hash is the identity. Losing the number
     // must not lose the lead or its booking join.
