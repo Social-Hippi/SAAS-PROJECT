@@ -1946,6 +1946,15 @@ model GoogleAdsCampaignSnapshot {
   /// phoneCalls: calls received from call assets and call-only ads, as Google
   /// counts them. A raw call count, not a conversion.
   phoneCalls             Int?
+  /// callClicks: TAPS on a call button in the ad — clicks segmented by click type
+  /// CALLS, MOBILE_CALL_TRACKING and LOCATION_FORMAT_CALL. A tap counts whether
+  /// or not the call then connected, so this is not phoneCalls and the two are
+  /// never added: one guest can tap, connect, and appear in both. CALL_TRACKING
+  /// ("manually dialed") is excluded because a typed number is not a tap.
+  ///
+  /// 0 means the query ran and Google recorded no call taps that day. NULL means
+  /// the query did not run or failed — a gap, never a zero.
+  callClicks             Int?
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
