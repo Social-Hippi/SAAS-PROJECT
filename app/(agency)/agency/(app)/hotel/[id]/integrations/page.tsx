@@ -548,7 +548,13 @@ export default async function HotelIntegrationsPage({
   const lbpRange = krayaView != null ? resolveSectionRange(lbpState, hotel.timezone) : null;
   const leadBreakdown =
     lbpRange != null
-      ? await loadLeadBreakdown(hotel.agencyId, hotel.id, lbpRange.since, lbpRange.until)
+      ? await loadLeadBreakdown(
+          hotel.agencyId,
+          hotel.id,
+          lbpRange.since,
+          lbpRange.until,
+          hotel.timezone,
+        )
       : null;
 
   // ── WhatsApp booking values ────────────────────────────────────────────────
