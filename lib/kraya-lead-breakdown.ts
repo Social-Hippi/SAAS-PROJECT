@@ -37,10 +37,31 @@ import { prisma } from "@/lib/prisma";
 /** Kraya's inbox pipeline: leads not yet filed under a property. */
 export const UNSORTED_PIPELINE = "Leads";
 
+/**
+ * Leads created in the same minute at or above this count were LOADED into
+ * Kraya in bulk, not received as enquiries.
+ *
+ * A bulk load stamps every contact with the moment it was loaded, so their
+ * "first message" is the load, not the guest. On Aster, 1,980 contacts were
+ * created in 12:55–12:56 IST on 25 Jul and 27 at 21:54 on 3 Aug, while real
+ * enquiries never exceeded 2 in any minute. Ten is five times the busiest real
+ * minute: no burst of genuine enquiries reaches it, and both loads clear it.
+ */
+export const BULK_LOAD_PER_MINUTE = 10;
+
 export type BucketRow = {
   bucket: string;
   fromAds: number;
   all: number;
+};
+
+/** Contacts loaded into Kraya in bulk — shown on their own line, not counted above. */
+export type BulkLoad = {
+  count: number;
+  /** Of those, how many later produced a booking. */
+  booked: number;
+  /** Each day a load happened, in the property's timezone ("25 Jul 2026"). */
+  days: string[];
 };
 
 export type PropertyBreakdown = {
@@ -53,6 +74,8 @@ export type PropertyBreakdown = {
   bookedFromAds: number;
   bookedAll: number;
   buckets: BucketRow[];
+  /** Null when the window holds no bulk-loaded contacts for this property. */
+  bulk: BulkLoad | null;
 };
 
 type Row = {
@@ -63,6 +86,21 @@ type Row = {
   booked_from_ads: bigint;
   booked_all: bigint;
 };
+
+type BulkRow = {
+  pipeline: string | null;
+  n: bigint;
+  booked: bigint;
+  days: string[];
+};
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "2026-07-25" → "25 Jul 2026". */
+export function dayLabel(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${d} ${MONTHS[m - 1]} ${y}`;
+}
 
 /** What the agency reads above a property's box. */
 export function propertyLabel(pipeline: string | null): string {
@@ -91,27 +129,38 @@ export function shapeBreakdown(
     bookedFromAds: number;
     bookedAll: number;
   }>,
+  bulkRows: ReadonlyArray<{ pipeline: string | null; count: number; booked: number; days: string[] }> = [],
 ): PropertyBreakdown[] {
   const byPipeline = new Map<string | null, PropertyBreakdown>();
-  for (const r of rows) {
-    let box = byPipeline.get(r.pipeline);
+  const boxFor = (pipeline: string | null): PropertyBreakdown => {
+    let box = byPipeline.get(pipeline);
     if (!box) {
       box = {
-        pipeline: r.pipeline,
-        label: propertyLabel(r.pipeline),
+        pipeline,
+        label: propertyLabel(pipeline),
         fromAds: 0,
         all: 0,
         bookedFromAds: 0,
         bookedAll: 0,
         buckets: [],
+        bulk: null,
       };
-      byPipeline.set(r.pipeline, box);
+      byPipeline.set(pipeline, box);
     }
+    return box;
+  };
+  for (const r of rows) {
+    const box = boxFor(r.pipeline);
     box.fromAds += r.fromAds;
     box.all += r.all;
     box.bookedFromAds += r.bookedFromAds;
     box.bookedAll += r.bookedAll;
     box.buckets.push({ bucket: r.bucket ?? "No bucket recorded", fromAds: r.fromAds, all: r.all });
+  }
+  // A property can hold ONLY bulk-loaded contacts in a window; it still gets a
+  // box, so the load is never silently absent.
+  for (const b of bulkRows) {
+    if (b.count > 0) boxFor(b.pipeline).bulk = { count: b.count, booked: b.booked, days: b.days };
   }
 
   for (const box of byPipeline.values()) {
@@ -136,8 +185,23 @@ export async function loadLeadBreakdown(
   hotelClientId: string,
   since: Date,
   until: Date,
+  /** The property's timezone — used to name the day a bulk load happened. */
+  timezone: string,
 ): Promise<PropertyBreakdown[]> {
+  // Minutes in which this hotel's leads were created in bulk, found INSIDE each
+  // query rather than passed in: a list of timestamps handed back as a parameter
+  // is re-cast through the session timezone, and a mismatch there would make
+  // the exclusion match nothing — silently. Computed over ALL the hotel's
+  // leads, not just the window, so a load is recognised however the window
+  // cuts it.
   const rows = await prisma.$queryRaw<Row[]>`
+    WITH bulk_minutes AS (
+      SELECT date_trunc('minute', "firstMessageAt") AS m
+        FROM "WhatsAppConversation"
+       WHERE "agencyId" = ${agencyId} AND "hotelClientId" = ${hotelClientId}
+       GROUP BY 1
+      HAVING COUNT(*) >= ${BULK_LOAD_PER_MINUTE}
+    )
     SELECT c."pipelineName" AS pipeline,
            c."stageName"    AS bucket,
            COUNT(*) FILTER (WHERE c."sourceId" IS NOT NULL)            AS from_ads,
@@ -162,7 +226,38 @@ export async function loadLeadBreakdown(
        AND c."hotelClientId" = ${hotelClientId}
        AND c."firstMessageAt" >= ${since}
        AND c."firstMessageAt" <= ${until}
+       -- Bulk-loaded contacts are shown on their own line instead.
+       AND date_trunc('minute', c."firstMessageAt") NOT IN (SELECT m FROM bulk_minutes)
      GROUP BY c."pipelineName", c."stageName"`;
+
+  const bulk = await prisma.$queryRaw<BulkRow[]>`
+    WITH bulk_minutes AS (
+      SELECT date_trunc('minute', "firstMessageAt") AS m
+        FROM "WhatsAppConversation"
+       WHERE "agencyId" = ${agencyId} AND "hotelClientId" = ${hotelClientId}
+       GROUP BY 1
+      HAVING COUNT(*) >= ${BULK_LOAD_PER_MINUTE}
+    )
+    SELECT c."pipelineName" AS pipeline,
+           COUNT(*) AS n,
+           COUNT(*) FILTER (WHERE EXISTS (
+             SELECT 1 FROM "Booking" bk
+              WHERE bk."agencyId" = c."agencyId"
+                AND bk."hotelClientId" = c."hotelClientId"
+                AND bk.provider = 'kraya'
+                AND bk."guestPhoneHash" = c."phoneHash"
+                AND bk.status NOT IN ('CANCELLED', 'REFUNDED'))) AS booked,
+           -- ISO, so the days sort chronologically; named for display below.
+           ARRAY_AGG(DISTINCT to_char(
+             (c."firstMessageAt" AT TIME ZONE 'UTC') AT TIME ZONE ${timezone}, 'YYYY-MM-DD'
+           )) AS days
+      FROM "WhatsAppConversation" c
+     WHERE c."agencyId" = ${agencyId}
+       AND c."hotelClientId" = ${hotelClientId}
+       AND c."firstMessageAt" >= ${since}
+       AND c."firstMessageAt" <= ${until}
+       AND date_trunc('minute', c."firstMessageAt") IN (SELECT m FROM bulk_minutes)
+     GROUP BY c."pipelineName"`;
 
   return shapeBreakdown(
     rows.map((r) => ({
@@ -172,6 +267,12 @@ export async function loadLeadBreakdown(
       all: Number(r.all_leads),
       bookedFromAds: Number(r.booked_from_ads),
       bookedAll: Number(r.booked_all),
+    })),
+    bulk.map((b) => ({
+      pipeline: b.pipeline,
+      count: Number(b.n),
+      booked: Number(b.booked),
+      days: [...b.days].sort().map(dayLabel),
     })),
   );
 }

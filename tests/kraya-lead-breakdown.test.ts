@@ -2,7 +2,9 @@ import { describe, expect, test } from "vitest";
 
 import { readCode } from "./helpers/read-code";
 import {
+  BULK_LOAD_PER_MINUTE,
   UNSORTED_PIPELINE,
+  dayLabel,
   propertyLabel,
   shapeBreakdown,
 } from "@/lib/kraya-lead-breakdown";
@@ -150,7 +152,75 @@ describe("5. counts only — safe for every agency member", () => {
   });
 
   test("the screen states both limits of 'from ads'", () => {
-    expect(VIEW).toMatch(/tracked since 11 Sep 2026/);
-    expect(VIEW).toMatch(/Google ad through the website is not counted as from ads/);
+    // Whitespace-insensitive: the formatter re-wraps JSX text freely.
+    const text = VIEW.replace(/\s+/g, " ");
+    expect(text).toMatch(/tracked since 11 Sep 2026/);
+    expect(text).toMatch(/Google ad through the website is not counted as from ads/);
+  });
+});
+
+describe("6. contacts loaded into Kraya in bulk are on their own line", () => {
+  // A bulk load stamps every contact with the moment it was loaded, so their
+  // "first message" is the load, not the guest. On Aster: 1,980 contacts in
+  // 12:55–12:56 IST on 25 Jul and 27 at 21:54 on 3 Aug, while real enquiries
+  // never exceeded 2 in a minute.
+
+  test("the threshold sits well above any real minute", () => {
+    expect(BULK_LOAD_PER_MINUTE).toBe(10);
+  });
+
+  test("a bulk load is carried separately, never added to the counts", () => {
+    const [box] = shapeBreakdown(
+      [row(UNSORTED_PIPELINE, "New Lead", 8, 376)],
+      [{ pipeline: UNSORTED_PIPELINE, count: 1979, booked: 0, days: ["25 Jul 2026"] }],
+    );
+    expect(box.all).toBe(376);
+    expect(box.fromAds).toBe(8);
+    expect(box.bulk).toEqual({ count: 1979, booked: 0, days: ["25 Jul 2026"] });
+  });
+
+  test("a property holding only bulk-loaded contacts still gets a box", () => {
+    const boxes = shapeBreakdown([], [{ pipeline: "Coffeeberry", count: 27, booked: 0, days: ["3 Aug 2026"] }]);
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0].all).toBe(0);
+    expect(boxes[0].bulk?.count).toBe(27);
+  });
+
+  test("no box has a bulk line when nothing was bulk-loaded", () => {
+    const [box] = shapeBreakdown([row("3hills", "Qualified", 1, 2)]);
+    expect(box.bulk).toBeNull();
+  });
+
+  test("days are named chronologically, not alphabetically", () => {
+    // "10 Aug" sorts before "3 Aug" as text; ISO dates are sorted first.
+    expect(dayLabel("2026-07-25")).toBe("25 Jul 2026");
+    expect(["2026-08-10", "2026-08-03"].sort().map(dayLabel)).toEqual(["3 Aug 2026", "10 Aug 2026"]);
+    expect(LOADER).toMatch(/days: \[\.\.\.b\.days\]\.sort\(\)\.map\(dayLabel\)/);
+  });
+
+  test("the main counts exclude bulk minutes; the bulk line counts only them", () => {
+    expect(LOADER).toMatch(/HAVING COUNT\(\*\) >= \$\{BULK_LOAD_PER_MINUTE\}/);
+    expect(LOADER).toMatch(/date_trunc\('minute', c\."firstMessageAt"\) NOT IN \(SELECT m FROM bulk_minutes\)/);
+    expect(LOADER).toMatch(/date_trunc\('minute', c\."firstMessageAt"\) IN \(SELECT m FROM bulk_minutes\)/);
+  });
+
+  test("bulk minutes are found in the query, not passed back in as a parameter", () => {
+    // A timestamp list re-cast through the session timezone could silently
+    // match nothing.
+    expect(LOADER).not.toMatch(/::timestamp\[\]/);
+    expect((LOADER.match(/WITH bulk_minutes AS/g) ?? []).length).toBe(2);
+  });
+
+  test("the bulk minutes are judged across all the hotel's leads, tenant-scoped", () => {
+    const cte = LOADER.slice(LOADER.indexOf("WITH bulk_minutes AS"));
+    const body = cte.slice(0, cte.indexOf("HAVING"));
+    expect(body).toMatch(/"agencyId" = \$\{agencyId\} AND "hotelClientId" = \$\{hotelClientId\}/);
+    expect(body).not.toMatch(/since|until/);
+  });
+
+  test("the screen says what they are and that they are not counted", () => {
+    const text = VIEW.replace(/\s+/g, " ");
+    expect(text).toMatch(/contacts loaded into Kraya in bulk/);
+    expect(text).toMatch(/not enquiries, so not counted above/);
   });
 });
