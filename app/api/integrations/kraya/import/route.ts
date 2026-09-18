@@ -1,4 +1,5 @@
 import { revalidatePath } from "next/cache";
+import { safeTimeZone } from "@/lib/timezone";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { agencyScoped } from "@/lib/tenant";
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
 
   const hotel = await agencyScoped(prisma.hotelClient).findFirst({
     where: { id: hotelId },
-    select: { id: true, agencyId: true },
+    select: { id: true, agencyId: true, timezone: true },
   });
   if (!hotel) return Response.json({ error: "Hotel not found" }, { status: 404 });
 
@@ -67,6 +68,9 @@ export async function POST(request: Request) {
     parsed = parseKrayaExport(
       Buffer.from(await file.arrayBuffer()),
       connection.confirmedStageName,
+      // Kraya's export times are local wall-clock with no offset; read them in
+      // the property's own timezone, not UTC.
+      safeTimeZone(hotel.timezone),
     );
   } catch {
     return Response.json(
