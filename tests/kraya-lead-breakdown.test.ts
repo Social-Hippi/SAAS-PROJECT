@@ -3,7 +3,9 @@ import { describe, expect, test } from "vitest";
 import { readCode } from "./helpers/read-code";
 import {
   BULK_LOAD_PER_MINUTE,
+  NONE_PARAM,
   UNSORTED_PIPELINE,
+  adPlacement,
   dayLabel,
   propertyLabel,
   shapeBreakdown,
@@ -133,8 +135,16 @@ describe("4. what the query counts", () => {
 });
 
 describe("5. counts only — safe for every agency member", () => {
-  test("no guest number, lead id or name is read", () => {
-    expect(LOADER).not.toMatch(/phoneEncrypted|phoneLast4|krayaLeadId|guestName/);
+  test("the counts read no guest number, lead id or name", () => {
+    // Scoped to the counts loader: the admin-only guest list below it reads the
+    // number on purpose, one opened cell at a time.
+    // Ends where the counts loader ends: the guest-list helpers follow it.
+    const counts = LOADER.slice(
+      LOADER.indexOf("export async function loadLeadBreakdown"),
+      LOADER.indexOf("export const NONE_PARAM"),
+    );
+    expect(counts).not.toMatch(/phoneEncrypted|phoneLast4|krayaLeadId|guestName/);
+    expect(LOADER).not.toMatch(/krayaLeadId|guestName/);
   });
 
   test("shown whenever Kraya is connected, not gated on admin", () => {
@@ -208,7 +218,8 @@ describe("6. contacts loaded into Kraya in bulk are on their own line", () => {
     // A timestamp list re-cast through the session timezone could silently
     // match nothing.
     expect(LOADER).not.toMatch(/::timestamp\[\]/);
-    expect((LOADER.match(/WITH bulk_minutes AS/g) ?? []).length).toBe(2);
+    // Counts, the bulk line, and the guest list — each finds its own.
+    expect((LOADER.match(/WITH bulk_minutes AS/g) ?? []).length).toBe(3);
   });
 
   test("the bulk minutes are judged across all the hotel's leads, tenant-scoped", () => {
@@ -222,5 +233,87 @@ describe("6. contacts loaded into Kraya in bulk are on their own line", () => {
     const text = VIEW.replace(/\s+/g, " ");
     expect(text).toMatch(/contacts loaded into Kraya in bulk/);
     expect(text).toMatch(/not enquiries, so not counted above/);
+  });
+});
+
+describe("7. opening a From-ads count to see the guests behind it", () => {
+  test("each row carries Kraya's raw bucket, so a missing one can still be opened", () => {
+    const [box] = shapeBreakdown([row("3hills", null, 1, 1), row("3hills", "Junk", 2, 3)]);
+    const none = box.buckets.find((b) => b.bucket === "No bucket recorded")!;
+    expect(none.raw).toBeNull();
+    expect(box.buckets.find((b) => b.bucket === "Junk")!.raw).toBe("Junk");
+  });
+
+  test("the list uses the box's own rules, so its length equals the count clicked", () => {
+    const fn = LOADER.slice(LOADER.indexOf("export async function loadBucketAdLeads"));
+    expect(fn).toMatch(/c\."sourceId" IS NOT NULL/);
+    expect(fn).toMatch(/c\."firstMessageAt" >= \$\{since\}/);
+    expect(fn).toMatch(/c\."firstMessageAt" <= \$\{until\}/);
+    expect(fn).toMatch(/NOT IN \(SELECT m FROM bulk_minutes\)/);
+    // IS NOT DISTINCT FROM, so a null pipeline or bucket matches a null.
+    expect(fn).toMatch(/c\."pipelineName" IS NOT DISTINCT FROM \$\{pipeline\}/);
+    expect(fn).toMatch(/c\."stageName" IS NOT DISTINCT FROM \$\{bucket\}/);
+  });
+
+  test("the list query is tenant-scoped everywhere", () => {
+    const fn = LOADER.slice(LOADER.indexOf("export async function loadBucketAdLeads"));
+    expect(fn).toMatch(/"agencyId" = \$\{agencyId\} AND "hotelClientId" = \$\{hotelClientId\}/);
+    expect(fn).toMatch(/c\."agencyId" = \$\{agencyId\}/);
+    expect(fn).toMatch(/bk\."agencyId" = c\."agencyId"/);
+  });
+
+  test("numbers load only for an admin, and only for the one cell asked for", () => {
+    expect(PAGE).toMatch(/const isAdmin = member\.role === "admin";/);
+    const page = PAGE.replace(/\s+/g, " ");
+    expect(page).toMatch(
+      /isAdmin && lbpRange != null && openP != null && openB != null \? await loadBucketAdLeads\(/,
+    );
+    // Non-admins get no drill at all — the counts stay plain numbers.
+    expect(PAGE).toMatch(/drill=\{\s*isAdmin\s*\?/);
+    // The breakdown's own loader still reads no contact detail.
+    const counts = LOADER.slice(
+      LOADER.indexOf("export async function loadLeadBreakdown"),
+      LOADER.indexOf("export const NONE_PARAM"),
+    );
+    expect(counts).not.toMatch(/phoneEncrypted/);
+  });
+
+  test("a count is only a link when there is someone to show and permission to show them", () => {
+    const view = VIEW.replace(/\s+/g, " ");
+    expect(view).toMatch(/href=\{ drill && b\.fromAds > 0 \? drill\.hrefFor\(p\.pipeline, b\.raw\) : null \}/);
+  });
+
+  test("each guest: the number with a Copy button, and the ad they came from", () => {
+    expect(VIEW).toMatch(/<CopyButton\s+text=\{l\.phone\}/);
+    expect(VIEW).toMatch(/text=\{numbers\.join\("\\n"\)\}/);
+    expect(VIEW).toMatch(/l\.headline/);
+    expect(VIEW).toMatch(/· ad \{l\.adId\}/);
+    expect(VIEW).toMatch(/l\.placement/);
+  });
+
+  test("the FULL ad id is shown — every ad here ends in the same digits", () => {
+    expect(LOADER).toMatch(/adId: r\.sourceId,/);
+    expect(LOADER).not.toMatch(/sourceId\.slice\(-4\)/);
+  });
+
+  test("where an ad ran is read from its link", () => {
+    expect(adPlacement("https://www.instagram.com/p/abc/")).toBe("Instagram");
+    expect(adPlacement("https://fb.me/xyz")).toBe("Facebook");
+    expect(adPlacement("https://www.facebook.com/ads/1")).toBe("Facebook");
+    expect(adPlacement("https://wa.me/919000000000")).toBe("WhatsApp link");
+    expect(adPlacement("https://example.org/x")).toBe("example.org");
+    expect(adPlacement(null)).toBeNull();
+    expect(adPlacement("not a url")).toBeNull();
+  });
+
+  test("only http(s) ad links are ever rendered as links", () => {
+    const fn = LOADER.slice(LOADER.indexOf("function safeUrl"));
+    expect(fn.slice(0, fn.indexOf("\n}\n"))).toMatch(/u\.protocol === "https:" \|\| u\.protocol === "http:"/);
+    expect(VIEW).toMatch(/rel="noopener noreferrer"/);
+  });
+
+  test("a null pipeline or bucket survives the URL", () => {
+    expect(NONE_PARAM).toBe("__none__");
+    expect(PAGE).toMatch(/const fromParam = \(v: string\) => \(v === NONE_PARAM \? null : v\);/);
   });
 });
