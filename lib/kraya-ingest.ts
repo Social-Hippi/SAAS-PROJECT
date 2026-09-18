@@ -149,8 +149,26 @@ export async function ingestKrayaLead(
       headline: true,
       firstMessageAt: true,
       krayaLeadId: true,
+      lastMessageAt: true,
     },
   });
+
+  // A STALE ROW MUST NOT REWIND A LEAD. An export is a snapshot from whenever it
+  // was generated, and each row says when its stage last changed; the webhook
+  // tells us the moment a stage changes. So an export generated before a
+  // webhook arrived describes an OLDER state — and applying it unconditionally
+  // moves the lead backwards. On 18 Sep an export made before 17 Sep put a
+  // guest the team had moved to "Booking Confirmed" back into "Interested -
+  // Follow-Up", because that is where its row, dated 11 Sep, left them.
+  //
+  // So the stage, the pipeline and the last-seen time are written only when
+  // this row is at least as recent as what is already stored. Everything that
+  // only ever FILLS — the number, the lead id, the ad sticker — is unaffected.
+  // A webhook carries no timestamp and is dated by its arrival, so it is always
+  // current and always applies.
+  const seenAt = dates.lastSeenAt ?? now;
+  const isStaleRow =
+    existing?.lastMessageAt != null && seenAt.getTime() < existing.lastMessageAt.getTime();
 
   const ref = lead.referral;
 
@@ -205,9 +223,9 @@ export async function ingestKrayaLead(
             // webhook — the row keeps whichever handle it has.
             ...(phoneLast4 ? { phoneLast4 } : {}),
             ...(phoneEncrypted ? { phoneEncrypted } : {}),
-            stageName: lead.stage,
-            pipelineName: lead.pipeline,
-            lastMessageAt: dates.lastSeenAt ?? now,
+            ...(isStaleRow
+              ? {}
+              : { stageName: lead.stage, pipelineName: lead.pipeline, lastMessageAt: seenAt }),
             messageCount: { increment: 1 },
             ...referralFields,
           },
