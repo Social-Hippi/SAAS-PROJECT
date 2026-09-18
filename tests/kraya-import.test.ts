@@ -38,8 +38,11 @@ describe("1. dating a booking from its own history", () => {
   test("uses the FIRST time it reached the stage", () => {
     // A lead moved out of the confirmed stage and back again was booked on the
     // earlier date; the later one is a correction, not a second booking.
+    // "2026-08-18 18:32:54" is IST wall-clock time, so the instant is 13:02:54
+    // UTC. This assertion used to expect 18:32:54Z — it pinned the bug that
+    // stored every imported time 5 h 30 min late.
     expect(confirmedAtFromHistory(HISTORY, "Booking Confirmed")?.toISOString()).toBe(
-      "2026-08-18T18:32:54.000Z",
+      "2026-08-18T13:02:54.000Z",
     );
   });
 
@@ -77,10 +80,15 @@ describe("2. the parser's rules", () => {
     expect(IMPORT).toMatch(/reason: "no phone number"/);
   });
 
-  test("timestamps are read as UTC rather than guessed at", () => {
-    // Kraya writes local wall-clock with no zone. Guessing would shift every
-    // booking by hours; the property's timezone is applied at the report edge.
-    expect(IMPORT).toMatch(/Date\.UTC\(/);
+  test("timestamps are read in the property's timezone, not as UTC", () => {
+    // Kraya writes local wall-clock with no zone. This once read it as UTC and
+    // left the timezone to "the report edge" — which only works if every Kraya
+    // time comes from an export. The webhook stamps real instants, and the two
+    // are compared (which stage is newer; did the first message precede the
+    // booking), so a stored export time must be the real instant too. Read as
+    // UTC, an IST property's times were stored 5 h 30 min late.
+    expect(IMPORT).not.toMatch(/Date\.UTC\(\+m\[1\]/);
+    expect(IMPORT).toMatch(/utcFromWallClock\(/);
   });
 });
 

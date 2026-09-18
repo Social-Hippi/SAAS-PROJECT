@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 
+import { utcFromWallClock } from "@/lib/timezone";
 import type { KrayaLead } from "@/lib/kraya-webhook";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -124,14 +125,26 @@ const str = (v: unknown): string | null => {
  * than one dated consistently. The property's own timezone is applied later, at
  * the reporting boundary, exactly as platform data is.
  */
-function parseDate(v: unknown): Date | null {
+/**
+ * The timezone Kraya writes export times in when a caller does not say.
+ *
+ * Kraya writes "2026-09-17 07:22:18" — local wall-clock time with NO offset.
+ * For these Indian properties that local time is IST. Reading it as UTC, as
+ * this parser once did, stored every imported time 5 h 30 min LATE: a stage the
+ * webhook recorded at 01:52:18 UTC came back from the export as 07:22:18 UTC,
+ * and 257 leads that first messaged between 6:30 pm and midnight were dated to
+ * the following day. Callers pass the property's own timezone; this is only the
+ * fallback.
+ */
+export const KRAYA_EXPORT_DEFAULT_TIMEZONE = "Asia/Kolkata";
+
+function parseDate(v: unknown, tz: string): Date | null {
   const s = str(v);
   if (!s) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(s);
   if (!m) return null;
-  const d = new Date(
-    Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]),
-  );
+  // Wall-clock time in `tz`, converted to the instant it names — DST-safe.
+  const d = utcFromWallClock(+m[1], +m[2], +m[3], +m[4], +m[5], +m[6], 0, tz);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
@@ -146,6 +159,7 @@ function parseDate(v: unknown): Date | null {
 export function confirmedAtFromHistory(
   historyJson: unknown,
   confirmedStageName: string | null,
+  tz: string = KRAYA_EXPORT_DEFAULT_TIMEZONE,
 ): Date | null {
   const raw = str(historyJson);
   if (!raw || !confirmedStageName) return null;
@@ -164,7 +178,7 @@ export function confirmedAtFromHistory(
     if (e == null || typeof e !== "object") continue;
     const row = e as Record<string, unknown>;
     if (str(row.updated)?.trim().toLowerCase() !== wanted) continue;
-    const d = parseDate(row.updated_at);
+    const d = parseDate(row.updated_at, tz);
     if (d) dates.push(d);
   }
   if (dates.length === 0) return null;
@@ -180,6 +194,8 @@ export function confirmedAtFromHistory(
 export function parseKrayaExport(
   file: ArrayBuffer | Buffer,
   confirmedStageName: string | null,
+  /** The property's timezone — the one Kraya's wall-clock times are written in. */
+  timezone: string = KRAYA_EXPORT_DEFAULT_TIMEZONE,
 ): ImportResult {
   // bookFiles keeps the original part contents, which is the only place an
   // 18-digit ad id survives intact — see exactNumericCells above.
@@ -274,9 +290,9 @@ export function parseKrayaExport(
               headline: str(row[HEADERS.headline]),
             }
           : null,
-      createdAt: parseDate(row[HEADERS.createdAt]),
-      stageUpdatedAt: parseDate(row[HEADERS.stageUpdatedAt]),
-      confirmedAt: confirmedAtFromHistory(row[HEADERS.history], confirmedStageName),
+      createdAt: parseDate(row[HEADERS.createdAt], timezone),
+      stageUpdatedAt: parseDate(row[HEADERS.stageUpdatedAt], timezone),
+      confirmedAt: confirmedAtFromHistory(row[HEADERS.history], confirmedStageName, timezone),
     });
   });
 

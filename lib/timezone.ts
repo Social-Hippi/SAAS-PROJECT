@@ -92,7 +92,7 @@ function offsetMsAt(date: Date, tz: string): number {
  * Asia/Kolkata has no DST and converges on the first pass; the second exists so
  * this stays correct for a property that later sets a DST-observing zone.
  */
-function utcFromWallClock(
+export function utcFromWallClock(
   year: number, month: number, day: number,
   hour: number, minute: number, second: number, ms: number,
   tz: string,
