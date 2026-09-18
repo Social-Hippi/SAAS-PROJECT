@@ -1,6 +1,7 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
+import { decryptToken } from "@/lib/encryption";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kraya leads, by property and bucket.
@@ -50,7 +51,10 @@ export const UNSORTED_PIPELINE = "Leads";
 export const BULK_LOAD_PER_MINUTE = 10;
 
 export type BucketRow = {
+  /** For display — "No bucket recorded" when Kraya sent none. */
   bucket: string;
+  /** Kraya's value verbatim (null when none), for opening this row. */
+  raw: string | null;
   fromAds: number;
   all: number;
 };
@@ -155,7 +159,12 @@ export function shapeBreakdown(
     box.all += r.all;
     box.bookedFromAds += r.bookedFromAds;
     box.bookedAll += r.bookedAll;
-    box.buckets.push({ bucket: r.bucket ?? "No bucket recorded", fromAds: r.fromAds, all: r.all });
+    box.buckets.push({
+      bucket: r.bucket ?? "No bucket recorded",
+      raw: r.bucket,
+      fromAds: r.fromAds,
+      all: r.all,
+    });
   }
   // A property can hold ONLY bulk-loaded contacts in a window; it still gets a
   // box, so the load is never silently absent.
@@ -275,4 +284,142 @@ export async function loadLeadBreakdown(
       days: [...b.days].sort().map(dayLabel),
     })),
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The ad leads behind one "From ads" count — for opening a bucket and finding
+// each guest in Kraya.
+//
+// ADMIN-ONLY, and loaded only for the one cell that was clicked: it carries the
+// guest's full number. Every other rule is the breakdown's own — same window,
+// same bulk-load exclusion, same pipeline and bucket — so the list for a "2"
+// always holds exactly those 2 people.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Stands in for a null pipeline or bucket in a URL. */
+export const NONE_PARAM = "__none__";
+
+export type BucketAdLead = {
+  /** Full number as Kraya sent it; null if it has not arrived yet. */
+  phone: string | null;
+  phoneLast4: string | null;
+  firstMessageAt: Date;
+  /** The ad's headline as the guest saw it. */
+  headline: string | null;
+  /** Where the ad ran, from its link: Instagram, Facebook, or a WhatsApp link. */
+  placement: string | null;
+  adUrl: string | null;
+  /**
+   * The FULL Meta ad id. Several ads share a headline ("Chat with us" runs on
+   * four), and every ad id in this account ends in the same digits (all eight
+   * end "0234"), so neither the headline nor a short tail identifies the ad.
+   * The full id does, and pastes straight into Ads Manager's search.
+   */
+  adId: string | null;
+  booked: boolean;
+};
+
+/** Where the ad ran, read from its link's host. */
+export function adPlacement(url: string | null): string | null {
+  if (!url) return null;
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  if (host.endsWith("instagram.com")) return "Instagram";
+  if (host === "fb.me" || host.endsWith("facebook.com")) return "Facebook";
+  if (host === "wa.me" || host.endsWith("whatsapp.com")) return "WhatsApp link";
+  return host;
+}
+
+/** An ad link, or null — only http(s), so nothing else is ever rendered as a link. */
+function safeUrl(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function decryptPhone(encrypted: string | null): string | null {
+  if (!encrypted) return null;
+  try {
+    return decryptToken(encrypted).reveal();
+  } catch {
+    return null;
+  }
+}
+
+type AdLeadRow = {
+  phoneEncrypted: string | null;
+  phoneLast4: string | null;
+  firstMessageAt: Date;
+  headline: string | null;
+  sourceUrl: string | null;
+  sourceId: string | null;
+  booked: boolean;
+};
+
+/**
+ * The ad leads counted in one property × bucket cell. `pipeline` and `bucket`
+ * are Kraya's values verbatim; null matches a lead that has none.
+ *
+ * Multi-tenant: agencyId is bound into every clause, including the bulk-minute
+ * CTE and the booking join.
+ */
+export async function loadBucketAdLeads(
+  agencyId: string,
+  hotelClientId: string,
+  since: Date,
+  until: Date,
+  pipeline: string | null,
+  bucket: string | null,
+): Promise<BucketAdLead[]> {
+  const rows = await prisma.$queryRaw<AdLeadRow[]>`
+    WITH bulk_minutes AS (
+      SELECT date_trunc('minute', "firstMessageAt") AS m
+        FROM "WhatsAppConversation"
+       WHERE "agencyId" = ${agencyId} AND "hotelClientId" = ${hotelClientId}
+       GROUP BY 1
+      HAVING COUNT(*) >= ${BULK_LOAD_PER_MINUTE}
+    )
+    SELECT c."phoneEncrypted", c."phoneLast4", c."firstMessageAt",
+           c."headline", c."sourceUrl", c."sourceId",
+           EXISTS (
+             SELECT 1 FROM "Booking" bk
+              WHERE bk."agencyId" = c."agencyId"
+                AND bk."hotelClientId" = c."hotelClientId"
+                AND bk.provider = 'kraya'
+                AND bk."guestPhoneHash" = c."phoneHash"
+                AND bk.status NOT IN ('CANCELLED', 'REFUNDED')
+           ) AS booked
+      FROM "WhatsAppConversation" c
+     WHERE c."agencyId" = ${agencyId}
+       AND c."hotelClientId" = ${hotelClientId}
+       AND c."firstMessageAt" >= ${since}
+       AND c."firstMessageAt" <= ${until}
+       AND c."sourceId" IS NOT NULL
+       -- IS NOT DISTINCT FROM, so a null pipeline or bucket matches a null.
+       AND c."pipelineName" IS NOT DISTINCT FROM ${pipeline}
+       AND c."stageName" IS NOT DISTINCT FROM ${bucket}
+       AND date_trunc('minute', c."firstMessageAt") NOT IN (SELECT m FROM bulk_minutes)
+     ORDER BY c."firstMessageAt" DESC`;
+
+  return rows.map((r) => {
+    const adUrl = safeUrl(r.sourceUrl);
+    return {
+      phone: decryptPhone(r.phoneEncrypted),
+      phoneLast4: r.phoneLast4,
+      firstMessageAt: r.firstMessageAt,
+      headline: r.headline,
+      placement: adPlacement(adUrl),
+      adUrl,
+      adId: r.sourceId,
+      booked: r.booked,
+    };
+  });
 }

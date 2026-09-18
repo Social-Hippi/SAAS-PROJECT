@@ -33,7 +33,7 @@ import { BookingConnectionCard } from "./BookingConnectionCard";
 import { zonedDayString } from "@/lib/timezone";
 import { KrayaCard } from "./KrayaCard";
 import { countHeldPushes } from "@/lib/booking-push-capture";
-import { loadLeadBreakdown } from "@/lib/kraya-lead-breakdown";
+import { NONE_PARAM, loadBucketAdLeads, loadLeadBreakdown } from "@/lib/kraya-lead-breakdown";
 import { readSectionRange, resolveSectionRange, sectionRangeParams } from "@/lib/section-range";
 import { LeadBreakdown } from "./LeadBreakdown";
 import { SectionRangePicker } from "./SectionRangePicker";
@@ -556,6 +556,37 @@ export default async function HotelIntegrationsPage({
           hotel.timezone,
         )
       : null;
+
+  // ── One opened "From ads" cell: the guests behind the count ────────────────
+  // ADMIN ONLY — the list carries full numbers — and loaded only for the one
+  // cell in the URL, so numbers are never in the page until someone asks.
+  const isAdmin = member.role === "admin";
+  const openP = typeof sp.lbpP === "string" ? sp.lbpP : null;
+  const openB = typeof sp.lbpB === "string" ? sp.lbpB : null;
+  const fromParam = (v: string) => (v === NONE_PARAM ? null : v);
+  const openLeads =
+    isAdmin && lbpRange != null && openP != null && openB != null
+      ? await loadBucketAdLeads(
+          hotel.agencyId,
+          hotel.id,
+          lbpRange.since,
+          lbpRange.until,
+          fromParam(openP),
+          fromParam(openB),
+        )
+      : null;
+  // Opening a cell keeps both sections' ranges; opening the same one closes it.
+  const cellHref = (pipeline: string | null, bucket: string | null) => {
+    const p = pipeline ?? NONE_PARAM;
+    const b = bucket ?? NONE_PARAM;
+    const isOpen = p === openP && b === openB;
+    const q = new URLSearchParams({
+      ...sectionRangeParams("lbp", lbpState),
+      ...sectionRangeParams("wab", readSectionRange(sp, "wab")),
+      ...(isOpen ? {} : { lbpP: p, lbpB: b }),
+    });
+    return `/agency/hotel/${hotel.id}/integrations?${q.toString()}#${isOpen ? "kraya" : "lbp-open"}`;
+  };
 
   // ── WhatsApp booking values ────────────────────────────────────────────────
   //
@@ -1210,6 +1241,17 @@ export default async function HotelIntegrationsPage({
             <LeadBreakdown
               windowLabel={lbpRange.dateLabel}
               properties={leadBreakdown}
+              timezone={hotel.timezone}
+              drill={
+                isAdmin
+                  ? {
+                      hrefFor: cellHref,
+                      openPipeline: openP == null ? undefined : fromParam(openP),
+                      openBucket: openB == null ? undefined : fromParam(openB),
+                      leads: openLeads ?? [],
+                    }
+                  : null
+              }
               picker={
                 <SectionRangePicker
                   basePath={`/agency/hotel/${hotel.id}/integrations`}
