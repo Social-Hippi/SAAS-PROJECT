@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { decryptToken } from "@/lib/encryption";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The WhatsApp bookings an agency values by hand.
@@ -43,6 +44,12 @@ export type WhatsAppBookingValue = {
    */
   krayaLeadId: string | null;
   phoneLast4: string | null;
+  /**
+   * The guest's full number, decrypted, as Kraya sent it — for pasting into
+   * Kraya's search. Null until Kraya next sends this lead or an export is
+   * imported. ADMIN-ONLY: the only caller gates its load on the admin role.
+   */
+  phone: string | null;
   stageName: string | null;
   pipelineName: string | null;
   /** The conversation carries a real ad sourceId. A record, not a judgement. */
@@ -59,6 +66,7 @@ type Row = {
   bookedAt: Date;
   krayaLeadId: string | null;
   phoneLast4: string | null;
+  phoneEncrypted: string | null;
   stageName: string | null;
   pipelineName: string | null;
   traced: boolean;
@@ -92,6 +100,7 @@ export async function listWhatsAppBookingValues(
            b."agencyRevenueAt",
            l."krayaLeadId",
            l."phoneLast4",
+           l."phoneEncrypted",
            l."stageName",
            l."pipelineName",
            EXISTS (
@@ -107,7 +116,7 @@ export async function listWhatsAppBookingValues(
       -- and a plain join would return the booking once per conversation and
       -- multiply the list. LIMIT 1 keeps exactly one row per booking.
       LEFT JOIN LATERAL (
-        SELECT c."krayaLeadId", c."phoneLast4", c."stageName", c."pipelineName"
+        SELECT c."krayaLeadId", c."phoneLast4", c."phoneEncrypted", c."stageName", c."pipelineName"
           FROM "WhatsAppConversation" c
          WHERE c."agencyId" = b."agencyId"
            AND c."hotelClientId" = b."hotelClientId"
@@ -129,6 +138,7 @@ export async function listWhatsAppBookingValues(
     // the row to us and nothing to a person. Only a real Kraya id is displayable.
     krayaLeadId: r.krayaLeadId?.startsWith("export:") ? null : r.krayaLeadId,
     phoneLast4: r.phoneLast4,
+    phone: decryptPhone(r.phoneEncrypted),
     stageName: r.stageName,
     pipelineName: r.pipelineName,
     traced: r.traced,
@@ -136,6 +146,20 @@ export async function listWhatsAppBookingValues(
     amount: r.agencyRevenue == null ? null : Number(r.agencyRevenue),
     enteredAt: r.agencyRevenueAt,
   }));
+}
+
+/**
+ * The stored number, or null. Never throws: one unreadable row (a rotated key,
+ * a damaged value) must not take down the whole table — that row falls back to
+ * its last four digits.
+ */
+function decryptPhone(encrypted: string | null): string | null {
+  if (!encrypted) return null;
+  try {
+    return decryptToken(encrypted).reveal();
+  } catch {
+    return null;
+  }
 }
 
 /** A booking counts toward the report's WhatsApp ad revenue. */

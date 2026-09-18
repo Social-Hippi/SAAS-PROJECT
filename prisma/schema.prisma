@@ -2553,6 +2553,23 @@ model WhatsAppConversation {
   /// this, so it stays null there.
   phoneLast4 String?
 
+  /// The guest's number in FULL, AES-256-GCM encrypted (lib/encryption — the
+  /// same keys as provider tokens). Exists so the agency can copy it and find
+  /// the lead in Kraya, which cannot be searched by Kraya's own lead id.
+  ///
+  /// A deliberate reversal of the earlier "hash only" rule for Kraya, made at
+  /// the agency's request: a hash identifies nobody to a person, and the booking
+  /// value has to be read off the lead in Kraya. Kept safe by where it can go,
+  /// not by being unreadable:
+  ///   · ciphertext at rest, decrypted only server-side
+  ///   · loaded only for agency ADMINS, on the WhatsApp booking-values table
+  ///   · never on a hotel-facing view, never logged, never the join key
+  /// phoneHash remains the identity every join uses.
+  ///
+  /// Filled on every webhook and import, so a lead gains its number the next
+  /// time Kraya sends it or a fresh export is imported.
+  phoneEncrypted String? @db.Text
+
   /// The lead's current stage and pipeline, VERBATIM as Kraya spells them.
   ///
   /// Deliberately not mapped to an internal vocabulary. These are the hotel's own

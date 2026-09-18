@@ -560,6 +560,7 @@ export default async function HotelIntegrationsPage({
     bookedAtLabel: zonedDayString(b.bookedAt, hotel.timezone),
     krayaLeadId: b.krayaLeadId,
     phoneLast4: b.phoneLast4,
+    phone: b.phone,
     stageName: b.stageName,
     pipelineName: b.pipelineName,
     traced: b.traced,
