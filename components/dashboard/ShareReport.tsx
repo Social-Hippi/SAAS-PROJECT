@@ -143,6 +143,28 @@ function AdsView({
         )}
       </Group>
 
+      {/* Each platform against its own revenue only — no rupee is in both, so
+          the two are never meant to be added or averaged. Hidden with spend,
+          because a ROAS beside a known revenue figure discloses the spend. */}
+      {showAdSpend && (
+        <Group title="Return on ad spend by platform" columns={2}>
+          <Tile
+            label="Meta ROAS"
+            value={data.ads.metaRoas}
+            format="multiple"
+            caption={ADS_CAPTION.metaRoas}
+            staleNote={n.metaRoas}
+          />
+          <Tile
+            label="Google ROAS"
+            value={data.ads.googleRoas}
+            format="multiple"
+            caption={ADS_CAPTION.googleRoas}
+            staleNote={n.googleRoas}
+          />
+        </Group>
+      )}
+
       {showAdSpend && (
         <Group title="Advertising spend" columns={2}>
           <Tile
