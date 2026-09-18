@@ -65,8 +65,6 @@ export type AdsView = {
    * googleCalls and never added to it — a guest who taps and connects is in both.
    */
   googleCallClicks: MetricValue<number>;
-  /** Meta click-to-call, connected only. */
-  metaCalls: MetricValue<number>;
   /** Meta messaging conversations — WhatsApp, Instagram and Messenger together. */
   messagesGenerated: MetricValue<number>;
   /** Kraya leads whose conversation began at an ad. */
@@ -106,7 +104,6 @@ export const ADS_CAPTION = {
   googleCalls: "Calls connected from Google ads.",
   googleCallClicks:
     "Taps on the call button in your Google ads. A tap counts whether or not the call went through, so this is not the same as calls connected — the two are never added together.",
-  metaCalls: "Calls connected from Meta ads. Counted only once the call connects.",
   messagesGenerated:
     "Conversations started from your Meta ads. Meta reports WhatsApp, Instagram and Messenger together in this one figure.",
   enquiriesFromAds:
@@ -232,8 +229,8 @@ export async function loadShareViews(args: {
     scoped(prisma.metaToken).findFirst({ where: { hotelClientId }, select: { status: true } }),
     scoped(prisma.adCampaignSnapshot).aggregate({
       where: { hotelClientId, archived: false, date: dayFilter },
-      _sum: { messagingStarted: true, calls: true },
-      _count: { messagingStarted: true, calls: true },
+      _sum: { messagingStarted: true },
+      _count: { messagingStarted: true },
     }),
     // Coverage measured on rows that CARRY the figure, not the newest row: a
     // campaign row can arrive with a null messaging figure.
@@ -328,12 +325,10 @@ export async function loadShareViews(args: {
     contribution(metaConnected, metaSpend),
   ]);
 
-  // ── Calls, kept apart by platform ──────────────────────────────────────────
-  const metaCalls: MetricValue<number> = !metaConnected
-    ? unavailable("Meta Ads is not connected.")
-    : campaigns._count.calls === 0
-      ? unavailable(NO_CAMPAIGN_REPORTING)
-      : ok(num(campaigns._sum.calls));
+  // ── Calls: Google only ─────────────────────────────────────────────────────
+  // Meta's calls were removed from the hotel's report at the agency's request.
+  // They are still synced (AdCampaignSnapshot.calls); only the report stopped
+  // showing them.
 
   // Google reports calls two ways and they OVERLAP, so they are never summed:
   // a call from a call asset that the advertiser also tracks as a conversion is
@@ -587,7 +582,6 @@ export async function loadShareViews(args: {
       metaSpend: showAdSpend ? metaSpend : withheld,
       googleCalls,
       googleCallClicks,
-      metaCalls,
       messagesGenerated,
       enquiriesFromAds,
       whatsappBookings,
@@ -611,7 +605,6 @@ export async function loadShareViews(args: {
         googleSpend: showAdSpend ? googleNote : undefined,
         metaSpend: showAdSpend ? metaNote : undefined,
         googleCallClicks: callClicksNote ?? googleNote,
-        metaCalls: campaignNote,
         messagesGenerated: campaignNote,
         clientCalls: trackerNote,
         clientWhatsappMessages: trackerNote,

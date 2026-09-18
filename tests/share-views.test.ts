@@ -75,12 +75,16 @@ describe("2. a zero that could not have been non-zero is explained", () => {
 });
 
 describe("3. calls are kept apart by platform", () => {
-  test("Google and Meta are separate tiles, never summed", () => {
-    // Counted by different platforms on different definitions; one total would
-    // hide which channel produced them.
+  test("Meta's calls are not on the hotel's report", () => {
+    // Removed at the agency's request. Taken out of the loader too, not just
+    // hidden in the page, so no other view of this data can bring it back.
+    expect(REPORT).not.toMatch(/metaCalls/);
+    expect(LOADER).not.toMatch(/metaCalls/);
+    // Calls from ads is Google only.
+    const group = REPORT.slice(REPORT.indexOf('<Group title="Calls from ads"'));
+    const body = group.slice(0, group.indexOf("</Group>"));
+    expect(body).not.toMatch(/Meta/);
     expect(REPORT).toMatch(/label="Google Ads · calls connected"[\s\S]{0,120}data\.ads\.googleCalls/);
-    expect(REPORT).toMatch(/label="Meta Ads"[\s\S]{0,120}data\.ads\.metaCalls/);
-    expect(LOADER).not.toMatch(/googleCalls \+ metaCalls|metaCalls \+ googleCalls/);
   });
 
   test("Google's two call measurements are preferred, never added", () => {
