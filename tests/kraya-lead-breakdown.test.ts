@@ -136,13 +136,17 @@ describe("5. counts only — safe for every agency member", () => {
   });
 
   test("shown whenever Kraya is connected, not gated on admin", () => {
-    expect(PAGE).toMatch(/const leadBreakdown =\s*krayaView != null/);
+    expect(PAGE).toMatch(/const lbpRange = krayaView != null \? resolveSectionRange\(lbpState/);
+    expect(PAGE).toMatch(/const leadBreakdown =\s*lbpRange != null/);
+    expect(PAGE).not.toMatch(/const lbpRange = canValueBookings/);
   });
 
-  test("its range param cannot collide with the page's others", () => {
-    expect(VIEW).toMatch(/integrations\?lbp=\$\{value\}/);
-    expect(PAGE).toMatch(/preserve=\{\{ wab: wabRangeKey \}\}/);
-    expect(PAGE).toMatch(/\?wab=\$\{value\}&lbp=\$\{lbpKey\}/);
+  test("its range lives under its own prefix and carries the other section's", () => {
+    // Detailed coverage — presets, custom, round-tripping — is in
+    // tests/section-range.test.ts.
+    expect(PAGE).toMatch(/prefix="lbp"/);
+    expect(PAGE).toMatch(/preserve=\{sectionRangeParams\("wab", wabState\)\}/);
+    expect(VIEW).toMatch(/\{picker\}/);
   });
 
   test("the screen states both limits of 'from ads'", () => {

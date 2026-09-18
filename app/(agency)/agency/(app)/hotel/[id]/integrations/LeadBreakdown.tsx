@@ -1,4 +1,4 @@
-import Link from "next/link";
+import type { ReactNode } from "react";
 
 import { formatNumber } from "@/lib/format";
 import type { PropertyBreakdown } from "@/lib/kraya-lead-breakdown";
@@ -10,54 +10,29 @@ import type { PropertyBreakdown } from "@/lib/kraya-lead-breakdown";
  * values table beside it, this is shown to every agency member.
  */
 export function LeadBreakdown({
-  hotelId,
-  rangeKey,
   windowLabel,
   properties,
-  preserve = {},
+  picker,
 }: {
-  hotelId: string;
-  rangeKey: string;
+  /** The literal dates, e.g. "19 Aug – 18 Sep 2026". */
   windowLabel: string;
   properties: PropertyBreakdown[];
-  /** Other query params on this page to carry across a range change. */
-  preserve?: Record<string, string>;
+  /** The section's range control — presets and a custom range. */
+  picker: ReactNode;
 }) {
-  const carried = new URLSearchParams(preserve).toString();
   return (
     <div className="space-y-4">
       <div>
         <p className="text-sm font-medium text-ink">Leads by property</p>
         <p className="mt-1 max-w-[70ch] text-sm text-ink-tertiary">
-          Which bucket each lead is in right now, for leads that first messaged in{" "}
+          Which bucket each lead is in right now, for leads whose first message falls in{" "}
           {windowLabel}. <span className="font-medium text-ink-secondary">From ads</span> means
           the guest tapped a Meta click-to-WhatsApp ad — tracked since 11 Sep 2026. A guest who
           reached WhatsApp from a Google ad through the website is not counted as from ads.
         </p>
       </div>
 
-      {/* `lbp`, not `range` or `wab`: this page carries several providers' query
-          params and the booking-values range, and they must not collide. */}
-      <nav className="flex flex-wrap gap-2 text-sm">
-        {[
-          ["7", "Last 7 days"],
-          ["30", "Last 30 days"],
-          ["90", "Last 90 days"],
-          ["365", "Last year"],
-        ].map(([value, label]) => (
-          <Link
-            key={value}
-            href={`/agency/hotel/${hotelId}/integrations?lbp=${value}${carried ? `&${carried}` : ""}#kraya`}
-            className={`rounded-lg border px-3 py-1.5 ${
-              rangeKey === value
-                ? "border-brand bg-brand text-white"
-                : "border-line-strong bg-card text-ink-secondary hover:bg-line-strong"
-            }`}
-          >
-            {label}
-          </Link>
-        ))}
-      </nav>
+      {picker}
 
       {properties.length === 0 ? (
         <p className="rounded-lg border border-line bg-card p-6 text-sm text-ink-tertiary">

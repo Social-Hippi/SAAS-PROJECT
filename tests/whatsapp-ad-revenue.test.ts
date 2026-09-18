@@ -179,7 +179,9 @@ describe("5. multi-tenancy holds on the hand-written paths", () => {
     // can open. The rows carry phoneLast4, so the LOAD is gated, not just the
     // render — an analyst's request never reads the data at all.
     expect(PAGE).toMatch(/const canValueBookings = member\.role === "admin" && krayaView != null;/);
-    expect(PAGE).toMatch(/canValueBookings\s*\?[\s\S]{0,80}resolveRange/);
+    // The range is only resolved — and the rows only loaded — for admins.
+    expect(PAGE).toMatch(/const wabRange = canValueBookings \? resolveSectionRange\(wabState/);
+    expect(PAGE).toMatch(/wabRange != null\s*\?\s*await listWhatsAppBookingValues\(/);
     expect(PAGE).toMatch(/\{canValueBookings && \(/);
     // No separate route to bypass the gate through.
     expect(existsSync(join(process.cwd(), "app/(agency)/agency/(app)/hotel/[id]/whatsapp-bookings"))).toBe(false);
