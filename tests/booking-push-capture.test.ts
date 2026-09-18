@@ -128,3 +128,24 @@ describe("4. held bodies are tenant-isolated at every layer", () => {
     expect(MIGRATION).toContain("CREATE POLICY tenant_isolation");
   });
 });
+
+describe("5. no migration carries tool output", () => {
+  test("every migration is SQL only — no CLI banners", () => {
+    // `prisma migrate diff … 2>&1 > migration.sql` captured Prisma's "Update
+    // available" box into this PR's migration, and Postgres refused the box-
+    // drawing characters. CI caught it; nothing local did, because no local
+    // test APPLIES migrations. Scan them all, since every earlier migration was
+    // generated the same way and only escaped because no update was available.
+    for (const dir of readdirSync(MIGRATIONS)) {
+      if (!/^\d{14}_/.test(dir)) continue;
+      const sql = readFileSync(join(MIGRATIONS, dir, "migration.sql"), "utf8");
+      // Box-drawing rules INSIDE a `--` comment are fine and common here; what
+      // Postgres rejects is one on a line that is not a comment.
+      const code = sql.split("\n").filter((l) => !l.trim().startsWith("--"));
+      for (const line of code) {
+        expect(line, dir).not.toMatch(/[┌┐└┘│]/);
+        expect(line, dir).not.toMatch(/Update available|npm i |pris\.ly|Loaded Prisma config/);
+      }
+    }
+  });
+});

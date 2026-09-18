@@ -37,16 +37,6 @@ ALTER TABLE "BookingPushCapture" ADD CONSTRAINT "BookingPushCapture_hotelClientI
 
 -- AddForeignKey
 ALTER TABLE "BookingPushCapture" ADD CONSTRAINT "BookingPushCapture_connectionId_fkey" FOREIGN KEY ("connectionId") REFERENCES "BookingConnection"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-┌─────────────────────────────────────────────────────────┐
-│  Update available 7.8.0 -> 8.0.0-rc.15                  │
-│                                                         │
-│  This is a major update - please follow the guide at    │
-│  https://pris.ly/d/major-version-upgrade                │
-│                                                         │
-│  Run the following to update                            │
-│    npm i --save-dev prisma@latest                       │
-│    npm i @prisma/client@latest                          │
-└─────────────────────────────────────────────────────────┘
 
 
 -- RLS: same tenant_isolation policy as every other multi-tenant table. Held
