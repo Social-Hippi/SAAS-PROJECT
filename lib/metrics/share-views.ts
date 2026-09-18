@@ -56,6 +56,14 @@ export type AdsView = {
    * than dividing by a total that is quietly missing a channel.
    */
   returnOnAdSpend: MetricValue<number>;
+  /**
+   * Meta's own revenue ÷ Meta spend. Meta's revenue is every WhatsApp ad booking
+   * (traced by the ad sticker, and those the agency ticked as coming from an ad)
+   * plus website bookings from a Meta ad click.
+   */
+  metaRoas: MetricValue<number>;
+  /** Website bookings from a Google ad click ÷ Google spend. */
+  googleRoas: MetricValue<number>;
   googleSpend: MetricValue<number>;
   metaSpend: MetricValue<number>;
   /** Google click-to-call + call conversions. Kept apart from Meta's. */
@@ -99,6 +107,10 @@ export const ADS_CAPTION = {
     "Value of the WhatsApp bookings your agency counted as coming from an ad, entered from the reservations record. Kraya logs the booking but not the amount, so this figure is keyed in rather than measured.",
   returnOnAdSpend:
     "Website booking value plus WhatsApp booking value, divided by money spent on ads. Every part counts only advertising, so this is what the advertising returned.",
+  metaRoas:
+    "Revenue from WhatsApp ad bookings plus website bookings from a Meta ad, divided by money spent on Meta ads. WhatsApp bookings your agency counted as coming from an ad are credited to Meta.",
+  googleRoas:
+    "Website bookings from a Google ad click, divided by money spent on Google ads. WhatsApp bookings are credited to Meta, not Google, so no revenue is counted in both.",
   googleSpend: "Spend as Google Ads reports it.",
   metaSpend: "Spend as Meta reports it.",
   googleCalls: "Calls connected from Google ads.",
@@ -129,6 +141,9 @@ export const CLIENT_CAPTION = {
  * as one undifferentiated number. It cannot be split after the fact, and
  * substituting the total would report every conversion as a call.
  */
+export const NO_GOOGLE_AD_BOOKING_YET =
+  "No website booking has been traced to a Google ad in this period. Tracing needs the ad click to reach the booking engine, so this cannot be read as Google producing nothing.";
+
 export const WHATSAPP_REVENUE_NOT_ENTERED =
   "No amount has been entered yet for the WhatsApp bookings counted as coming from an ad, so their value is not available. It is not a zero.";
 
@@ -284,6 +299,12 @@ export async function loadShareViews(args: {
   // split exists to remove.
   let adRevenue = 0;
   let adBookings = 0;
+  // The same revenue, split by the platform whose click brought the guest — for
+  // the per-platform ROAS tiles. Every website ad booking lands in exactly one
+  // of these, so together they are adRevenue, never more.
+  let googleWebRevenue = 0;
+  let googleWebBookings = 0;
+  let metaWebRevenue = 0;
   for (const c of conversions) {
     const value = num(c.conversionValue);
     const type = canonicalSourceType({ ...c, value });
@@ -291,6 +312,11 @@ export async function loadShareViews(args: {
       adRevenue += value;
       adBookings += 1;
     }
+    if (type === "google_ads") {
+      googleWebRevenue += value;
+      googleWebBookings += 1;
+    }
+    if (type === "meta_ads") metaWebRevenue += value;
   }
 
   const totalRevenue: MetricValue<number> =
@@ -500,6 +526,37 @@ export async function loadShareViews(args: {
       "No advertising spend was recorded in this period, so there is nothing to divide by.",
   });
 
+  // ── ROAS per platform ─────────────────────────────────────────────────────
+  //
+  // EACH PLATFORM GETS ONLY ITS OWN REVENUE, and no rupee is in both. Website
+  // bookings go to whichever platform's click brought the guest; every WhatsApp
+  // ad booking goes to Meta — the ad sticker is a Meta click-to-WhatsApp ad, and
+  // bookings the agency ticked as ad-driven are credited to Meta by the agency's
+  // decision. So the two numerators add up to exactly the overall ROAS
+  // numerator.
+  //
+  // The obvious alternative — the same WhatsApp revenue over each platform's
+  // spend — was rejected: it credits Google with bookings Meta produced, and a
+  // reader adding "3x Meta" and "2x Google" would believe the ads returned 5x.
+  //
+  // `sum` and `ratio` propagate unknowns, so while the WhatsApp amounts are not
+  // entered Meta ROAS reads "not available" rather than a confident low figure.
+  const websiteRevenueOf = (v: number): MetricValue<number> =>
+    anyTraffic === 0
+      ? unavailable(
+          "No website activity was recorded in this period, so booking value cannot be reported.",
+        )
+      : ok(v);
+  const noSpendReason = (label: string) =>
+    `No ${label} spend was recorded in this period, so there is nothing to divide by.`;
+
+  const metaRoas = ratio(sum([websiteRevenueOf(metaWebRevenue), whatsappAdRevenue]), metaSpend, {
+    zeroDenominatorReason: noSpendReason("Meta Ads"),
+  });
+  const googleRoas = ratio(websiteRevenueOf(googleWebRevenue), googleSpend, {
+    zeroDenominatorReason: noSpendReason("Google Ads"),
+  });
+
   const firstAdEnquiry = krayaConn
     ? await scoped(prisma.whatsAppConversation).findFirst({
         where: { hotelClientId, sourceId: { not: null } },
@@ -578,6 +635,10 @@ export async function loadShareViews(args: {
       totalRevenue,
       whatsappAdRevenue,
       returnOnAdSpend: showAdSpend ? returnOnAdSpend : withheld,
+      // A platform ROAS reveals that platform's spend to anyone holding the
+      // revenue figure, so it is withheld exactly when spend is.
+      metaRoas: showAdSpend ? metaRoas : withheld,
+      googleRoas: showAdSpend ? googleRoas : withheld,
       googleSpend: showAdSpend ? googleSpend : withheld,
       metaSpend: showAdSpend ? metaSpend : withheld,
       googleCalls,
@@ -603,6 +664,12 @@ export async function loadShareViews(args: {
             (noAdBookingsYet ? NO_AD_BOOKING_YET : (googleNote ?? metaNote)))
           : undefined,
         googleSpend: showAdSpend ? googleNote : undefined,
+        metaRoas: showAdSpend ? (whatsappRevenueNote ?? metaNote) : undefined,
+        googleRoas: showAdSpend
+          ? googleWebBookings === 0
+            ? NO_GOOGLE_AD_BOOKING_YET
+            : googleNote
+          : undefined,
         metaSpend: showAdSpend ? metaNote : undefined,
         googleCallClicks: callClicksNote ?? googleNote,
         messagesGenerated: campaignNote,
