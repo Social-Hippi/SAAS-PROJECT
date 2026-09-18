@@ -162,13 +162,11 @@ function AdsView({
         </Group>
       )}
 
-      {/* Three tiles, no total. Google and Meta are counted by different
-          platforms on different definitions, and one total would hide which
-          channel produced them. Google's two figures are kept apart for a
-          different reason: a tap on the call button and a connected call
-          overlap — a guest who taps and connects is in both — so adding them
-          would count that guest twice. */}
-      <Group title="Calls from ads" columns={3}>
+      {/* Google only — Meta's calls were taken off this report at the agency's
+          request. The two Google figures are kept apart rather than summed: a
+          tap on the call button and a connected call overlap — a guest who taps
+          and connects is in both — so a total would count that guest twice. */}
+      <Group title="Calls from ads" columns={2}>
         <Tile
           label="Google Ads · clicks to call"
           value={data.ads.googleCallClicks}
@@ -179,12 +177,6 @@ function AdsView({
           label="Google Ads · calls connected"
           value={data.ads.googleCalls}
           caption={ADS_CAPTION.googleCalls}
-        />
-        <Tile
-          label="Meta Ads"
-          value={data.ads.metaCalls}
-          caption={ADS_CAPTION.metaCalls}
-          staleNote={n.metaCalls}
         />
       </Group>
 

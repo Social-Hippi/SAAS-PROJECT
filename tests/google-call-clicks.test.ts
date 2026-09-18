@@ -88,8 +88,8 @@ describe("3. the report keeps the two Google figures apart", () => {
     expect(LOADER).toMatch(/googleCallClicks: callClicksNote \?\? googleNote/);
   });
 
-  test("both Google tiles and Meta's sit side by side, labelled apart", () => {
-    expect(REPORT).toMatch(/<Group title="Calls from ads" columns=\{3\}>/);
+  test("the two Google tiles sit side by side, labelled apart", () => {
+    expect(REPORT).toMatch(/<Group title="Calls from ads" columns=\{2\}>/);
     expect(REPORT).toMatch(/label="Google Ads · clicks to call"/);
     expect(REPORT).toMatch(/label="Google Ads · calls connected"/);
     expect(REPORT).toMatch(/value=\{data\.ads\.googleCallClicks\}/);
