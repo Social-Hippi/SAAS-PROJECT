@@ -255,6 +255,58 @@ export async function syncGoogleAdsConnection(conn: Conn, days = 30): Promise<Go
     );
   }
 
+  // TAPS on a call button — "clicks to call". Clicks segmented by click type,
+  // keeping only the types Google describes as calls (enum ClickType, API v24):
+  //   CALLS                 "Phone calls"
+  //   MOBILE_CALL_TRACKING  "Mobile phone calls"
+  //   LOCATION_FORMAT_CALL  "Call" (from a location asset)
+  // CALL_TRACKING — "Manually dialed phone calls" — is left out on purpose: a
+  // number typed into a phone is not a tap on the ad.
+  //
+  // Each click carries exactly one click type, so summing these types cannot
+  // count a tap twice. They are NEVER summed with phone_calls: a guest who taps
+  // and connects is in both, and one total would count them twice.
+  //
+  // THE ZERO PROBLEM. Segmenting by click type makes Google return no row at all
+  // for a day with no call taps, which would look exactly like a failed query.
+  // So success is tracked separately: when the query ran, every campaign-day gets
+  // a number (0 where Google recorded no call taps); only a failed query leaves
+  // the column null. A genuine zero is a finding; a gap must never be written as
+  // one.
+  const CALL_CLICK_TYPES = new Set(["CALLS", "MOBILE_CALL_TRACKING", "LOCATION_FORMAT_CALL"]);
+  const callClicksByKey = new Map<string, number>();
+  let callClicksQueried = false;
+  try {
+    const clickRows = await searchStream(
+      accessToken,
+      conn.customerId,
+      `
+    SELECT
+      campaign.id,
+      segments.date,
+      segments.click_type,
+      metrics.clicks
+    FROM campaign
+    WHERE segments.date BETWEEN '${start}' AND '${end}'
+  `,
+      conn.loginCustomerId ?? loginCustomerId(),
+    );
+    for (const r of clickRows) {
+      const campaignId = String(((r.campaign ?? {}) as { id?: string | number }).id ?? "");
+      const seg = (r.segments ?? {}) as { date?: string; clickType?: string };
+      if (!campaignId || !seg.date) continue;
+      if (!CALL_CLICK_TYPES.has(String(seg.clickType ?? "").toUpperCase())) continue;
+      const value = numStr(((r.metrics ?? {}) as { clicks?: string | number }).clicks);
+      const key = `${campaignId}|${seg.date}`;
+      callClicksByKey.set(key, (callClicksByKey.get(key) ?? 0) + value);
+    }
+    callClicksQueried = true;
+  } catch (err) {
+    console.warn(
+      `${LOG} ${conn.hotelClientId} call clicks skipped: ${err instanceof Error ? err.message : err}`,
+    );
+  }
+
   // Parse + upsert one row per campaign-day. Metrics rows only exist for days with
   // activity, so an account with no active campaigns simply yields 0 rows (success).
   let campaignDays = 0;
@@ -295,6 +347,10 @@ export async function syncGoogleAdsConnection(conn: Conn, days = 30): Promise<Go
           const v = phoneCallsByKey.get(`${campaignId}|${dateStr}`);
           return v == null ? null : Math.round(v);
         })(),
+        // 0 when the query ran and found no call taps; null only if it failed.
+        callClicks: callClicksQueried
+          ? Math.round(callClicksByKey.get(`${campaignId}|${dateStr}`) ?? 0)
+          : null,
       };
       await prisma.googleAdsCampaignSnapshot.upsert({
         where: { hotelClientId_campaignId_date: { hotelClientId: conn.hotelClientId, campaignId, date } },

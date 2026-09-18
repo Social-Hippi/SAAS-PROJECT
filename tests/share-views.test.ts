@@ -78,7 +78,7 @@ describe("3. calls are kept apart by platform", () => {
   test("Google and Meta are separate tiles, never summed", () => {
     // Counted by different platforms on different definitions; one total would
     // hide which channel produced them.
-    expect(REPORT).toMatch(/label="Google Ads"[\s\S]{0,120}data\.ads\.googleCalls/);
+    expect(REPORT).toMatch(/label="Google Ads · calls connected"[\s\S]{0,120}data\.ads\.googleCalls/);
     expect(REPORT).toMatch(/label="Meta Ads"[\s\S]{0,120}data\.ads\.metaCalls/);
     expect(LOADER).not.toMatch(/googleCalls \+ metaCalls|metaCalls \+ googleCalls/);
   });
@@ -122,7 +122,9 @@ describe("3. calls are kept apart by platform", () => {
   test("coverage is counted per field, so null never reads as zero calls", () => {
     // `_count: { _all: true }` counts rows that have spend. Only a per-field
     // count says how many campaign-days actually carry a call figure.
-    expect(LOADER).toMatch(/_count: \{ _all: true, callConversions: true, phoneCalls: true \}/);
+    expect(LOADER).toMatch(
+      /_count: \{ _all: true, callConversions: true, phoneCalls: true, callClicks: true \}/,
+    );
     // A day whose extra query failed has not had zero calls.
     expect(SYNC).toMatch(/callConversions: callConversionsByKey\.get\([^)]*\) \?\? null/);
     // Scoped to the write site: the accumulator's own `?? 0` is correct there,

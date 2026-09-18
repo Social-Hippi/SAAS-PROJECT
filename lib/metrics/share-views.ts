@@ -60,6 +60,11 @@ export type AdsView = {
   metaSpend: MetricValue<number>;
   /** Google click-to-call + call conversions. Kept apart from Meta's. */
   googleCalls: MetricValue<number>;
+  /**
+   * Taps on a call button in a Google ad, connected or not. Shown BESIDE
+   * googleCalls and never added to it — a guest who taps and connects is in both.
+   */
+  googleCallClicks: MetricValue<number>;
   /** Meta click-to-call, connected only. */
   metaCalls: MetricValue<number>;
   /** Meta messaging conversations — WhatsApp, Instagram and Messenger together. */
@@ -99,6 +104,8 @@ export const ADS_CAPTION = {
   googleSpend: "Spend as Google Ads reports it.",
   metaSpend: "Spend as Meta reports it.",
   googleCalls: "Calls connected from Google ads.",
+  googleCallClicks:
+    "Taps on the call button in your Google ads. A tap counts whether or not the call went through, so this is not the same as calls connected — the two are never added together.",
   metaCalls: "Calls connected from Meta ads. Counted only once the call connects.",
   messagesGenerated:
     "Conversations started from your Meta ads. Meta reports WhatsApp, Instagram and Messenger together in this one figure.",
@@ -127,6 +134,9 @@ export const CLIENT_CAPTION = {
  */
 export const WHATSAPP_REVENUE_NOT_ENTERED =
   "No amount has been entered yet for the WhatsApp bookings counted as coming from an ad, so their value is not available. It is not a zero.";
+
+export const GOOGLE_CALL_CLICKS_NOT_RETRIEVED =
+  "Clicks to call have not been retrieved from Google for this period yet, so this figure is not available. It is not a zero.";
 
 export const GOOGLE_CALLS_NOT_CAPTURED =
   "Google has not reported calls separately for this account in this period, so this figure is not available. It is not a zero.";
@@ -207,13 +217,13 @@ export async function loadShareViews(args: {
     }),
     scoped(prisma.googleAdsCampaignSnapshot).aggregate({
       where: { hotelClientId, date: dayFilter },
-      _sum: { spend: true, callConversions: true, phoneCalls: true },
+      _sum: { spend: true, callConversions: true, phoneCalls: true, callClicks: true },
       _max: { date: true },
       // Counted per field, not `_all`. Prisma's per-field count skips nulls, so
       // these say how many campaign-days actually CARRY a call figure — which is
       // what separates "Google reported no calls" from "we never retrieved it".
       // `_all` cannot make that distinction: it counts rows with spend too.
-      _count: { _all: true, callConversions: true, phoneCalls: true },
+      _count: { _all: true, callConversions: true, phoneCalls: true, callClicks: true },
     }),
     scoped(prisma.googleAdsConnection).findFirst({
       where: { hotelClientId },
@@ -359,6 +369,30 @@ export async function loadShareViews(args: {
           // carries a call figure yet. Zero would be a lie about a measurement
           // we do not have.
           notTraceable<number>(GOOGLE_CALLS_NOT_CAPTURED);
+
+  // Taps on a call button. Separate from googleCalls above and never summed with
+  // it: a tap may not connect, and a connected call may have been dialled by
+  // hand — the two measure different things and overlap where they meet.
+  //
+  // Here, unlike the calls figure, a zero IS a finding. The sync writes 0 for
+  // every campaign-day when Google answered and recorded no call taps, and null
+  // only when the query failed — so a non-null row is a real measurement.
+  const googleCallClicks: MetricValue<number> = !googleConnected
+    ? unavailable("Google Ads is not connected.")
+    : google._count.callClicks > 0
+      ? ok(num(google._sum.callClicks))
+      : notTraceable<number>(GOOGLE_CALL_CLICKS_NOT_RETRIEVED);
+
+  // The sync reaches back 30 days, so on a longer window the older campaign-days
+  // carry no figure. Say how much of the period the number covers, rather than
+  // present part of it as the whole.
+  const callClicksNote =
+    googleConnected &&
+    google._count.callClicks > 0 &&
+    google._count.callClicks < google._count._all
+      ? `Clicks to call were retrieved for ${google._count.callClicks} of ${google._count._all} ` +
+        "campaign-days in this period, so this figure covers only part of it."
+      : undefined;
 
   const messagesGenerated: MetricValue<number> = !metaConnected
     ? unavailable("Meta Ads is not connected.")
@@ -552,6 +586,7 @@ export async function loadShareViews(args: {
       googleSpend: showAdSpend ? googleSpend : withheld,
       metaSpend: showAdSpend ? metaSpend : withheld,
       googleCalls,
+      googleCallClicks,
       metaCalls,
       messagesGenerated,
       enquiriesFromAds,
@@ -575,6 +610,7 @@ export async function loadShareViews(args: {
           : undefined,
         googleSpend: showAdSpend ? googleNote : undefined,
         metaSpend: showAdSpend ? metaNote : undefined,
+        googleCallClicks: callClicksNote ?? googleNote,
         metaCalls: campaignNote,
         messagesGenerated: campaignNote,
         clientCalls: trackerNote,
