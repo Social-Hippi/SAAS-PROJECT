@@ -15,6 +15,7 @@ import {
   METRIC_TOOLTIP,
   METRIC_UNKNOWN_STATES,
 } from "@/lib/metrics/metric-value";
+import { presentMetric } from "@/lib/metrics/present";
 import { classifyClickTarget } from "@/lib/metrics/intent";
 import { resolveRange, previousRangeOf, RANGE_PRESETS } from "@/lib/attribution";
 import {
@@ -361,5 +362,53 @@ describe("7. campaign type normalisation", () => {
     for (const jargon of ["null", "undefined", "column", "API"]) {
       expect(tip.toLowerCase()).not.toContain(jargon.toLowerCase());
     }
+  });
+});
+
+describe("8. the generic unknown copy never asserts a cause", () => {
+  // A line in METRIC_TOOLTIP is shown for EVERY metric in that state — 21 call
+  // sites and counting. A cause named there is therefore claimed about all of
+  // them, and will be wrong at most.
+  //
+  // It was. `not_traceable` read "the tracking needed to measure this is not set
+  // up on your website yet": true of one caller, false of the rest. It told a
+  // hotel to check their website snippet when the real reason was "Instagram
+  // doesn't report likes on stories", or that their agency had not yet keyed in
+  // a booking amount. `unavailable` promised "reconnecting it will restore the
+  // figure" for figures with nothing to reconnect — ad spend the agency had
+  // deliberately withheld from the report among them.
+
+  test("no generic tooltip blames the website, or a snippet, or a connection", () => {
+    for (const state of METRIC_UNKNOWN_STATES) {
+      const tip = METRIC_TOOLTIP[state];
+      for (const cause of ["your website", "snippet", "reconnect", "not set up"]) {
+        expect(tip.toLowerCase()).not.toContain(cause);
+      }
+    }
+  });
+
+  test("no generic tooltip narrows to one kind of thing it is measuring", () => {
+    // "does not apply to this channel" was shown on metrics that are not about a
+    // channel at all — a rate on a revenue amount, a comparison with no prior
+    // period.
+    expect(METRIC_TOOLTIP.not_applicable.toLowerCase()).not.toContain("channel");
+  });
+
+  test("an unknown still says it is not a zero", () => {
+    // The whole doctrine: a gap must never be read as a finding of nothing.
+    expect(METRIC_TOOLTIP.not_traceable).toMatch(/not a zero/);
+    expect(METRIC_TOOLTIP.unavailable).toMatch(/not a zero/);
+  });
+
+  test("the specific reason survives alongside the generic line", () => {
+    // The generic says what the state means; the reason says why, this time.
+    // Losing the second would leave every gap looking identical.
+    const shown = presentMetric(
+      notTraceable("No amount has been entered yet for these bookings."),
+    );
+    expect(shown.text).toBe("Not traceable");
+    expect(shown.title).toContain("No amount has been entered yet");
+    expect(shown.title).toContain(METRIC_TOOLTIP.not_traceable);
+    expect(shown.known).toBe(false);
   });
 });
