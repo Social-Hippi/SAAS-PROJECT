@@ -33,6 +33,8 @@ import { BookingConnectionCard } from "./BookingConnectionCard";
 import { resolveRange } from "@/lib/attribution";
 import { zonedDayString } from "@/lib/timezone";
 import { KrayaCard } from "./KrayaCard";
+import { countHeldPushes } from "@/lib/booking-push-capture";
+import { webhookBaseUrl } from "@/lib/webhook-url";
 import { BookingValueList, ValueSummary, type BookingRow } from "./BookingValueList";
 import { listWhatsAppBookingValues, summariseValues } from "@/lib/whatsapp-booking-values";
 import { BookingDomainsCard } from "./BookingDomainsCard";
@@ -438,12 +440,19 @@ export default async function HotelIntegrationsPage({
   const bookingConn = await agencyScoped(prisma.bookingConnection).findFirst({
     where: { hotelClientId: hotel.id },
     select: {
+      id: true,
       provider: true,
       status: true,
       lastBookingReceivedAt: true,
       lastError: true,
+      lastPushAt: true,
+      lastPushOutcome: true,
     },
   });
+  // Pushes that authenticated but could not be mapped, waiting for a parser.
+  const heldPushCount = bookingConn
+    ? await countHeldPushes(hotel.agencyId, bookingConn.id)
+    : 0;
 
   // Hosts that have actually sent tracking, minus the hotel's own site — the
   // likely answers for the booking-domain setting. Offering what has really been
@@ -1135,7 +1144,7 @@ export default async function HotelIntegrationsPage({
       >
         <BookingConnectionCard
           hotelId={hotel.id}
-          appUrl={appUrl}
+          webhookBase={webhookBaseUrl(appUrl)}
           connection={
             bookingConn
               ? {
@@ -1144,6 +1153,9 @@ export default async function HotelIntegrationsPage({
                   lastBookingReceivedAt:
                     bookingConn.lastBookingReceivedAt?.toISOString() ?? null,
                   lastError: bookingConn.lastError,
+                  lastPushAt: bookingConn.lastPushAt?.toISOString() ?? null,
+                  lastPushOutcome: bookingConn.lastPushOutcome,
+                  heldPushCount,
                 }
               : null
           }

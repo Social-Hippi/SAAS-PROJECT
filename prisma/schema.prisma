@@ -202,6 +202,7 @@ model Agency {
   influencerInstagramPosts   InfluencerInstagramPost[]
   unattributedMentions       UnattributedMention[]
   bookingConnections         BookingConnection[]
+  bookingPushCaptures BookingPushCapture[]
   bookings                   Booking[]
   bookingStatusEvents        BookingStatusEvent[]
   bookingJourneyMatches      BookingJourneyMatch[]
@@ -370,6 +371,7 @@ model HotelClient {
   influencerInstagramPosts   InfluencerInstagramPost[]
   unattributedMentions       UnattributedMention[]
   bookingConnections         BookingConnection[]
+  bookingPushCaptures BookingPushCapture[]
   bookings                   Booking[]
   members                    HotelMember[]
   userInvites                HotelUserInvite[]
@@ -2116,12 +2118,21 @@ model BookingConnection {
   /// When a booking was last actually received — the honest health signal.
   lastBookingReceivedAt DateTime?
   lastError             String?
+  /// The last AUTHENTICATED push, whatever happened to it. Distinct from
+  /// lastBookingReceivedAt, which only moves when a booking is written: a push
+  /// that arrived and could not be mapped would otherwise be indistinguishable
+  /// from no push at all — and Vercel keeps roughly an hour of logs, so after
+  /// that the question "did they reach us?" had no answer anywhere.
+  lastPushAt            DateTime?
+  /// accepted | partial | unmapped_payload | rejected | no_events | bad_content_type | malformed_json | body_too_large
+  lastPushOutcome       String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
   agency      Agency      @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   hotelClient HotelClient @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
   bookings    Booking[]
+  captures    BookingPushCapture[]
 
   /// One connection per PROVIDER per hotel. Two rows for the same provider would
   /// make the receiver's secret lookup ambiguous about which tenant to write to.
@@ -2134,6 +2145,50 @@ model BookingConnection {
 /// Contains no attribution: see BookingJourneyMatch. Every money field is
 /// nullable because providers differ wildly in what they supply — a missing
 /// value stays NULL rather than being invented or defaulted to zero.
+/// A Booking Push we authenticated but could not turn into a booking — held so
+/// it can be replayed once a parser exists, instead of being answered and lost.
+///
+/// WHY IT EXISTS. A provider's parser is written from its real payload, and the
+/// first real payload is also the first real booking. Answering it with 422 and
+/// dropping the body loses both: the booking, and the sample needed to stop
+/// losing the next one. Providers rarely retry a 4xx. So every body that passed
+/// authentication and failed mapping is kept here, and replayed through the
+/// parser when it lands — no booking pushed in the meantime is lost.
+///
+/// PII. The body carries guest name, email and phone, so it is stored only as
+/// AES-256-GCM ciphertext (lib/encryption, same keys as provider tokens), is
+/// readable only server-side, and is never exposed on a hotel-facing view. This
+/// is the same policy as Booking.rawPayload, which already holds provider bodies.
+///
+/// Only AUTHENTICATED bodies are kept. An unauthenticated caller cannot write
+/// here, so this cannot become a free storage bucket for strangers.
+model BookingPushCapture {
+  id            String    @id @default(cuid())
+  agencyId      String
+  hotelClientId String
+  connectionId  String
+  provider      String
+  receivedAt    DateTime  @default(now())
+  /// Why it was held: unmapped_payload | rejected (parsed, but no event ingested)
+  outcome       String
+  /// The parser's or ingester's own reason, for the operator. Never guest data.
+  reason        String?
+  /// The request body, encrypted. See the model note on PII.
+  bodyEncrypted String    @db.Text
+  bodyBytes     Int
+  /// Set when a replay turned this body into bookings. Kept rather than deleted
+  /// so a replay can be audited, and so a second replay cannot double-count.
+  replayedAt    DateTime?
+
+  agency      Agency            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  hotelClient HotelClient       @relation(fields: [hotelClientId], references: [id], onDelete: Cascade)
+  connection  BookingConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId])
+  @@index([connectionId, replayedAt])
+  @@index([hotelClientId, receivedAt])
+}
+
 model Booking {
   id            String @id @default(cuid())
   agencyId      String

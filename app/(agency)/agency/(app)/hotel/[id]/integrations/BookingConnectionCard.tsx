@@ -15,7 +15,24 @@ export type BookingConnectionView = {
   status: string;
   lastBookingReceivedAt: string | null;
   lastError: string | null;
+  /** Last AUTHENTICATED push, whatever became of it. */
+  lastPushAt: string | null;
+  lastPushOutcome: string | null;
+  /** Bodies that authenticated but could not be mapped, awaiting replay. */
+  heldPushCount: number;
 } | null;
+
+/** What each push outcome means, in the operator's terms. */
+const PUSH_OUTCOME: Record<string, string> = {
+  accepted: "booking recorded",
+  partial: "some bookings recorded, the rest held",
+  unmapped_payload: "received and held — waiting for the payload mapping",
+  rejected: "received and held — could not be recorded",
+  no_events: "received, but it contained no booking",
+  bad_content_type: "refused — not sent as JSON",
+  malformed_json: "refused — the body was not valid JSON",
+  body_too_large: "refused — the body was too large",
+};
 
 /**
  * Booking Push setup.
@@ -27,16 +44,17 @@ export type BookingConnectionView = {
  */
 export function BookingConnectionCard({
   hotelId,
-  appUrl,
+  webhookBase,
   connection,
 }: {
   hotelId: string;
-  appUrl: string;
+  /** The host a server can POST to directly — see lib/webhook-url. */
+  webhookBase: string;
   connection: BookingConnectionView;
 }) {
   const [state, action, pending] = useActionState(connectBookingProvider, initial);
   const provider = connection?.provider ?? "simplotel";
-  const endpoint = `${appUrl}/api/integrations/booking/${provider}`;
+  const endpoint = `${webhookBase}/api/integrations/booking/${provider}`;
   const secret = state.secret;
 
   return (
@@ -64,6 +82,36 @@ export function BookingConnectionCard({
               </span>
             )}
           </p>
+          {/* Whether the provider has reached us at all, independent of whether
+              a booking came of it. Without this, a push that arrived and could
+              not be mapped looked exactly like no push. */}
+          <p>
+            {connection.lastPushAt ? (
+              <>
+                Last push from {connection.provider}:{" "}
+                <span className="font-medium text-ink">
+                  {new Date(connection.lastPushAt).toLocaleString()}
+                </span>
+                {connection.lastPushOutcome && (
+                  <span className="text-ink-tertiary">
+                    {" "}— {PUSH_OUTCOME[connection.lastPushOutcome] ?? connection.lastPushOutcome}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="text-ink-tertiary">
+                No authenticated push has reached us yet.
+              </span>
+            )}
+          </p>
+          {connection.heldPushCount > 0 && (
+            <p className="rounded-lg border-l-4 border-info bg-info/10 p-3 text-xs text-ink-secondary">
+              {connection.heldPushCount} push
+              {connection.heldPushCount === 1 ? " is" : "es are"} held, encrypted,
+              waiting for the payload mapping. Nothing is lost — they are
+              recorded as bookings once the mapping is in place.
+            </p>
+          )}
           {connection.lastError && (
             <p className="text-danger">Last error: {connection.lastError}</p>
           )}
