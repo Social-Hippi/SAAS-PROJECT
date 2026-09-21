@@ -67,7 +67,6 @@ export type AdsView = {
   googleSpend: MetricValue<number>;
   metaSpend: MetricValue<number>;
   /** Google click-to-call + call conversions. Kept apart from Meta's. */
-  googleCalls: MetricValue<number>;
   /**
    * Taps on a call button in a Google ad, connected or not. Shown BESIDE
    * googleCalls and never added to it — a guest who taps and connects is in both.
@@ -75,8 +74,6 @@ export type AdsView = {
   googleCallClicks: MetricValue<number>;
   /** Meta messaging conversations — WhatsApp, Instagram and Messenger together. */
   messagesGenerated: MetricValue<number>;
-  /** Kraya leads whose conversation began at an ad. */
-  enquiriesFromAds: MetricValue<number>;
   /** Kraya bookings traceable to an ad. Never the property's total. */
   whatsappBookings: MetricValue<number>;
 };
@@ -113,13 +110,10 @@ export const ADS_CAPTION = {
     "Website bookings from a Google ad click, divided by money spent on Google ads. WhatsApp bookings are credited to Meta, not Google, so no revenue is counted in both.",
   googleSpend: "Spend as Google Ads reports it.",
   metaSpend: "Spend as Meta reports it.",
-  googleCalls: "Calls connected from Google ads.",
   googleCallClicks:
     "Taps on the call button in your Google ads. A tap counts whether or not the call went through, so this is not the same as calls connected — the two are never added together.",
   messagesGenerated:
     "Conversations started from your Meta ads. Meta reports WhatsApp, Instagram and Messenger together in this one figure.",
-  enquiriesFromAds:
-    "People who messaged on WhatsApp after tapping one of your ads, as recorded by the property's own system.",
   whatsappBookings:
     "Bookings the reservations team confirmed whose conversation began at one of your ads. Not every WhatsApp booking — those are in the client view.",
 } as const;
@@ -149,9 +143,6 @@ export const WHATSAPP_REVENUE_NOT_ENTERED =
 
 export const GOOGLE_CALL_CLICKS_NOT_RETRIEVED =
   "Clicks to call have not been retrieved from Google for this period yet, so this figure is not available. It is not a zero.";
-
-export const GOOGLE_CALLS_NOT_CAPTURED =
-  "Google has not reported calls separately for this account in this period, so this figure is not available. It is not a zero.";
 
 /**
  * The property records no booking value anywhere we can read.
@@ -198,7 +189,6 @@ export async function loadShareViews(args: {
     campaigns,
     messagingCoverage,
     krayaConn,
-    adEnquiries,
     tracker,
   ] = await Promise.all([
     // Every conversion in the window, classified individually below — the ads
@@ -259,9 +249,6 @@ export async function loadShareViews(args: {
       _max: { date: true },
     }),
     scoped(prisma.krayaConnection).findFirst({ where: { hotelClientId }, select: { id: true } }),
-    scoped(prisma.whatsAppConversation).count({
-      where: { hotelClientId, sourceId: { not: null }, firstMessageAt: eventFilter },
-    }),
     whenMigrated("operations tracker", [], () =>
       scoped(prisma.manualLeadDaily).findMany({
         where: { hotelClientId, date: dayFilter },
@@ -356,40 +343,10 @@ export async function loadShareViews(args: {
   // They are still synced (AdCampaignSnapshot.calls); only the report stopped
   // showing them.
 
-  // Google reports calls two ways and they OVERLAP, so they are never summed:
-  // a call from a call asset that the advertiser also tracks as a conversion is
-  // in both, and one total would count it twice.
-  //
-  // RAW CALL-ASSET CALLS WIN. They are every call Google actually connected;
-  // call conversions are only the subset that met the rules the advertiser
-  // configured, usually a minimum duration. On Aster over a month the two read
-  // 56 against 15.5, and the conversion figure quietly dropped four calls from
-  // two Coffeeberry campaigns that have no call conversion action at all —
-  // campaigns whose calls would have vanished from the hotel's own report with
-  // nothing on the page to say so.
-  //
-  // It is a whole number, too. Google splits conversion credit across
-  // touchpoints, so that side arrives fractional — "12.83 calls" is not a
-  // figure to put in front of a hotel.
-  //
-  // The trade is that a raw count includes calls that rang for three seconds.
-  // That overstates rather than hides, and it is the direction a client can
-  // check for themselves against their own phone log.
-  const googleCalls: MetricValue<number> = !googleConnected
-    ? unavailable("Google Ads is not connected.")
-    : google._count.phoneCalls > 0
-      ? ok(num(google._sum.phoneCalls))
-      : google._count.callConversions > 0
-        ? // Fallback only: no call-asset figure anywhere in the window, so a
-          // conversion count is better than refusing to report. Rounded,
-          // because the fractional form is not presentable.
-          ok(Math.round(num(google._sum.callConversions)))
-        : // Not `unavailable`: there is no integration to reconnect and no
-          // setting of ours to switch on. Either Google has no call measurement
-          // configured for this account, or no campaign-day in this window
-          // carries a call figure yet. Zero would be a lie about a measurement
-          // we do not have.
-          notTraceable<number>(GOOGLE_CALLS_NOT_CAPTURED);
+  // Calls connected (metrics.phone_calls, with call conversions as a fallback)
+  // were removed from this report at the agency's request. The figures are
+  // still synced — GoogleAdsCampaignSnapshot.phoneCalls and .callConversions —
+  // so restoring the tile needs no backfill.
 
   // Taps on a call button. Separate from googleCalls above and never summed with
   // it: a tap may not connect, and a connected call may have been dialled by
@@ -422,9 +379,9 @@ export async function loadShareViews(args: {
       : ok(num(campaigns._sum.messagingStarted));
 
   // ── WhatsApp, from the property's own system ───────────────────────────────
-  const enquiriesFromAds: MetricValue<number> = krayaConn
-    ? ok(adEnquiries)
-    : unavailable(WHATSAPP_NOT_CONNECTED);
+  // "Enquiries from ads" was removed from this report at the agency's request.
+  // The same figure is on the agency's Integrations page, split by property,
+  // under Leads by property.
 
   // Bookings whose enquiry began at an ad. COUNT(DISTINCT) because one guest can
   // hold several conversations, and an enquiry starting AFTER the booking cannot
@@ -641,10 +598,8 @@ export async function loadShareViews(args: {
       googleRoas: showAdSpend ? googleRoas : withheld,
       googleSpend: showAdSpend ? googleSpend : withheld,
       metaSpend: showAdSpend ? metaSpend : withheld,
-      googleCalls,
       googleCallClicks,
       messagesGenerated,
-      enquiriesFromAds,
       whatsappBookings,
     },
     client,

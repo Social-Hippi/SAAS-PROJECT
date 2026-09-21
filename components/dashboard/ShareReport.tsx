@@ -195,24 +195,14 @@ function AdsView({
           caption={ADS_CAPTION.googleCallClicks}
           staleNote={n.googleCallClicks}
         />
-        <Tile
-          label="Google Ads · calls connected"
-          value={data.ads.googleCalls}
-          caption={ADS_CAPTION.googleCalls}
-        />
       </Group>
 
-      <Group title="Messages and enquiries from ads" columns={3}>
+      <Group title="Messages and bookings from ads" columns={2}>
         <Tile
           label="Messages generated"
           value={data.ads.messagesGenerated}
           caption={ADS_CAPTION.messagesGenerated}
           staleNote={n.messagesGenerated}
-        />
-        <Tile
-          label="Enquiries from ads"
-          value={data.ads.enquiriesFromAds}
-          caption={ADS_CAPTION.enquiriesFromAds}
         />
         <Tile
           label="WhatsApp bookings"
