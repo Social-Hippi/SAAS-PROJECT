@@ -88,11 +88,13 @@ describe("3. the report keeps the two Google figures apart", () => {
     expect(LOADER).toMatch(/googleCallClicks: callClicksNote \?\? googleNote/);
   });
 
-  test("the two Google tiles sit side by side, labelled apart", () => {
+  test("clicks to call is the only call figure the hotel sees", () => {
+    // Connected calls were removed from this report at the agency's request;
+    // the sync still collects them (see share-views.test.ts).
     expect(REPORT).toMatch(/<Group title="Calls from ads" columns=\{2\}>/);
     expect(REPORT).toMatch(/label="Google Ads · clicks to call"/);
-    expect(REPORT).toMatch(/label="Google Ads · calls connected"/);
     expect(REPORT).toMatch(/value=\{data\.ads\.googleCallClicks\}/);
+    expect(REPORT).not.toMatch(/calls connected/);
   });
 
   test("the caption tells the hotel a tap is not a connected call", () => {

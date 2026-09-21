@@ -52,8 +52,13 @@ describe("1. the ads view counts only what advertising produced", () => {
     expect(LOADER).toMatch(/c\."firstMessageAt" <= b\."bookedAt"/);
   });
 
-  test("enquiries counts only ad-sourced leads", () => {
-    expect(LOADER).toMatch(/sourceId: \{ not: null \}, firstMessageAt: eventFilter/);
+  test("enquiries from ads is no longer on this report", () => {
+    // Removed at the agency's request; the same figure lives on the agency's
+    // Integrations page, split by property, under Leads by property.
+    expect(REPORT).not.toMatch(/enquiriesFromAds|Enquiries from ads/);
+    expect(LOADER).not.toMatch(/enquiriesFromAds|adEnquiries/);
+    // …and the query that fed it is gone too, not just the tile.
+    expect(LOADER).not.toMatch(/sourceId: \{ not: null \}, firstMessageAt: eventFilter/);
   });
 });
 
@@ -75,53 +80,28 @@ describe("2. a zero that could not have been non-zero is explained", () => {
 });
 
 describe("3. calls are kept apart by platform", () => {
-  test("Meta's calls are not on the hotel's report", () => {
-    // Removed at the agency's request. Taken out of the loader too, not just
-    // hidden in the page, so no other view of this data can bring it back.
-    expect(REPORT).not.toMatch(/metaCalls/);
-    expect(LOADER).not.toMatch(/metaCalls/);
-    // Calls from ads is Google only.
+  test("only clicks to call is on the hotel's report", () => {
+    // Meta's calls, then Google's connected calls, were removed at the agency's
+    // request. Taken out of the loader too, not just hidden in the page, so no
+    // other view of this data can bring either back.
+    for (const gone of [/metaCalls/, /googleCalls\b/]) {
+      expect(REPORT).not.toMatch(gone);
+      expect(LOADER).not.toMatch(gone);
+    }
     const group = REPORT.slice(REPORT.indexOf('<Group title="Calls from ads"'));
     const body = group.slice(0, group.indexOf("</Group>"));
-    expect(body).not.toMatch(/Meta/);
-    expect(REPORT).toMatch(/label="Google Ads · calls connected"[\s\S]{0,120}data\.ads\.googleCalls/);
+    expect(body).not.toMatch(/Meta|calls connected/);
+    expect(body).toMatch(/label="Google Ads · clicks to call"/);
   });
 
-  test("Google's two call measurements are preferred, never added", () => {
-    // They OVERLAP: a call from a call asset that the advertiser also tracks as
-    // a conversion is in both, so one total double-counts it.
-    expect(LOADER).toMatch(/google\._count\.phoneCalls > 0/);
-    expect(LOADER).toMatch(/google\._count\.callConversions > 0/);
-    expect(LOADER).not.toMatch(/callConversions\s*\+\s*[^)]*phoneCalls/);
-    expect(SYNC).not.toMatch(/callConversions\s*\+\s*[^)]*phoneCalls/);
+  test("the call figures are still synced, so the tile can come back", () => {
+    // Removing a tile must not stop collecting what it showed: restoring it
+    // should never need a backfill.
+    expect(SYNC).toMatch(/metrics\.phone_calls/);
+    expect(SYNC).toMatch(/phoneCalls: \(\(\) => \{/);
+    expect(SYNC).toMatch(/conversion_action_category/);
   });
 
-  test("raw call-asset calls are preferred over the conversion count", () => {
-    // Conversions are only the subset meeting the advertiser's rules. On Aster
-    // the two read 56 against 15.5, and the conversion figure silently dropped
-    // four calls from two campaigns with no call conversion action at all.
-    const phoneAt = LOADER.indexOf("google._count.phoneCalls > 0");
-    const convAt = LOADER.indexOf("google._count.callConversions > 0");
-    expect(phoneAt).toBeGreaterThan(-1);
-    expect(convAt).toBeGreaterThan(-1);
-    expect(phoneAt).toBeLessThan(convAt);
-  });
-
-  test("the fallback conversion count is rounded before a hotel sees it", () => {
-    // Google splits conversion credit across touchpoints, so that side arrives
-    // fractional; "12.83 calls" is not a figure to put in front of a client.
-    expect(LOADER).toMatch(/Math\.round\(num\(google\._sum\.callConversions\)\)/);
-    // The preferred figure is already whole and must not be mangled.
-    expect(LOADER).not.toMatch(/Math\.round\(num\(google\._sum\.phoneCalls\)\)/);
-  });
-
-  test("no call figure retrieved stays not_traceable, never zero", () => {
-    expect(LOADER).toMatch(/notTraceable<number>\(GOOGLE_CALLS_NOT_CAPTURED\)/);
-    // Asserted on the constant's own text, not the comment explaining it:
-    // readCode strips comments so prose cannot satisfy a source assertion.
-    expect(LOADER).toMatch(/has not reported calls separately/);
-    expect(LOADER).toMatch(/It is not a zero/);
-  });
 
   test("coverage is counted per field, so null never reads as zero calls", () => {
     // `_count: { _all: true }` counts rows that have spend. Only a per-field
@@ -188,7 +168,7 @@ describe("4. the client view carries no attribution", () => {
 
 describe("5. the ads view never claims to be a total", () => {
   test("every caption says the figure is ad-produced", () => {
-    for (const key of ["totalRevenue", "enquiriesFromAds", "whatsappBookings"] as const) {
+    for (const key of ["totalRevenue", "whatsappAdRevenue", "whatsappBookings"] as const) {
       expect(ADS_CAPTION[key], key).toMatch(/ad|advertis/i);
     }
   });
