@@ -34,6 +34,8 @@ import { zonedDayString } from "@/lib/timezone";
 import { KrayaCard } from "./KrayaCard";
 import { countHeldPushes } from "@/lib/booking-push-capture";
 import { NONE_PARAM, loadBucketAdLeads, loadLeadBreakdown } from "@/lib/kraya-lead-breakdown";
+import { loadCallSetup } from "@/lib/google-ads-call-setup";
+import { CallSetupPanel } from "./CallSetupPanel";
 import { readSectionRange, resolveSectionRange, sectionRangeParams } from "@/lib/section-range";
 import { LeadBreakdown } from "./LeadBreakdown";
 import { SectionRangePicker } from "./SectionRangePicker";
@@ -384,8 +386,32 @@ export default async function HotelIntegrationsPage({
       lastSyncError: true,
       requiresReconnect: true,
       lastErrorReason: true,
+      // For the on-demand call setup check below.
+      agencyId: true,
+      hotelClientId: true,
+      loginCustomerId: true,
+      tokenExpiresAt: true,
     },
   });
+
+  // ── Google Ads call setup, on demand ───────────────────────────────────────
+  // Live Google Ads reads, so only when someone opens the check (?gcall=1).
+  // Read-only: the integration never edits ad config.
+  const callSetup =
+    sp.gcall === "1" && gads?.customerId
+      ? await loadCallSetup({
+          id: gads.id,
+          agencyId: gads.agencyId,
+          hotelClientId: gads.hotelClientId,
+          customerId: gads.customerId,
+          loginCustomerId: gads.loginCustomerId,
+          tokenExpiresAt: gads.tokenExpiresAt,
+        }).catch((err) => {
+          console.error("[GADS-CALL-SETUP]", err instanceof Error ? err.message : err);
+          return null;
+        })
+      : null;
+
   const gadsStatus: GoogleAdsCardStatus = !gads
     ? "none"
     : gads.status === "TOKEN_EXPIRED" || gads.status === "REVOKED"
@@ -1174,6 +1200,32 @@ export default async function HotelIntegrationsPage({
           accounts={gadsAccounts}
           metrics={gadsMetrics}
         />
+
+        {gads?.customerId && sp.gcall !== "1" && (
+          <Link
+            href={`/agency/hotel/${hotel.id}/integrations?gcall=1#google-ads`}
+            className="mt-4 inline-flex items-center gap-2 rounded-lg border border-line-strong bg-elevated px-3 py-2 text-sm font-medium text-ink-secondary hover:bg-line-strong"
+          >
+            Check call setup
+          </Link>
+        )}
+        {sp.gcall === "1" &&
+          (callSetup ? (
+            <div id="google-ads">
+              <CallSetupPanel
+                setup={callSetup}
+                closeHref={`/agency/hotel/${hotel.id}/integrations`}
+              />
+            </div>
+          ) : (
+            <p
+              id="google-ads"
+              className="mt-4 rounded-lg border-l-4 border-danger bg-danger/10 p-3 text-sm text-ink-secondary"
+            >
+              The call setup could not be read from Google Ads just now. The connection may need
+              reconnecting — the sync status above says.
+            </p>
+          ))}
       </IntegrationCard>
 
       {/* ── Card 6 — Booking Push (confirmed reservations + revenue) ───────── */}
