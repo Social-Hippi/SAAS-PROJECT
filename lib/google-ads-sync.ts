@@ -46,7 +46,7 @@ function dateRange(days: number): { start: string; end: string } {
   return { start: fmt(start), end: fmt(end) };
 }
 
-type Conn = {
+export type Conn = {
   id: string;
   agencyId: string;
   hotelClientId: string;
@@ -56,7 +56,7 @@ type Conn = {
 };
 
 /** Returns a usable access token, refreshing + re-storing (encrypted) near expiry. */
-async function getValidAccessToken(conn: Conn): Promise<string> {
+export async function getValidAccessToken(conn: Conn): Promise<string> {
   if (conn.tokenExpiresAt.getTime() > Date.now() + REFRESH_SKEW_MS) {
     const tok = await getTokenForApiCall("google_ads_access", conn.id, {
       agencyId: conn.agencyId,
