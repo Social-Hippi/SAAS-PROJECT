@@ -1279,12 +1279,7 @@ export default async function HotelIntegrationsPage({
         />
 
         {heldPushes.length > 0 && (
-          <HeldPushPanel
-            held={heldPushes}
-            open={openHeld}
-            hrefFor={(id) => `/agency/hotel/${hotel.id}/integrations?bpc=${id}#booking-push`}
-            closeHref={`/agency/hotel/${hotel.id}/integrations#booking-push`}
-          />
+          <HeldPushPanel hotelId={hotel.id} held={heldPushes} open={openHeld} />
         )}
       </IntegrationCard>
 

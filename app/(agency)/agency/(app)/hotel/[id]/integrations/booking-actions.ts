@@ -114,3 +114,55 @@ export async function disconnectBookingProvider(formData: FormData): Promise<voi
   });
   revalidatePath(`/agency/hotel/${hotel.id}/integrations`);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recording pushes that were held while the provider had no field mapping.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ReplayState = {
+  error: string | null;
+  /** Null until a replay has run in this session. */
+  summary: string | null;
+  problems: string[];
+};
+
+/**
+ * Turns every held push for this hotel into the booking it always was.
+ *
+ * ADMIN ONLY, and the tenant comes from the connection we look up — never from
+ * anything the form sends. Safe to press twice: a recorded body is skipped, and
+ * ingestion is keyed on the provider's reservation id regardless.
+ */
+export async function recordHeldPushes(
+  _prev: ReplayState,
+  formData: FormData,
+): Promise<ReplayState> {
+  const member = await requireAdmin();
+  if (!member) {
+    return { error: "Only an agency admin can record held bookings.", summary: null, problems: [] };
+  }
+
+  const hotelId = ((formData.get("hotelId") as string | null) ?? "").trim();
+  const connection = await agencyScoped(prisma.bookingConnection).findFirst({
+    where: { hotelClientId: hotelId },
+    select: { id: true, agencyId: true, hotelClientId: true, provider: true },
+  });
+  if (!connection) {
+    return { error: "No booking connection was found for this hotel.", summary: null, problems: [] };
+  }
+
+  const { replayHeldPushes } = await import("@/lib/booking-push-replay");
+  const out = await replayHeldPushes(connection);
+
+  revalidatePath(`/agency/hotel/${hotelId}/integrations`);
+  // The hotel's report reads these bookings, so it has to be rebuilt too.
+  revalidatePath("/share", "layout");
+
+  const parts = [
+    `${out.recorded} recorded`,
+    out.stillHeld > 0 ? `${out.stillHeld} still held` : null,
+    out.alreadyRecorded > 0 ? `${out.alreadyRecorded} already recorded` : null,
+  ].filter(Boolean);
+
+  return { error: null, summary: parts.join(" · "), problems: out.problems };
+}
