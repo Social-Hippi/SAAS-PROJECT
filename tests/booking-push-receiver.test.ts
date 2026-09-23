@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { POST as pushPOST, GET as pushGET } from "@/app/api/integrations/booking/[provider]/route";
 import { encryptToken } from "@/lib/encryption";
-import { PAYLOAD_CONTRACT_PENDING } from "@/lib/booking-providers/simplotel";
+
 
 const PREFIX = "TEST_BP_";
 const SECRET_A = "sk_test_simplotel_aaaaaaaaaaaaaaaaaaaa";
@@ -177,9 +177,49 @@ describe("transport and authentication", () => {
   });
 });
 
-// ── Payload contract boundary ────────────────────────────────────────────
+// ── Mapping boundary ─────────────────────────────────────────────────────
 
-describe("payload contract boundary", () => {
+describe("mapping boundary", () => {
+  test("a REAL Simplotel payload is recorded as a booking", async () => {
+    // Written from the bodies Simplotel actually sent on 19 and 21 Sep.
+    const body = {
+      hotel_id: "8642",
+      booking_id: `${PREFIX}SKQVHO`,
+      checkin_date: "2026-09-28",
+      checkout_date: "2026-09-29",
+      total_amount: "9086.0000",
+      booking_status: "CONFIRMED",
+      name: "A Guest",
+      email: "guest@example.test",
+      phone: "919000000051",
+      rooms: [
+        {
+          total_taxes: "1386.0000",
+          total_amount_before_taxes: "7700.0000",
+          total_amount: "9086.0000",
+          is_cancelled: false,
+          refund_amount: "0.0000",
+        },
+      ],
+      booking_date: "2026-09-21",
+    };
+    const res = await push(JSON.stringify(body));
+    expect(res.status).toBe(200);
+
+    const booking = await prisma.booking.findFirst({
+      where: { hotelClientId: fx.hotelA, externalBookingId: `${PREFIX}SKQVHO` },
+    });
+    expect(booking).not.toBeNull();
+    expect(booking!.status).toBe("CONFIRMED");
+    expect(booking!.grossAmount?.toString()).toBe("9086");
+    expect(booking!.taxAmount?.toString()).toBe("1386");
+    // No journey id is sent, so none is stored — matching falls back to hashes.
+    expect(booking!.journeySessionId).toBeNull();
+    expect(booking!.guestPhoneHash).not.toBeNull();
+    // Currency is unknown, never assumed.
+    expect(booking!.currency).toBeNull();
+  });
+
   test("an AUTHENTICATED push that cannot be mapped is HELD and answered 202", async () => {
     // It used to be answered 422 and dropped. That lost the booking AND the
     // sample the parser has to be written from, and providers rarely retry a
@@ -189,7 +229,7 @@ describe("payload contract boundary", () => {
     expect(await res.json()).toEqual({ held: true });
   });
 
-  test("no booking is created while the contract is pending", async () => {
+  test("a body that cannot be filed creates no booking", async () => {
     const before = await prisma.booking.count({ where: { hotelClientId: fx.hotelA } });
     await push(JSON.stringify({ reservation_id: "R1", total: 5000 }));
     expect(await prisma.booking.count({ where: { hotelClientId: fx.hotelA } })).toBe(before);
@@ -204,7 +244,9 @@ describe("payload contract boundary", () => {
     });
     expect(row).not.toBeNull();
     expect(row!.outcome).toBe("unmapped_payload");
-    expect(row!.reason).toBe(PAYLOAD_CONTRACT_PENDING);
+    // The reason names what was wrong with THIS body, so a held push explains
+    // itself: here, no booking_id to file it under.
+    expect(row!.reason).toMatch(/booking_id/);
     expect(row!.replayedAt).toBeNull();
     // Guest PII must not sit in the column in the clear…
     expect(row!.bodyEncrypted).not.toContain(marker);
