@@ -33,6 +33,8 @@ import { BookingConnectionCard } from "./BookingConnectionCard";
 import { zonedDayString } from "@/lib/timezone";
 import { KrayaCard } from "./KrayaCard";
 import { countHeldPushes } from "@/lib/booking-push-capture";
+import { listHeldPushes, readHeldPush } from "@/lib/booking-push-preview";
+import { HeldPushPanel } from "./HeldPushPanel";
 import { NONE_PARAM, loadBucketAdLeads, loadLeadBreakdown } from "@/lib/kraya-lead-breakdown";
 import { loadCallSetup } from "@/lib/google-ads-call-setup";
 import { CallSetupPanel } from "./CallSetupPanel";
@@ -482,6 +484,15 @@ export default async function HotelIntegrationsPage({
   const heldPushCount = bookingConn
     ? await countHeldPushes(hotel.agencyId, bookingConn.id)
     : 0;
+
+  // ── Held payloads ─────────────────────────────────────────────────────────
+  // ADMIN ONLY: a held body is the provider's real booking. The list is
+  // metadata; a body is decrypted and MASKED only for the one push asked for.
+  const canReadHeld = member.role === "admin" && heldPushCount > 0;
+  const heldPushes = canReadHeld ? await listHeldPushes(hotel.agencyId, hotel.id) : [];
+  const openHeldId = typeof sp.bpc === "string" ? sp.bpc : null;
+  const openHeld =
+    canReadHeld && openHeldId ? await readHeldPush(hotel.agencyId, hotel.id, openHeldId) : null;
 
   // Hosts that have actually sent tracking, minus the hotel's own site — the
   // likely answers for the booking-domain setting. Offering what has really been
@@ -1266,6 +1277,15 @@ export default async function HotelIntegrationsPage({
               : null
           }
         />
+
+        {heldPushes.length > 0 && (
+          <HeldPushPanel
+            held={heldPushes}
+            open={openHeld}
+            hrefFor={(id) => `/agency/hotel/${hotel.id}/integrations?bpc=${id}#booking-push`}
+            closeHref={`/agency/hotel/${hotel.id}/integrations#booking-push`}
+          />
+        )}
       </IntegrationCard>
 
       {/* ── Card 7 — Kraya (WhatsApp CRM: enquiries + WhatsApp bookings) ───── */}
