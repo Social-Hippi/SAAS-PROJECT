@@ -37,6 +37,7 @@ import { listHeldPushes, readHeldPush } from "@/lib/booking-push-preview";
 import { HeldPushPanel } from "./HeldPushPanel";
 import { NONE_PARAM, loadBucketAdLeads, loadLeadBreakdown } from "@/lib/kraya-lead-breakdown";
 import { loadCallSetup } from "@/lib/google-ads-call-setup";
+import { loadConversionSetup } from "@/lib/google-ads-conversion-setup";
 import { CallSetupPanel } from "./CallSetupPanel";
 import { readSectionRange, resolveSectionRange, sectionRangeParams } from "@/lib/section-range";
 import { LeadBreakdown } from "./LeadBreakdown";
@@ -410,6 +411,22 @@ export default async function HotelIntegrationsPage({
           tokenExpiresAt: gads.tokenExpiresAt,
         }).catch((err) => {
           console.error("[GADS-CALL-SETUP]", err instanceof Error ? err.message : err);
+          return null;
+        })
+      : null;
+
+  // Read in the same click: why Google may not be attributing booking revenue.
+  const conversionSetup =
+    sp.gcall === "1" && gads?.customerId
+      ? await loadConversionSetup({
+          id: gads.id,
+          agencyId: gads.agencyId,
+          hotelClientId: gads.hotelClientId,
+          customerId: gads.customerId,
+          loginCustomerId: gads.loginCustomerId,
+          tokenExpiresAt: gads.tokenExpiresAt,
+        }).catch((err) => {
+          console.error("[GADS-CONV-SETUP]", err instanceof Error ? err.message : err);
           return null;
         })
       : null;
@@ -1225,6 +1242,7 @@ export default async function HotelIntegrationsPage({
             <div id="google-ads">
               <CallSetupPanel
                 setup={callSetup}
+                conversions={conversionSetup}
                 closeHref={`/agency/hotel/${hotel.id}/integrations`}
               />
             </div>
